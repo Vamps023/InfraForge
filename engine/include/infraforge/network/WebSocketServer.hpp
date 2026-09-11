@@ -3,7 +3,13 @@
 #include <cstdint>
 #include <string>
 
+namespace infraforge::application {
+class CommandProcessor;
+}
+
 namespace infraforge::network {
+
+class WebSocketCommandRouter;
 
 struct ServerConfig {
     std::string host;
@@ -13,7 +19,7 @@ struct ServerConfig {
 
 class WebSocketServer final {
 public:
-    explicit WebSocketServer(ServerConfig config);
+    WebSocketServer(ServerConfig config, application::CommandProcessor& processor, WebSocketCommandRouter& router);
 
     WebSocketServer(const WebSocketServer&) = delete;
     WebSocketServer& operator=(const WebSocketServer&) = delete;
@@ -22,6 +28,8 @@ public:
 
 private:
     ServerConfig config_;
+    application::CommandProcessor& processor_;
+    WebSocketCommandRouter& router_;
 };
 
 } // namespace infraforge::network

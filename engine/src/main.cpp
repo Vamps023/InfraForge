@@ -1,10 +1,16 @@
+#include "infraforge/application/CommandProcessor.hpp"
+#include "infraforge/network/CommandRouter.hpp"
 #include "infraforge/network/WebSocketServer.hpp"
+#include "infraforge/persistence/SqliteProjectStore.hpp"
+#include "infraforge/runtime/Logging.hpp"
 #include "infraforge/version.hpp"
 #include "infraforge/protocol/v1/foundation.pb.h"
 
 #include <charconv>
 #include <cctype>
 #include <cstdint>
+#include <exception>
+#include <filesystem>
 #include <iostream>
 #include <optional>
 #include <string>
@@ -93,15 +99,18 @@ std::optional<ServeArguments> parse_serve_arguments(int argc, char** argv) {
 }
 
 int run_self_check() {
+    // 1. Protocol frame round-trip including the project lifecycle envelope.
     infraforge::protocol::v1::Frame source;
     source.set_request_id("self-check");
-    auto* hello = source.mutable_client_hello();
-    auto* version = hello->mutable_protocol();
-    version->set_major(infraforge::kProtocolMajor);
-    version->set_minor(infraforge::kProtocolMinor);
-    hello->set_session_token(std::string(64, 'a'));
-    hello->set_client_name("infraforge-engine-self-check");
-    hello->set_client_version(std::string{infraforge::kEngineVersion});
+    auto* command = source.mutable_command();
+    auto* create = command->mutable_create_project();
+    create->set_display_name("Self Check");
+    create->set_parent_directory("/tmp/nonexistent");
+    auto* georeference = create->mutable_georeference();
+    georeference->set_horizontal_crs("EPSG:32633");
+    georeference->set_linear_unit("metre");
+    georeference->set_axis_convention(infraforge::protocol::v1::AXIS_CONVENTION_EASTING_NORTHING_UP);
+    create->set_traffic_side(infraforge::protocol::v1::TRAFFIC_SIDE_RIGHT);
 
     std::string encoded;
     if (!source.SerializeToString(&encoded)) {
@@ -110,10 +119,66 @@ int run_self_check() {
     }
 
     infraforge::protocol::v1::Frame decoded;
-    if (!decoded.ParseFromString(encoded) || !decoded.has_client_hello() || decoded.request_id() != "self-check") {
+    if (!decoded.ParseFromString(encoded) || !decoded.has_command()
+        || !decoded.command().has_create_project()
+        || decoded.command().create_project().display_name() != "Self Check"
+        || decoded.command().create_project().georeference().horizontal_crs() != "EPSG:32633") {
         std::cerr << "Protocol parse self-check failed\n";
         return 1;
     }
+
+    // 2. Project persistence round-trip against a real temporary directory.
+    std::error_code ioError;
+    const auto scratchRoot = std::filesystem::temp_directory_path(ioError) / "infraforge-engine-self-check";
+    if (ioError) {
+        std::cerr << "Cannot resolve temporary directory for self-check\n";
+        return 1;
+    }
+    std::filesystem::remove_all(scratchRoot, ioError);
+    const auto parentDirectory = scratchRoot / "projects";
+    std::filesystem::create_directories(parentDirectory, ioError);
+    if (ioError) {
+        std::cerr << "Cannot create scratch directory for self-check\n";
+        return 1;
+    }
+
+    try {
+        infraforge::persistence::SqliteProjectStore store;
+
+        infraforge::domain::project::CreateProjectSpec spec;
+        spec.displayName = "Self Check";
+        spec.parentDirectory = parentDirectory;
+        spec.trafficSide = infraforge::domain::project::TrafficSide::Right;
+        spec.georeference.horizontalCrs = "EPSG:32633";
+        spec.georeference.linearUnit = "metre";
+        spec.georeference.axisConvention = infraforge::domain::project::AxisConvention::EastingNorthingUp;
+        spec.georeference.originEasting = 500000.0;
+        spec.georeference.originNorthing = 4649776.0;
+
+        const auto created = store.create(spec);
+        if (!store.isOpen() || created.uuid.empty() || created.revision != 1) {
+            std::cerr << "Project creation self-check failed\n";
+            return 1;
+        }
+        const auto projectDirectory = std::filesystem::path(created.directory);
+        store.close();
+
+        const auto reopened = store.open(projectDirectory);
+        if (reopened.uuid != created.uuid || reopened.displayName != created.displayName
+            || reopened.revision != created.revision
+            || !(reopened.georeference == created.georeference)) {
+            std::cerr << "Project reopen self-check failed\n";
+            return 1;
+        }
+
+        store.close();
+    } catch (const std::exception& error) {
+        std::cerr << "Project persistence self-check failed: " << error.what() << '\n';
+        std::filesystem::remove_all(scratchRoot, ioError);
+        return 1;
+    }
+
+    std::filesystem::remove_all(scratchRoot, ioError);
 
     std::cout
         << "{\"component\":\"" << infraforge::kEngineExecutableName
@@ -156,11 +221,29 @@ int main(int argc, char** argv) {
             return 2;
         }
 
-        return infraforge::network::WebSocketServer({
-            .host = arguments->host,
-            .port = arguments->port,
-            .session_token = arguments->session_token,
-        }).run();
+        infraforge::persistence::SqliteProjectStore store;
+        infraforge::network::WebSocketCommandRouter router;
+        infraforge::application::CommandProcessor processor(store, router);
+        processor.start();
+
+        const int exitCode = infraforge::network::WebSocketServer(
+            {
+                .host = arguments->host,
+                .port = arguments->port,
+                .session_token = arguments->session_token,
+            },
+            processor,
+            router).run();
+
+        processor.shutdown();
+        if (store.isOpen()) {
+            // The graceful project-aware shutdown protocol is a later
+            // milestone; flush and close the session so SQLite exits cleanly.
+            const auto projectUuid = store.current().uuid;
+            store.close();
+            infraforge::runtime::logInfo("engine", "project.session_closed_at_shutdown", {{"projectUuid", projectUuid}});
+        }
+        return exitCode;
     }
 
     std::cerr << "Unknown command or invalid arguments\n";

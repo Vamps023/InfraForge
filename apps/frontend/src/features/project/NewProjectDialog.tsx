@@ -1,0 +1,167 @@
+import { useState } from 'react'
+import { FolderOpen } from 'lucide-react'
+import { TrafficSide } from '@infraforge/protocol'
+import type { EngineClient } from '../../lib/engineSession'
+import { createProject } from './projectApi'
+import { useProjectStore } from './projectStore'
+
+interface NewProjectDialogProps {
+  client: EngineClient
+  busy: boolean
+  onClose: () => void
+}
+
+// New-project flow: the OS directory dialog stays in the desktop shell; the
+// engine owns project creation, naming rules, and canonical metadata. The
+// summary shown after success is the engine's authoritative result.
+export function NewProjectDialog({ client, busy, onClose }: NewProjectDialogProps) {
+  const [displayName, setDisplayName] = useState('')
+  const [parentDirectory, setParentDirectory] = useState('')
+  const [horizontalCrs, setHorizontalCrs] = useState('')
+  const [linearUnit, setLinearUnit] = useState('metre')
+  const [trafficSide, setTrafficSide] = useState<'LEFT' | 'RIGHT'>('RIGHT')
+  const [formError, setFormError] = useState<string | null>(null)
+  const [submitting, setSubmitting] = useState(false)
+
+  const engineError = useProjectStore((state) => state.lastError?.message ?? null)
+  const error = formError ?? engineError
+
+  const pickDirectory = async () => {
+    const desktop = window.infraforgeDesktop
+    if (!desktop?.pickDirectory) {
+      setFormError('The desktop shell did not expose a directory picker.')
+      return
+    }
+    const selected = await desktop.pickDirectory({
+      title: 'Choose the folder that will contain the project',
+      buttonLabel: 'Select Folder',
+    })
+    if (selected) {
+      setParentDirectory(selected)
+      setFormError(null)
+    }
+  }
+
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault()
+    if (submitting || busy) {
+      return
+    }
+    if (
+      displayName.trim().length === 0 ||
+      parentDirectory.trim().length === 0 ||
+      horizontalCrs.trim().length === 0
+    ) {
+      setFormError('Project name, location, and horizontal CRS are required.')
+      return
+    }
+    setSubmitting(true)
+    setFormError(null)
+    try {
+      await createProject(client, {
+        displayName: displayName.trim(),
+        parentDirectory: parentDirectory.trim(),
+        horizontalCrs: horizontalCrs.trim(),
+        linearUnit,
+        trafficSide: trafficSide === 'LEFT' ? TrafficSide.LEFT : TrafficSide.RIGHT,
+      })
+      onClose()
+    } catch {
+      // Engine failures are recorded in the projection store and shown via
+      // engineError; closing the dialog is left to the user.
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <div className="dialog-overlay" role="presentation">
+      <form className="dialog" role="dialog" aria-modal="true" aria-label="New project" onSubmit={submit}>
+        <h2>New project</h2>
+
+        <label className="form-row">
+          <span className="form-label">Project name</span>
+          <input
+            className="form-input"
+            value={displayName}
+            onChange={(event) => setDisplayName(event.target.value)}
+            placeholder="Northgate Interchange"
+            autoFocus
+          />
+        </label>
+
+        <div className="form-row">
+          <span className="form-label">Location</span>
+          <div className="form-inline">
+            <input
+              className="form-input grow"
+              value={parentDirectory}
+              onChange={(event) => setParentDirectory(event.target.value)}
+              placeholder="Parent folder for &lt;name&gt;.iforge"
+            />
+            <button
+              className="button secondary"
+              type="button"
+              onClick={() => void pickDirectory()}
+              disabled={!window.infraforgeDesktop?.pickDirectory}
+            >
+              <FolderOpen size={14} /> Browse…
+            </button>
+          </div>
+        </div>
+
+        <div className="form-row-pair">
+          <label className="form-row">
+            <span className="form-label">Horizontal CRS</span>
+            <input
+              className="form-input"
+              value={horizontalCrs}
+              onChange={(event) => setHorizontalCrs(event.target.value)}
+              placeholder="EPSG:32633"
+            />
+          </label>
+          <label className="form-row">
+            <span className="form-label">Linear unit</span>
+            <select className="form-input" value={linearUnit} onChange={(event) => setLinearUnit(event.target.value)}>
+              <option value="metre">metre</option>
+              <option value="us_survey_foot">US survey foot</option>
+            </select>
+          </label>
+        </div>
+
+        <div className="form-row-pair">
+          <label className="form-row">
+            <span className="form-label">Traffic side</span>
+            <select
+              className="form-input"
+              value={trafficSide}
+              onChange={(event) => setTrafficSide(event.target.value as 'LEFT' | 'RIGHT')}
+            >
+              <option value="RIGHT">Right</option>
+              <option value="LEFT">Left</option>
+            </select>
+          </label>
+          <div className="form-row">
+            <span className="form-label">Axis convention</span>
+            <div className="form-static">Easting / Northing / Up (metre-based)</div>
+          </div>
+        </div>
+
+        {error ? (
+          <p className="form-error" role="alert">
+            {error}
+          </p>
+        ) : null}
+
+        <div className="dialog-actions">
+          <button className="button secondary" type="button" onClick={onClose} disabled={submitting}>
+            Cancel
+          </button>
+          <button className="button primary" type="submit" disabled={submitting || busy}>
+            {submitting ? 'Creating…' : 'Create Project'}
+          </button>
+        </div>
+      </form>
+    </div>
+  )
+}

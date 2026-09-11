@@ -22,6 +22,7 @@ declare global {
         electron: string
       }>
       getEngineBootstrap: () => Promise<EngineBootstrap>
+      pickDirectory: (options: Readonly<{ title: string; buttonLabel?: string }>) => Promise<string | null>
     }>
   }
 }

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain } from 'electron'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { EngineSupervisor } from './EngineSupervisor.js'
@@ -51,6 +51,27 @@ app.whenReady().then(async () => {
     state: 'failed',
     message: 'Engine supervisor is unavailable.',
   })
+
+  // The shell's only file-system role: user-authorized OS dialogs. The
+  // renderer never receives unrestricted Node or arbitrary IPC passthrough.
+  ipcMain.handle(
+    'dialog:pick-directory',
+    async (event, options: { title?: unknown; buttonLabel?: unknown }) => {
+      const dialogOptions = {
+        title: typeof options?.title === 'string' ? options.title : 'Select a directory',
+        buttonLabel: typeof options?.buttonLabel === 'string' ? options.buttonLabel : undefined,
+        properties: ['openDirectory', 'createDirectory', 'dontAddToRecent'] as Array<'openDirectory' | 'createDirectory' | 'dontAddToRecent'>,
+      }
+      const ownerWindow = BrowserWindow.fromWebContents(event.sender)
+      const result = ownerWindow
+        ? await dialog.showOpenDialog(ownerWindow, dialogOptions)
+        : await dialog.showOpenDialog(dialogOptions)
+      if (result.canceled || result.filePaths.length !== 1) {
+        return null
+      }
+      return result.filePaths[0] ?? null
+    },
+  )
 
   createMainWindow()
 

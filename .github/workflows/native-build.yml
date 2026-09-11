@@ -1,0 +1,25 @@
+name: Native build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S . -B build -DINFRAFORGE_WARNINGS_AS_ERRORS=ON
+      - name: Build
+        run: cmake --build build --config Release
+      - name: Self-check (Windows)
+        if: runner.os == 'Windows'
+        run: .\build\engine\Release\infraforge-engine.exe --self-check
+      - name: Self-check (Linux)
+        if: runner.os == 'Linux'
+        run: ./build/engine/infraforge-engine --self-check

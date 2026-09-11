@@ -1,0 +1,24 @@
+{
+  "name": "@infraforge/frontend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "lucide-react": "1.40.0",
+    "react": "19.1.1",
+    "react-dom": "19.1.1",
+    "zustand": "5.0.15"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.7",
+    "@vitejs/plugin-react": "5.0.1",
+    "typescript": "7.0.2",
+    "vite": "7.3.6"
+  }
+}

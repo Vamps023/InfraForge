@@ -1,0 +1,19 @@
+{
+  "name": "infraforge",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "apps/frontend",
+    "apps/desktop"
+  ],
+  "scripts": {
+    "dev:frontend": "npm --workspace @infraforge/frontend run dev",
+    "build:frontend": "npm --workspace @infraforge/frontend run build",
+    "typecheck:frontend": "npm --workspace @infraforge/frontend run typecheck",
+    "build:desktop": "npm --workspace @infraforge/desktop run build",
+    "typecheck:desktop": "npm --workspace @infraforge/desktop run typecheck",
+    "typecheck": "npm run typecheck:frontend && npm run typecheck:desktop",
+    "build:web": "npm run build:frontend && npm run build:desktop",
+    "start:desktop": "npm run build:web && npm --workspace @infraforge/desktop run start"
+  }
+}

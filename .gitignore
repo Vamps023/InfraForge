@@ -1,0 +1,25 @@
+# Node
+node_modules/
+apps/*/dist/
+packages/*/dist/
+
+# Native builds
+build/
+out/
+engine/build/
+CMakeUserPresets.json
+
+# IDE / OS
+.vscode/
+.idea/
+.vs/
+.DS_Store
+Thumbs.db
+
+# Logs / temporary
+*.log
+*.tmp
+
+# Runtime/project developer data
+*.iforge/cache/
+*.iforge/autosave/

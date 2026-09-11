@@ -1,9 +1,10 @@
 import { randomBytes } from 'node:crypto'
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { spawn, type ChildProcessByStdio } from 'node:child_process'
 import { stat } from 'node:fs/promises'
 import net from 'node:net'
 import path from 'node:path'
 import readline from 'node:readline'
+import type { Readable } from 'node:stream'
 
 export interface EngineConnectionInfo {
   host: '127.0.0.1'
@@ -17,6 +18,8 @@ export interface EngineConnectionInfo {
 export type EngineBootstrap =
   | { state: 'ready'; connection: EngineConnectionInfo }
   | { state: 'unavailable' | 'failed'; message: string }
+
+type EngineChildProcess = ChildProcessByStdio<null, Readable, Readable>
 
 const READY_PREFIX = 'INFRAFORGE_ENGINE_READY '
 const STARTUP_TIMEOUT_MS = 10_000
@@ -54,7 +57,7 @@ async function resolveConfiguredEnginePath(): Promise<string | null> {
 }
 
 export class EngineSupervisor {
-  private child: ChildProcessWithoutNullStreams | null = null
+  private child: EngineChildProcess | null = null
   private bootstrap: EngineBootstrap = {
     state: 'unavailable',
     message: 'Native engine has not been started.',
@@ -135,7 +138,7 @@ export class EngineSupervisor {
     }
   }
 
-  private async waitForReady(child: ChildProcessWithoutNullStreams, expectedPort: number): Promise<{
+  private async waitForReady(child: EngineChildProcess, expectedPort: number): Promise<{
     protocolMajor: number
     protocolMinor: number
     engineVersion: string
@@ -143,9 +146,13 @@ export class EngineSupervisor {
     return await new Promise((resolve, reject) => {
       const stderrChunks: string[] = []
       const lines = readline.createInterface({ input: child.stdout })
+      let timeout: NodeJS.Timeout | undefined
 
       const cleanup = () => {
-        clearTimeout(timeout)
+        if (timeout !== undefined) {
+          clearTimeout(timeout)
+          timeout = undefined
+        }
         lines.close()
         child.stderr.removeListener('data', onStderr)
         child.removeListener('exit', onExit)
@@ -164,7 +171,7 @@ export class EngineSupervisor {
         reject(new Error(`Native engine exited before readiness (code=${code ?? 'null'}, signal=${signal ?? 'none'}).${detail ? ` ${detail}` : ''}`))
       }
 
-      const timeout = setTimeout(() => {
+      timeout = setTimeout(() => {
         cleanup()
         reject(new Error('Native engine did not report readiness before the startup timeout.'))
       }, STARTUP_TIMEOUT_MS)

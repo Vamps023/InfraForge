@@ -10,6 +10,9 @@ out/
 engine/build/
 CMakeUserPresets.json
 
+# Local vcpkg checkout (CI checks it out at .vcpkg as well)
+.vcpkg/
+
 # IDE / OS
 .vscode/
 .idea/
@@ -24,3 +27,4 @@ Thumbs.db
 # Runtime/project developer data
 *.iforge/cache/
 *.iforge/autosave/
+apps/frontend/tsconfig.tsbuildinfo

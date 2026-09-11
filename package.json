@@ -5,7 +5,8 @@
   "workspaces": [
     "apps/frontend",
     "apps/desktop",
-    "packages/protocol-ts"
+    "packages/protocol-ts",
+    "tools/engine-smoke"
   ],
   "scripts": {
     "proto:lint": "cd contracts && buf lint",
@@ -17,7 +18,8 @@
     "typecheck:desktop": "npm --workspace @infraforge/desktop run typecheck",
     "typecheck": "npm run typecheck:frontend && npm run typecheck:desktop",
     "build:web": "npm run build:frontend && npm run build:desktop",
-    "start:desktop": "npm run build:web && npm --workspace @infraforge/desktop run start"
+    "start:desktop": "npm run build:web && npm --workspace @infraforge/desktop run start",
+    "verify:engine": "npm run smoke --workspace @infraforge/engine-smoke"
   },
   "devDependencies": {
     "@bufbuild/buf": "1.72.0",

@@ -1,5 +1,6 @@
 #include "infraforge/runtime/Uuid.hpp"
 
+#include <cstddef>
 #include <random>
 #include <stdexcept>
 

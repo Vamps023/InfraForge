@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <string>
 #include <utility>
 
 namespace infraforge::application {

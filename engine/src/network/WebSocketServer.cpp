@@ -13,6 +13,7 @@
 #include <ixwebsocket/IXWebSocketServer.h>
 
 #include <atomic>
+#include <chrono>
 #include <csignal>
 #include <iostream>
 #include <memory>

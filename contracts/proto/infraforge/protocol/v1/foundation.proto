@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package infraforge.protocol.v1;
 
+import "infraforge/protocol/v1/project.proto";
+
 message ProtocolVersion {
   uint32 major = 1;
   uint32 minor = 2;
@@ -51,5 +53,8 @@ message Frame {
     Ping ping = 12;
     Pong pong = 13;
     ErrorFrame error = 14;
+    CommandEnvelope command = 15;
+    ResultEnvelope result = 16;
+    EventEnvelope event = 17;
   }
 }

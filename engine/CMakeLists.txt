@@ -3,6 +3,7 @@ find_package(protobuf CONFIG REQUIRED)
 
 set(INFRAFORGE_FOUNDATION_PROTO
     ${PROJECT_SOURCE_DIR}/contracts/proto/infraforge/protocol/v1/foundation.proto
+    ${PROJECT_SOURCE_DIR}/contracts/proto/infraforge/protocol/v1/project.proto
 )
 
 add_executable(infraforge-engine
@@ -22,7 +23,14 @@ target_link_libraries(infraforge-engine PRIVATE
     protobuf::libprotobuf
 )
 
+if(WIN32)
+    # mbedTLS (pulled in by ixwebsocket) uses the Windows BCrypt RNG.
+    target_link_libraries(infraforge-engine PRIVATE bcrypt)
+endif()
+
 set(INFRAFORGE_PROTO_BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated)
+# CMake >= 4 no longer creates the protobuf generation output directory.
+file(MAKE_DIRECTORY ${INFRAFORGE_PROTO_BINARY_DIR})
 target_include_directories(infraforge-engine PRIVATE ${INFRAFORGE_PROTO_BINARY_DIR})
 protobuf_generate(
     TARGET infraforge-engine

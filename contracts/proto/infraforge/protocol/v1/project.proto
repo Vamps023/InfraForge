@@ -1,0 +1,148 @@
+syntax = "proto3";
+
+package infraforge.protocol.v1;
+
+// Project lifecycle contract: canonical create/open/save-as/save/close queries
+// executed by the native engine against the project database.
+
+enum TrafficSide {
+  TRAFFIC_SIDE_UNSPECIFIED = 0;
+  TRAFFIC_SIDE_LEFT = 1;
+  TRAFFIC_SIDE_RIGHT = 2;
+}
+
+enum AxisConvention {
+  AXIS_CONVENTION_UNSPECIFIED = 0;
+  AXIS_CONVENTION_EASTING_NORTHING_UP = 1;
+}
+
+// Canonical georeference configuration. Stored once per project in the
+// georeference table; no consumer may keep an independent CRS/origin model.
+message GeoreferenceConfig {
+  // Horizontal CRS identifier, e.g. "EPSG:32633". Non-empty.
+  string horizontal_crs = 1;
+  // Canonical linear unit identifier, e.g. "metre". Non-empty.
+  string linear_unit = 2;
+  AxisConvention axis_convention = 3;
+  // Project origin expressed in the horizontal CRS (double precision).
+  double origin_easting = 4;
+  double origin_northing = 5;
+  // Optional vertical CRS/datum identifier; empty when unknown.
+  string vertical_crs = 6;
+}
+
+// Projection of the canonical open-project session state. The frontend never
+// owns the mutable project object; summaries and events are projections.
+message ProjectSummary {
+  string project_uuid = 1;
+  string display_name = 2;
+  string directory = 3;
+  uint64 revision = 4;
+  bool dirty = 5;
+  GeoreferenceConfig georeference = 6;
+  TrafficSide traffic_side = 7;
+  string created_at = 8;
+  string modified_at = 9;
+}
+
+message CreateProjectCommand {
+  string display_name = 1;
+  // Absolute existing parent directory; the engine creates
+  // <parent>/<display_name>.iforge and refuses to overwrite.
+  string parent_directory = 2;
+  GeoreferenceConfig georeference = 3;
+  TrafficSide traffic_side = 4;
+}
+
+message OpenProjectCommand {
+  // Absolute path to an existing <name>.iforge project directory.
+  string project_directory = 1;
+}
+
+message SaveProjectCommand {}
+
+message SaveProjectAsCommand {
+  string display_name = 1;
+  // Absolute existing parent directory for the new project directory. The
+  // target must not exist; the currently open project is left untouched on
+  // failure.
+  string parent_directory = 2;
+}
+
+message CloseProjectCommand {}
+
+message GetProjectSummaryCommand {}
+
+// Successful lifecycle result carrying the post-command project projection.
+message ProjectStateResult {
+  ProjectSummary summary = 1;
+}
+
+message ProjectClosedResult {
+  string project_uuid = 1;
+}
+
+enum CommandErrorCode {
+  COMMAND_ERROR_CODE_UNSPECIFIED = 0;
+  COMMAND_ERROR_CODE_INVALID_ARGUMENT = 1;
+  COMMAND_ERROR_CODE_PROJECT_NOT_OPEN = 2;
+  COMMAND_ERROR_CODE_PROJECT_ALREADY_OPEN = 3;
+  COMMAND_ERROR_CODE_PROJECT_DIRECTORY_INVALID = 4;
+  COMMAND_ERROR_CODE_PROJECT_FORMAT_UNSUPPORTED = 5;
+  COMMAND_ERROR_CODE_SCHEMA_VERSION_UNSUPPORTED = 6;
+  COMMAND_ERROR_CODE_PERSISTENCE_FAILURE = 7;
+  COMMAND_ERROR_CODE_INTERNAL = 8;
+}
+
+message CommandError {
+  CommandErrorCode code = 1;
+  string message = 2;
+  // Current canonical revision when the failure relates to project state.
+  optional uint64 current_revision = 3;
+}
+
+message ProjectOpenedEvent {
+  ProjectSummary summary = 1;
+}
+
+message ProjectClosedEvent {
+  string project_uuid = 1;
+}
+
+message ProjectRevisionChangedEvent {
+  uint64 revision = 1;
+}
+
+message ProjectDirtyStateChangedEvent {
+  bool dirty = 1;
+  uint64 revision = 2;
+}
+
+message CommandEnvelope {
+  oneof command {
+    CreateProjectCommand create_project = 1;
+    OpenProjectCommand open_project = 2;
+    SaveProjectCommand save_project = 3;
+    SaveProjectAsCommand save_project_as = 4;
+    CloseProjectCommand close_project = 5;
+    GetProjectSummaryCommand get_project_summary = 6;
+  }
+}
+
+message ResultEnvelope {
+  oneof outcome {
+    ProjectStateResult project_state = 1;
+    ProjectClosedResult project_closed = 2;
+    CommandError error = 3;
+  }
+}
+
+message EventEnvelope {
+  string event_id = 1;
+  oneof event {
+    ProjectOpenedEvent project_opened = 2;
+    ProjectClosedEvent project_closed = 3;
+    ProjectRevisionChangedEvent project_revision_changed = 4;
+    ProjectDirtyStateChangedEvent project_dirty_state_changed = 5;
+  }
+}

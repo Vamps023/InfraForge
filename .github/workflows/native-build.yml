@@ -32,9 +32,29 @@ jobs:
         run: cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/.vcpkg/scripts/buildsystems/vcpkg.cmake -DINFRAFORGE_WARNINGS_AS_ERRORS=ON
       - name: Build
         run: cmake --build build --config Release
-      - name: Protocol self-check (Windows)
+      - name: Tests
+        run: ctest --test-dir build --build-config Release --output-on-failure
+      - name: Protocol and persistence self-check (Windows)
         if: runner.os == 'Windows'
         run: .\build\engine\Release\infraforge-engine.exe --self-check
-      - name: Protocol self-check (Linux)
+      - name: Protocol and persistence self-check (Linux)
         if: runner.os == 'Linux'
         run: ./build/engine/infraforge-engine --self-check
+      - name: Setup Node for engine protocol smoke
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Install tool workspaces
+        run: npm install
+      - name: Engine protocol smoke (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          INFRAFORGE_ENGINE_PATH: ${{ github.workspace }}/build/engine/Release/infraforge-engine.exe
+        run: npm run verify:engine
+      - name: Engine protocol smoke (Linux)
+        if: runner.os == 'Linux'
+        env:
+          INFRAFORGE_ENGINE_PATH: ${{ github.workspace }}/build/engine/infraforge-engine
+        run: npm run verify:engine

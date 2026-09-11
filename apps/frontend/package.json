@@ -9,6 +9,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@bufbuild/protobuf": "2.14.1",
+    "@infraforge/protocol": "0.1.0",
     "lucide-react": "1.40.0",
     "react": "19.1.1",
     "react-dom": "19.1.1",

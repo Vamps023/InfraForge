@@ -9,9 +9,10 @@ Responsibilities:
 - create/manage desktop windows;
 - launch and supervise `infraforge-engine`;
 - create the per-session authentication token;
-- pass the token to the engine through process arguments/environment without storing it in project data;
-- parse the engine readiness record;
-- expose the engine endpoint to the renderer through a narrow preload API;
+- select a loopback port candidate and retry startup if another process wins the bind race;
+- pass the token to the engine through process arguments without storing it in project data;
+- parse and validate the engine readiness record;
+- expose the authenticated engine endpoint to the renderer through a narrow preload API;
 - host/manage the native Vulkan viewport surface;
 - perform user-authorized OS file/directory dialogs;
 - terminate child processes during shutdown.
@@ -51,14 +52,14 @@ Renderer ownership may live inside the engine process or a dedicated native view
 
 ## Local startup sequence
 
-1. Electron generates a session token.
-2. Electron launches `infraforge-engine --host 127.0.0.1 --port 0 --session-token <token>`.
-3. Engine binds to loopback and an OS-selected free port.
-4. Engine emits one machine-readable readiness record containing protocol version and bound port.
-5. Electron validates the readiness record and exposes `{host, port, token, protocolVersion}` through preload.
-6. Frontend opens WebSocket.
-7. Frontend sends authentication/hello message.
-8. Engine accepts commands only after token and protocol compatibility validation.
+1. Electron generates a 256-bit random session token.
+2. Electron asks the OS for a currently free loopback port candidate, releases the probe socket, and launches `infraforge-engine --host 127.0.0.1 --port <candidate> --session-token <token>`.
+3. Engine binds only to `127.0.0.1` and fails explicitly if the candidate is no longer available.
+4. If bind/startup fails, Electron chooses a new candidate and retries a bounded number of times; it never silently connects to an unrelated listener.
+5. Engine emits one machine-readable readiness record containing protocol version and the exact bound endpoint.
+6. Electron validates the readiness record against the requested endpoint and exposes `{host, port, token, protocolVersion}` through preload.
+7. Frontend opens WebSocket and sends `ClientHello` as a binary Protocol Buffer frame.
+8. Engine accepts application messages only after token and protocol compatibility validation.
 
 If any step fails, the UI displays the engine state and actionable failure. There is no browser-only fallback that pretends native functionality is available.
 
@@ -71,3 +72,5 @@ If any step fails, the UI displays the engine state and actionable failure. Ther
 5. Renderer resources are destroyed.
 6. Engine exits.
 7. Electron force-terminates only after the supervised graceful path fails.
+
+The graceful project-aware shutdown protocol is not implemented in the foundation transport milestone; until project persistence exists, Electron supervision terminates the child engine during application quit and the implementation ledger must state that limitation.

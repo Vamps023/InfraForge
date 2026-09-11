@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
 
+env:
+  VCPKG_DISABLE_METRICS: 1
+
 jobs:
   build:
     strategy:
@@ -12,14 +15,26 @@ jobs:
         os: [windows-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+      - name: Checkout pinned vcpkg registry
+        uses: actions/checkout@v7
+        with:
+          repository: microsoft/vcpkg
+          ref: 9e593bb18ea69cc5095e012465dcd675a822ed0d
+          path: .vcpkg
+      - name: Bootstrap vcpkg (Windows)
+        if: runner.os == 'Windows'
+        run: .\.vcpkg\bootstrap-vcpkg.bat -disableMetrics
+      - name: Bootstrap vcpkg (Linux)
+        if: runner.os == 'Linux'
+        run: ./.vcpkg/bootstrap-vcpkg.sh -disableMetrics
       - name: Configure
-        run: cmake -S . -B build -DINFRAFORGE_WARNINGS_AS_ERRORS=ON
+        run: cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/.vcpkg/scripts/buildsystems/vcpkg.cmake -DINFRAFORGE_WARNINGS_AS_ERRORS=ON
       - name: Build
         run: cmake --build build --config Release
-      - name: Self-check (Windows)
+      - name: Protocol self-check (Windows)
         if: runner.os == 'Windows'
         run: .\build\engine\Release\infraforge-engine.exe --self-check
-      - name: Self-check (Linux)
+      - name: Protocol self-check (Linux)
         if: runner.os == 'Linux'
         run: ./build/engine/infraforge-engine --self-check

@@ -2,6 +2,7 @@
 node_modules/
 apps/*/dist/
 packages/*/dist/
+packages/protocol-ts/src/gen/
 
 # Native builds
 build/

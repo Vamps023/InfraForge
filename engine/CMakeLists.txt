@@ -1,11 +1,33 @@
+find_package(ixwebsocket CONFIG REQUIRED)
+find_package(protobuf CONFIG REQUIRED)
+
+set(INFRAFORGE_FOUNDATION_PROTO
+    ${PROJECT_SOURCE_DIR}/contracts/proto/infraforge/protocol/v1/foundation.proto
+)
+
 add_executable(infraforge-engine
     src/main.cpp
+    src/network/WebSocketServer.cpp
+    ${INFRAFORGE_FOUNDATION_PROTO}
 )
 
 target_compile_features(infraforge-engine PRIVATE cxx_std_23)
 
 target_include_directories(infraforge-engine PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+target_link_libraries(infraforge-engine PRIVATE
+    ixwebsocket::ixwebsocket
+    protobuf::libprotobuf
+)
+
+set(INFRAFORGE_PROTO_BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated)
+target_include_directories(infraforge-engine PRIVATE ${INFRAFORGE_PROTO_BINARY_DIR})
+protobuf_generate(
+    TARGET infraforge-engine
+    IMPORT_DIRS ${PROJECT_SOURCE_DIR}/contracts/proto
+    PROTOC_OUT_DIR ${INFRAFORGE_PROTO_BINARY_DIR}
 )
 
 if(MSVC)

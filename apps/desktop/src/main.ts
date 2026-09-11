@@ -1,8 +1,10 @@
-import { app, BrowserWindow } from 'electron'
+import { app, BrowserWindow, ipcMain } from 'electron'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
+import { EngineSupervisor } from './EngineSupervisor.js'
 
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url))
+let engineSupervisor: EngineSupervisor | null = null
 
 function createMainWindow(): BrowserWindow {
   const preloadPath = path.join(currentDirectory, 'preload.js')
@@ -41,7 +43,15 @@ function createMainWindow(): BrowserWindow {
   return window
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  engineSupervisor = new EngineSupervisor()
+  await engineSupervisor.start()
+
+  ipcMain.handle('engine:get-bootstrap', () => engineSupervisor?.snapshot() ?? {
+    state: 'failed',
+    message: 'Engine supervisor is unavailable.',
+  })
+
   createMainWindow()
 
   app.on('activate', () => {
@@ -49,6 +59,10 @@ app.whenReady().then(() => {
       createMainWindow()
     }
   })
+})
+
+app.on('before-quit', () => {
+  engineSupervisor?.stop()
 })
 
 app.on('window-all-closed', () => {

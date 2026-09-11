@@ -1,4 +1,6 @@
+import { useEffect } from 'react'
 import { Box, ChevronDown, CircleDot, PanelBottom, PanelLeft, PanelRight, Search } from 'lucide-react'
+import { connectEngineSession } from './lib/engineSession'
 import { useUiStore } from './state/uiStore'
 
 const bottomTabs = ['Problems', 'Operations'] as const
@@ -12,7 +14,7 @@ function EmptyViewport() {
       <div className="empty-state">
         <div className="empty-state-icon"><Box size={22} /></div>
         <h1>No project open</h1>
-        <p>The editor shell is ready. Project creation and native viewport services are not implemented yet.</p>
+        <p>Project lifecycle and native Vulkan viewport are intentionally unavailable until their real production paths are implemented.</p>
       </div>
     </main>
   )
@@ -78,9 +80,12 @@ function BottomPanel({ activeTab, setActiveTab }: { activeTab: BottomTab; setAct
 }
 
 function StatusBar() {
+  const engineStatus = useUiStore((state) => state.engineStatus)
   return (
     <footer className="status-bar">
-      <span className="status-item"><CircleDot size={12} /> Engine service not implemented</span>
+      <span className={`status-item engine-${engineStatus.state}`} title={engineStatus.message}>
+        <CircleDot size={12} /> {engineStatus.message}
+      </span>
       <span className="status-divider" />
       <span className="status-item">Project revision —</span>
       <div className="status-spacer" />
@@ -94,6 +99,33 @@ function StatusBar() {
 export function App() {
   const activeBottomTab = useUiStore((state) => state.activeBottomTab)
   const setActiveBottomTab = useUiStore((state) => state.setActiveBottomTab)
+  const setEngineStatus = useUiStore((state) => state.setEngineStatus)
+
+  useEffect(() => {
+    let dispose: (() => void) | undefined
+    let cancelled = false
+
+    void connectEngineSession((status) => {
+      if (!cancelled) {
+        setEngineStatus(status)
+      }
+    }).then((cleanup) => {
+      if (cancelled) {
+        cleanup()
+      } else {
+        dispose = cleanup
+      }
+    }).catch((error: unknown) => {
+      if (!cancelled) {
+        setEngineStatus({ state: 'failed', message: error instanceof Error ? error.message : String(error) })
+      }
+    })
+
+    return () => {
+      cancelled = true
+      dispose?.()
+    }
+  }, [setEngineStatus])
 
   return (
     <div className="app-shell">

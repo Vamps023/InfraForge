@@ -47,6 +47,8 @@ jobs:
           package-manager-cache: false
       - name: Install tool workspaces
         run: npm install
+      - name: Generate TypeScript protocol bindings
+        run: npm run proto:generate:ts
       - name: Engine protocol smoke (Windows)
         if: runner.os == 'Windows'
         shell: bash

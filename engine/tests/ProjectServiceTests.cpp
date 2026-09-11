@@ -30,7 +30,7 @@ TEST_SUITE("project service") {
         using infraforge::application::CommandFailureCode;
         using infraforge::testhelpers::captureException;
 
-        for (const auto failure : {captureException<CommandFailure>([&] { (void)service.save(); }),
+        for (const auto& failure : {captureException<CommandFailure>([&] { (void)service.save(); }),
                  captureException<CommandFailure>([&] { (void)service.close(); }),
                  captureException<CommandFailure>([&] { (void)service.getSummary(); })}) {
             REQUIRE(failure.has_value());

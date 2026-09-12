@@ -132,8 +132,7 @@ bool VulkanRenderer::start(const std::uint32_t initialWidth, const std::uint32_t
 
     camera_.setViewport(requestedWidth_, requestedHeight_);
     initialized_ = true;
-    running_.store(true, std::memory_order_release);
-    thread_ = std::thread([this] { runLoop(); });
+    renderThread_.start([this](std::atomic_bool& running) { runLoop(running); });
     return true;
 }
 
@@ -152,13 +151,11 @@ void VulkanRenderer::setVisible(const bool visible) {
 }
 
 void VulkanRenderer::stop() {
-    const bool wasRunning = running_.load(std::memory_order_acquire);
-    if (wasRunning) {
-        running_.store(false, std::memory_order_release);
-        if (thread_.joinable()) {
-            thread_.join();
-        }
-    }
+    const bool wasRunning = renderThread_.running();
+    // Always stop and join, including after the render thread cleared its own
+    // flag on a frame failure — the thread is still joinable then, and a
+    // joinable std::thread destroyed calls std::terminate.
+    renderThread_.stop();
     if (initialized_) {
         vkDeviceWaitIdle(device_.get());
         gridPass_.destroy();
@@ -171,9 +168,11 @@ void VulkanRenderer::stop() {
         }
         initialized_ = false;
     }
-    if (wasRunning || initialized_) {
+    if (wasRunning) {
         publish("stopped", "renderer shutdown complete");
     }
+    // A self-stopped renderer keeps its last explicit status ("failed" /
+    // "device_lost"); teardown does not overwrite it with "stopped".
 }
 
 void VulkanRenderer::recreateSwapchain() {
@@ -186,10 +185,10 @@ void VulkanRenderer::recreateSwapchain() {
     camera_.setViewport(requestedWidth_, requestedHeight_);
 }
 
-void VulkanRenderer::runLoop() {
+void VulkanRenderer::runLoop(std::atomic_bool& running) {
     publish("ready", "rendering");
     bool suspended = false;
-    while (running_.load(std::memory_order_acquire)) {
+    while (running.load(std::memory_order_acquire)) {
         std::uint32_t width = 0;
         std::uint32_t height = 0;
         bool visible = true;
@@ -224,18 +223,18 @@ void VulkanRenderer::runLoop() {
                 publish("ready", "rendering");
             }
 
-            renderFrame();
+            renderFrame(running);
         } catch (const RendererError& error) {
             runtime::logError("viewport", "renderer.frame_failed",
                 {{"detail", std::string{error.what()} + " (" + vulkanResultName(error.result()) + ")"}});
             publish("failed", error.what());
-            running_.store(false, std::memory_order_release);
+            running.store(false, std::memory_order_release);
             break;
         }
     }
 }
 
-void VulkanRenderer::renderFrame() {
+void VulkanRenderer::renderFrame(std::atomic_bool& running) {
     const std::size_t slot = frameSlot_;
 
     if (fenceSubmitted_[slot]) {
@@ -265,9 +264,22 @@ void VulkanRenderer::renderFrame() {
         .surfaceHeight = swapchain_.extent().height,
     };
     const SwapchainDecision acquireDecision = evaluateSwapchainFrame(acquireInputs);
+    bool recreateAfterPresent = false;
     switch (acquireDecision.action) {
-    case SwapchainAction::Suspend:
-    case SwapchainAction::Recreate: {
+    case SwapchainAction::ContinueThenRecreate:
+        // SUBOPTIMAL is a successful acquisition: the image must be rendered
+        // and presented so the signaled acquire semaphore is consumed.
+        recreateAfterPresent = true;
+        break;
+    case SwapchainAction::Continue:
+        break;
+    case SwapchainAction::SkipFrame:
+        // Nothing was acquired: the acquire semaphore is unsignaled and the
+        // fence state is untouched, so the next loop iteration retries as-is.
+        return;
+    case SwapchainAction::Recreate:
+        // The acquire failed without signaling anything (OUT_OF_DATE);
+        // recreate before the next attempt.
         vkDeviceWaitIdle(device_.get());
         {
             std::lock_guard lock{stateMutex_};
@@ -276,13 +288,21 @@ void VulkanRenderer::renderFrame() {
         publish("recreating", "swapchain recreated after out-of-date acquire");
         publish("ready", "rendering");
         return;
-    }
+    case SwapchainAction::Suspend:
+        // A live swapchain never has a zero extent, so this cannot follow a
+        // successful acquire; fail loudly rather than strand a signaled
+        // acquire semaphore.
+        throw RendererError("frame acquired for a zero-sized surface", VK_ERROR_UNKNOWN);
+    case SwapchainAction::Fail:
+        runtime::logError("viewport", "renderer.acquire_failed",
+            {{"result", vulkanResultName(acquireResult)}});
+        publish("failed", vulkanResultName(acquireResult));
+        running.store(false, std::memory_order_release);
+        return;
     case SwapchainAction::FailDeviceLost:
         publish("device_lost", vulkanResultName(acquireResult));
-        running_.store(false, std::memory_order_release);
+        running.store(false, std::memory_order_release);
         return;
-    case SwapchainAction::Continue:
-        break;
     }
 
     VkCommandBuffer command = commandBuffers_[slot];
@@ -328,25 +348,34 @@ void VulkanRenderer::renderFrame() {
     };
     const SwapchainDecision presentDecision = evaluateSwapchainFrame(presentInputs);
     switch (presentDecision.action) {
-    case SwapchainAction::Recreate: {
-        vkDeviceWaitIdle(device_.get());
-        {
-            std::lock_guard lock{stateMutex_};
-            recreateSwapchain();
-        }
-        publish("recreating", "swapchain recreated after out-of-date present");
-        publish("ready", "rendering");
+    case SwapchainAction::Recreate:
+        recreateAfterPresent = true;
         break;
-    }
     case SwapchainAction::FailDeviceLost:
         publish("device_lost", vulkanResultName(presentResult));
-        running_.store(false, std::memory_order_release);
+        running.store(false, std::memory_order_release);
+        break;
+    case SwapchainAction::Fail:
+        runtime::logError("viewport", "renderer.present_failed",
+            {{"result", vulkanResultName(presentResult)}});
+        publish("failed", vulkanResultName(presentResult));
+        running.store(false, std::memory_order_release);
         break;
     default:
         break;
     }
 
     frameSlot_ = (frameSlot_ + 1) % kFramesInFlight;
+
+    if (recreateAfterPresent) {
+        vkDeviceWaitIdle(device_.get());
+        {
+            std::lock_guard lock{stateMutex_};
+            recreateSwapchain();
+        }
+        publish("recreating", "swapchain recreated after frame completion");
+        publish("ready", "rendering");
+    }
 }
 
 } // namespace infraforge::viewport

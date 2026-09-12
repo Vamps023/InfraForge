@@ -34,18 +34,26 @@ function isValidBoundsPayload(payload: unknown): payload is ViewportBoundsPayloa
 }
 
 // Converts a CSS-pixel rect in the page into a physical-pixel screen
-// placement. The viewport process converts screen coordinates to
+// placement. screen.dipToScreenRect performs the DIP→physical conversion
+// relative to the display that actually hosts the rect, so mixed-DPI
+// multi-monitor setups convert correctly — a single display's scaleFactor
+// cannot, because global DIP coordinates span displays with different
+// scales. The viewport process converts screen coordinates to
 // parent-client coordinates at apply time, so window moves between send and
 // apply never misplace the child surface.
 function computePlacement(window: BrowserWindow, payload: ViewportBoundsPayload): ViewportPlacement {
   const contentBounds = window.getContentBounds()
-  const display = screen.getDisplayMatching(contentBounds)
-  const scale = display.scaleFactor
+  const screenRect = screen.dipToScreenRect(window, {
+    x: contentBounds.x + payload.rect.x,
+    y: contentBounds.y + payload.rect.y,
+    width: payload.rect.width,
+    height: payload.rect.height,
+  })
   return {
-    screenX: Math.round((contentBounds.x + payload.rect.x) * scale),
-    screenY: Math.round((contentBounds.y + payload.rect.y) * scale),
-    width: Math.round(payload.rect.width * scale),
-    height: Math.round(payload.rect.height * scale),
+    screenX: screenRect.x,
+    screenY: screenRect.y,
+    width: screenRect.width,
+    height: screenRect.height,
     dpiScale: payload.dpiScale,
   }
 }

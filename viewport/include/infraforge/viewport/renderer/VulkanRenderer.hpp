@@ -2,6 +2,7 @@
 
 #include "infraforge/viewport/renderer/GridCamera.hpp"
 #include "infraforge/viewport/renderer/GridPass.hpp"
+#include "infraforge/viewport/renderer/RenderThread.hpp"
 #include "infraforge/viewport/renderer/SwapchainState.hpp"
 #include "infraforge/viewport/renderer/VulkanDevice.hpp"
 #include "infraforge/viewport/renderer/VulkanInstance.hpp"
@@ -14,7 +15,6 @@
 #include <functional>
 #include <mutex>
 #include <string>
-#include <thread>
 #include <vector>
 
 namespace infraforge::viewport {
@@ -56,15 +56,15 @@ public:
     // instance).
     void stop();
 
-    [[nodiscard]] bool running() const noexcept { return running_.load(std::memory_order_acquire); }
+    [[nodiscard]] bool running() const noexcept { return renderThread_.running(); }
 
 private:
-    void runLoop();
+    void runLoop(std::atomic_bool& running);
     void publish(std::string state, std::string detail) const;
     void ensureRenderFinishedSemaphores();
     // Render thread only; callers hold stateMutex_ when touching the extent.
     void recreateSwapchain();
-    void renderFrame();
+    void renderFrame(std::atomic_bool& running);
 
     std::uint64_t nativeWindowHandle_;
     RendererStatusCallback statusCallback_;
@@ -96,8 +96,7 @@ private:
     bool sizeDirty_{false};
     bool visible_{true};
 
-    std::thread thread_;
-    std::atomic_bool running_{false};
+    RenderThread renderThread_;
     bool initialized_{false};
 };
 

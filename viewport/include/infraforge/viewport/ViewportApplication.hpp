@@ -1,8 +1,10 @@
 #pragma once
 
 #include "infraforge/viewport/control/ControlProtocol.hpp"
+#include "infraforge/viewport/renderer/VulkanRenderer.hpp"
 
 #include <cstdint>
+#include <optional>
 #include "infraforge/viewport/platform/NativeSurface.hpp"
 
 #include <atomic>
@@ -30,6 +32,14 @@ struct ApplicationArguments {
     char** argv,
     ApplicationArguments& arguments,
     std::string& errorMessage);
+
+// Decides what a visibility control command reports. A live renderer projects
+// its own states, so nothing is reported; a renderer that is not running
+// re-asserts its last published record so a visibility change can never turn
+// a failed or device-lost renderer into an implied "ready".
+[[nodiscard]] std::optional<RendererStatus> visibilityStatusReport(
+    bool rendererRunning,
+    const RendererStatus& lastRendererStatus);
 
 // Runs the viewport application: creates the platform child surface, applies
 // control commands, pumps platform messages, and reports lifecycle state on

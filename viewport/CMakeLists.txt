@@ -63,18 +63,15 @@ add_executable(infraforge-viewport src/main.cpp)
 target_compile_features(infraforge-viewport PRIVATE cxx_std_23)
 target_link_libraries(infraforge-viewport PRIVATE infraforge_viewport_core)
 
-if(WIN32)
-    target_link_libraries(infraforge_viewport_core PRIVATE user32 gdi32)
-    target_compile_definitions(infraforge_viewport_core PRIVATE UNICODE _UNICODE)
-    target_compile_definitions(infraforge-viewport PRIVATE UNICODE _UNICODE)
-endif()
-
 add_executable(infraforge-viewport-tests
     tests/test_main.cpp
     tests/CameraTests.cpp
     tests/ControlProtocolTests.cpp
+    tests/RenderThreadTests.cpp
     tests/SelectionIdTests.cpp
     tests/SwapchainStateTests.cpp
+    tests/ViewportApplicationTests.cpp
+    tests/Win32DpiTests.cpp
 )
 target_compile_features(infraforge-viewport-tests PRIVATE cxx_std_23)
 target_link_libraries(infraforge-viewport-tests PRIVATE
@@ -83,6 +80,15 @@ target_link_libraries(infraforge-viewport-tests PRIVATE
 )
 
 add_test(NAME infraforge-viewport-tests COMMAND infraforge-viewport-tests)
+
+if(WIN32)
+    target_link_libraries(infraforge_viewport_core PRIVATE user32 gdi32)
+    # Windows 10 SDK surface: per-monitor-v2 DPI awareness APIs and context
+    # queries require _WIN32_WINNT >= 0x0605.
+    foreach(target infraforge_viewport_core infraforge-viewport infraforge-viewport-tests)
+        target_compile_definitions(${target} PRIVATE UNICODE _UNICODE WINVER=0x0A00 _WIN32_WINNT=0x0A00)
+    endforeach()
+endif()
 
 if(MSVC)
     foreach(target infraforge_viewport_core infraforge-viewport infraforge-viewport-tests)

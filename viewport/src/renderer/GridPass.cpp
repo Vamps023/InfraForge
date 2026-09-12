@@ -103,13 +103,6 @@ std::uint32_t findMemoryType(
     throw RendererError("no suitable Vulkan memory type found", VK_ERROR_INITIALIZATION_FAILED);
 }
 
-struct StagingUpload {
-    VkBuffer buffer{VK_NULL_HANDLE};
-    VkDeviceMemory memory{VK_NULL_HANDLE};
-    VkCommandPool pool{VK_NULL_HANDLE};
-    VkCommandBuffer command{VK_NULL_HANDLE};
-};
-
 } // namespace
 
 void GridPass::create(
@@ -270,33 +263,41 @@ void GridPass::createVertexBuffer() {
     const VkDeviceSize byteSize = static_cast<VkDeviceSize>(vertices.size() * sizeof(GridVertex));
     vertexCount_ = static_cast<VkDeviceSize>(vertices.size());
 
-    // 1. Staging buffer (host visible) filled from CPU memory.
+    // 1. Staging buffer (host visible) filled from CPU memory. RAII holders
+    // release the temporaries if any later step throws.
     VkBufferCreateInfo stagingInfo{};
     stagingInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     stagingInfo.size = byteSize;
     stagingInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
     stagingInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
-    VkBuffer stagingBuffer = VK_NULL_HANDLE;
-    VK_CHECK(vkCreateBuffer(device_, &stagingInfo, nullptr, &stagingBuffer), "staging buffer creation");
+    VkBuffer rawStagingBuffer = VK_NULL_HANDLE;
+    VK_CHECK(vkCreateBuffer(device_, &stagingInfo, nullptr, &rawStagingBuffer),
+        "staging buffer creation");
+    UniqueVulkan<VkBuffer> stagingBuffer{rawStagingBuffer, [device = device_](VkBuffer buffer) {
+        vkDestroyBuffer(device, buffer, nullptr);
+    }};
 
     VkMemoryRequirements stagingRequirements{};
-    vkGetBufferMemoryRequirements(device_, stagingBuffer, &stagingRequirements);
+    vkGetBufferMemoryRequirements(device_, stagingBuffer.get(), &stagingRequirements);
     VkMemoryAllocateInfo stagingAlloc{};
     stagingAlloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
     stagingAlloc.allocationSize = stagingRequirements.size;
     stagingAlloc.memoryTypeIndex = findMemoryType(
         physical_, stagingRequirements.memoryTypeBits,
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-    VkDeviceMemory stagingMemory = VK_NULL_HANDLE;
-    VK_CHECK(vkAllocateMemory(device_, &stagingAlloc, nullptr, &stagingMemory),
+    VkDeviceMemory rawStagingMemory = VK_NULL_HANDLE;
+    VK_CHECK(vkAllocateMemory(device_, &stagingAlloc, nullptr, &rawStagingMemory),
         "staging memory allocation");
-    VK_CHECK(vkBindBufferMemory(device_, stagingBuffer, stagingMemory, 0), "staging buffer bind");
+    UniqueVulkan<VkDeviceMemory> stagingMemory{rawStagingMemory,
+        [device = device_](VkDeviceMemory memory) { vkFreeMemory(device, memory, nullptr); }};
+    VK_CHECK(vkBindBufferMemory(device_, stagingBuffer.get(), stagingMemory.get(), 0),
+        "staging buffer bind");
 
     void* mapped = nullptr;
-    VK_CHECK(vkMapMemory(device_, stagingMemory, 0, byteSize, 0, &mapped), "staging map");
+    VK_CHECK(vkMapMemory(device_, stagingMemory.get(), 0, byteSize, 0, &mapped), "staging map");
     std::memcpy(mapped, vertices.data(), static_cast<std::size_t>(byteSize));
-    vkUnmapMemory(device_, stagingMemory);
+    vkUnmapMemory(device_, stagingMemory.get());
 
     // 2. Device-local destination buffer.
     VkBufferCreateInfo bufferInfo{};
@@ -332,12 +333,15 @@ void GridPass::createVertexBuffer() {
     poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
     poolInfo.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
     poolInfo.queueFamilyIndex = queueFamily_;
-    VkCommandPool pool = VK_NULL_HANDLE;
-    VK_CHECK(vkCreateCommandPool(device_, &poolInfo, nullptr, &pool), "upload command pool creation");
+    VkCommandPool rawPool = VK_NULL_HANDLE;
+    VK_CHECK(vkCreateCommandPool(device_, &poolInfo, nullptr, &rawPool), "upload command pool creation");
+    UniqueVulkan<VkCommandPool> uploadPool{rawPool, [device = device_](VkCommandPool pool) {
+        vkDestroyCommandPool(device, pool, nullptr);
+    }};
 
     VkCommandBufferAllocateInfo commandInfo{};
     commandInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-    commandInfo.commandPool = pool;
+    commandInfo.commandPool = uploadPool.get();
     commandInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     commandInfo.commandBufferCount = 1;
     VkCommandBuffer command = VK_NULL_HANDLE;
@@ -352,7 +356,7 @@ void GridPass::createVertexBuffer() {
     copy.srcOffset = 0;
     copy.dstOffset = 0;
     copy.size = byteSize;
-    vkCmdCopyBuffer(command, stagingBuffer, vertexBuffer_.get(), 1, &copy);
+    vkCmdCopyBuffer(command, stagingBuffer.get(), vertexBuffer_.get(), 1, &copy);
     VK_CHECK(vkEndCommandBuffer(command), "upload command end");
 
     VkSubmitInfo submitInfo{};
@@ -362,9 +366,7 @@ void GridPass::createVertexBuffer() {
     VK_CHECK(vkQueueSubmit(queue_, 1, &submitInfo, VK_NULL_HANDLE), "upload submit");
     VK_CHECK(vkQueueWaitIdle(queue_), "upload wait");
 
-    vkDestroyCommandPool(device_, pool, nullptr);
-    vkDestroyBuffer(device_, stagingBuffer, nullptr);
-    vkFreeMemory(device_, stagingMemory, nullptr);
+    // The staging buffer/memory and upload pool release at scope end.
 }
 
 void GridPass::destroy() {

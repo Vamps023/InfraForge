@@ -18,8 +18,8 @@ import {
 import { EngineCommandError, type EngineClient } from '../../lib/engineSession'
 import { useProjectStore, type ProjectOperation } from './projectStore'
 
-type ProjectCommand = NonNullable<CommandEnvelope['command']>
-type ResultOutcome = NonNullable<ResultEnvelope['outcome']>
+export type ProjectCommand = NonNullable<CommandEnvelope['command']>
+export type ResultOutcome = NonNullable<ResultEnvelope['outcome']>
 
 export class ProjectCommandFailure extends Error {
   constructor(
@@ -35,6 +35,10 @@ export interface CreateProjectInput {
   parentDirectory: string
   horizontalCrs: string
   linearUnit: string
+  originEasting: number
+  originNorthing: number
+  originHeight: number
+  verticalCrs: string
   trafficSide: Exclude<TrafficSide, TrafficSide.UNSPECIFIED>
 }
 
@@ -50,6 +54,8 @@ const failureFallbackMessages: Record<CommandErrorCode, string> = {
   [CommandErrorCode.PERSISTENCE_FAILURE]:
     'The native engine could not complete the project storage operation.',
   [CommandErrorCode.INTERNAL]: 'An internal engine error occurred.',
+  [CommandErrorCode.GEO_UNSUPPORTED]:
+    'The georeference or coordinate transform is not supported by this engine.',
 }
 
 function describeFailure(code: CommandErrorCode, message: string): string {
@@ -59,7 +65,7 @@ function describeFailure(code: CommandErrorCode, message: string): string {
   return failureFallbackMessages[code]
 }
 
-function expectFailure(outcome: ResultOutcome): ProjectCommandFailure {
+export function expectFailure(outcome: ResultOutcome): ProjectCommandFailure {
   if (outcome.case === 'error') {
     return new ProjectCommandFailure(
       outcome.value.code,
@@ -121,9 +127,10 @@ export async function createProject(client: EngineClient, input: CreateProjectIn
       horizontalCrs: input.horizontalCrs,
       linearUnit: input.linearUnit,
       axisConvention: AxisConvention.EASTING_NORTHING_UP,
-      originEasting: 0,
-      originNorthing: 0,
-      verticalCrs: '',
+      originEasting: input.originEasting,
+      originNorthing: input.originNorthing,
+      originHeight: input.originHeight,
+      verticalCrs: input.verticalCrs,
     }),
     trafficSide: input.trafficSide,
   })

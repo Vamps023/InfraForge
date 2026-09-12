@@ -1,4 +1,5 @@
 import { useProjectStore } from './projectStore'
+import { useGeoStore } from '../geo/geoStore'
 import type { EngineClient } from '../../lib/engineSession'
 import type { EventEnvelope } from '@infraforge/protocol'
 
@@ -15,6 +16,7 @@ export function applyProjectEvent(event: EventEnvelope) {
       break
     case 'projectClosed':
       store.clearProject()
+      useGeoStore.getState().reset()
       break
     case 'projectRevisionChanged':
       store.patchSummary({ revision: event.event.value.revision })
@@ -25,6 +27,17 @@ export function applyProjectEvent(event: EventEnvelope) {
         revision: event.event.value.revision,
       })
       break
+    case 'georeferenceChanged': {
+      const georeference = event.event.value.georeference
+      if (georeference?.config) {
+        store.patchSummary({
+          georeference: georeference.config,
+          revision: event.event.value.revision,
+        })
+        useGeoStore.getState().setInfo(georeference, event.event.value.revision)
+      }
+      break
+    }
     default:
       // Unknown events are ignored by this projection; other feature
       // projections subscribe independently.

@@ -1,3 +1,7 @@
+#if defined(_WIN32)
+#define VK_USE_PLATFORM_WIN32_KHR 1
+#endif
+
 #include "infraforge/viewport/renderer/VulkanSurface.hpp"
 
 #ifdef _WIN32

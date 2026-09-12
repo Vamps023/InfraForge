@@ -1,0 +1,150 @@
+syntax = "proto3";
+
+package infraforge.protocol.v1;
+
+// Canonical georeference contract (ADR-0007, docs/02_DATA/GEOREFERENCE.md).
+// Each project owns exactly one georeference; every spatial domain resolves
+// and transforms coordinates through the native Geo transform service. No
+// consumer may keep an independent CRS/origin/scale model.
+
+enum AxisConvention {
+  AXIS_CONVENTION_UNSPECIFIED = 0;
+  AXIS_CONVENTION_EASTING_NORTHING_UP = 1;
+}
+
+// Canonical georeference configuration. Stored once per project in the
+// georeference table; no consumer may keep an independent CRS/origin model.
+message GeoreferenceConfig {
+  // Horizontal CRS definition resolvable by the geospatial engine, e.g.
+  // "EPSG:32633", an OGC URN, WKT2, or PROJJSON. Non-empty. The engine
+  // canonicalizes a definition to "AUTH:CODE" only when it is canonically
+  // equivalent to the authority entry; bound CRSs and custom definitions
+  // are preserved verbatim.
+  string horizontal_crs = 1;
+  // Canonical linear unit of project-global coordinates, e.g. "metre".
+  // Resolved against the geospatial unit database. Non-empty.
+  string linear_unit = 2;
+  AxisConvention axis_convention = 3;
+  // Project origin expressed in the horizontal CRS coordinate frame, in the
+  // canonical linear unit (double precision).
+  double origin_easting = 4;
+  double origin_northing = 5;
+  // Optional vertical CRS/datum identifier; empty when unknown. Must
+  // resolve to a vertical CRS — unresolvable or wrong-role definitions are
+  // rejected at create/set/open rather than stored as metadata.
+  string vertical_crs = 6;
+  // Project origin height expressed in the canonical linear unit, relative
+  // to the configured vertical reference (0 when none is configured).
+  double origin_height = 7;
+}
+
+// Resolved metadata about a CRS accepted by the geospatial engine. Produced
+// by the Geo transform service; never authored by the client.
+message CrsInfo {
+  // Canonical "AUTH:CODE" identifier when the definition resolves to a
+  // database authority entry; empty otherwise.
+  string identifier = 1;
+  // Human-readable CRS name from the geospatial database.
+  string name = 2;
+  string authority = 3;
+  string code = 4;
+  // Resolved object kind (e.g. "PROJECTED_CRS", "VERTICAL_CRS").
+  string kind = 5;
+  // Conversion factor from the CRS horizontal axis unit to metres. Zero for
+  // angular (degree-based) axes.
+  double axis_unit_to_metre = 6;
+}
+
+// Projection of the configured vertical reference. A configured vertical
+// CRS is always resolvable — unresolvable or wrong-role definitions are
+// rejected when the georeference is created, set, or opened.
+message VerticalReferenceInfo {
+  bool present = 1;
+  // Canonical "AUTH:CODE" identifier when resolvable; echoes the configured
+  // definition otherwise.
+  string identifier = 2;
+  string name = 3;
+  // True when the definition resolves to a vertical CRS that can
+  // participate in compound transformations. Availability of a specific
+  // grid-dependent datum transformation is still reported per command.
+  bool transform_supported = 4;
+  // Conversion factor from the vertical axis unit to metres (diagnostic
+  // metadata; source heights are interpreted in this axis unit).
+  double axis_unit_to_metre = 5;
+}
+
+// Backend projection of the canonical georeference plus resolved metadata
+// for status and display. `config` is the authoritative configuration.
+message GeoreferenceInfo {
+  GeoreferenceConfig config = 1;
+  CrsInfo horizontal_crs = 2;
+  // Canonical linear unit metadata resolved by the geospatial engine.
+  string linear_unit_name = 3;
+  double linear_unit_to_metre = 4;
+  VerticalReferenceInfo vertical_reference = 5;
+}
+
+// Coordinate expressed in a source dataset CRS, in normalized
+// GIS-friendly axis order (the engine normalizes via
+// proj_normalize_for_visualization): for a geographic source CRS x is
+// longitude and y is latitude; for a projected source CRS x is easting and
+// y is northing. z is the height expressed in the source vertical CRS's
+// axis unit, or metres when no source vertical CRS is supplied.
+message SourceCoordinate {
+  double x = 1;
+  double y = 2;
+  double z = 3;
+}
+
+// Canonical double-precision project-global coordinate: easting/northing in
+// the project horizontal CRS frame and height relative to the configured
+// vertical reference — all three expressed in the canonical linear unit.
+message ProjectGlobalCoordinate {
+  double easting = 1;
+  double northing = 2;
+  double height = 3;
+}
+
+message GetGeoreferenceCommand {}
+
+// Replaces the canonical project georeference. This is a project-level
+// migration operation (docs/02_DATA/GEOREFERENCE.md): it rewrites the
+// persisted configuration and advances the project revision.
+message SetGeoreferenceCommand {
+  GeoreferenceConfig georeference = 1;
+  // Optional optimistic-concurrency guard: when set and different from the
+  // canonical project revision the command is rejected.
+  optional uint64 expected_revision = 2;
+}
+
+// Transforms source-CRS coordinates into canonical project-global space
+// through the Geo transform service. Coordinates are capped server-side;
+// oversized batches are rejected.
+message TransformToProjectGlobalCommand {
+  // Source horizontal CRS definition (required). Must resolve to a
+  // geographic (2D or 3D), projected, or engineering CRS; geocentric,
+  // compound, vertical, and other role forms are rejected.
+  string source_crs = 1;
+  // Optional source vertical CRS definition; must resolve to a vertical
+  // CRS. When no vertical datum transform applies the height value is
+  // converted between the source vertical axis unit (or assumed metres)
+  // and the project's canonical linear unit; a differing vertical reference
+  // triggers a compound transform that fails explicitly when unavailable.
+  string source_vertical_crs = 2;
+  repeated SourceCoordinate coordinates = 3;
+}
+
+message GeoreferenceStateResult {
+  GeoreferenceInfo georeference = 1;
+  uint64 revision = 2;
+}
+
+message TransformToProjectGlobalResult {
+  repeated ProjectGlobalCoordinate coordinates = 1;
+}
+
+// Broadcast after the canonical georeference changes.
+message GeoreferenceChangedEvent {
+  GeoreferenceInfo georeference = 1;
+  uint64 revision = 2;
+}

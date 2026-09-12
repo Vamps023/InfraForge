@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package infraforge.protocol.v1;
 
+import "infraforge/protocol/v1/geo.proto";
+
 // Project lifecycle contract: canonical create/open/save-as/save/close queries
 // executed by the native engine against the project database.
 
@@ -9,26 +11,6 @@ enum TrafficSide {
   TRAFFIC_SIDE_UNSPECIFIED = 0;
   TRAFFIC_SIDE_LEFT = 1;
   TRAFFIC_SIDE_RIGHT = 2;
-}
-
-enum AxisConvention {
-  AXIS_CONVENTION_UNSPECIFIED = 0;
-  AXIS_CONVENTION_EASTING_NORTHING_UP = 1;
-}
-
-// Canonical georeference configuration. Stored once per project in the
-// georeference table; no consumer may keep an independent CRS/origin model.
-message GeoreferenceConfig {
-  // Horizontal CRS identifier, e.g. "EPSG:32633". Non-empty.
-  string horizontal_crs = 1;
-  // Canonical linear unit identifier, e.g. "metre". Non-empty.
-  string linear_unit = 2;
-  AxisConvention axis_convention = 3;
-  // Project origin expressed in the horizontal CRS (double precision).
-  double origin_easting = 4;
-  double origin_northing = 5;
-  // Optional vertical CRS/datum identifier; empty when unknown.
-  string vertical_crs = 6;
 }
 
 // Projection of the canonical open-project session state. The frontend never
@@ -92,6 +74,10 @@ enum CommandErrorCode {
   COMMAND_ERROR_CODE_SCHEMA_VERSION_UNSUPPORTED = 6;
   COMMAND_ERROR_CODE_PERSISTENCE_FAILURE = 7;
   COMMAND_ERROR_CODE_INTERNAL = 8;
+  // A georeference or coordinate transform request is well-formed but not
+  // supported by the canonical geospatial engine (unsupported CRS kind,
+  // unavailable vertical transform, unsupported unit).
+  COMMAND_ERROR_CODE_GEO_UNSUPPORTED = 9;
 }
 
 message CommandError {
@@ -126,6 +112,9 @@ message CommandEnvelope {
     SaveProjectAsCommand save_project_as = 4;
     CloseProjectCommand close_project = 5;
     GetProjectSummaryCommand get_project_summary = 6;
+    GetGeoreferenceCommand get_georeference = 7;
+    SetGeoreferenceCommand set_georeference = 8;
+    TransformToProjectGlobalCommand transform_to_project_global = 9;
   }
 }
 
@@ -134,6 +123,8 @@ message ResultEnvelope {
     ProjectStateResult project_state = 1;
     ProjectClosedResult project_closed = 2;
     CommandError error = 3;
+    GeoreferenceStateResult georeference_state = 4;
+    TransformToProjectGlobalResult transform_to_project_global = 5;
   }
 }
 
@@ -144,5 +135,6 @@ message EventEnvelope {
     ProjectClosedEvent project_closed = 3;
     ProjectRevisionChangedEvent project_revision_changed = 4;
     ProjectDirtyStateChangedEvent project_dirty_state_changed = 5;
+    GeoreferenceChangedEvent georeference_changed = 6;
   }
 }

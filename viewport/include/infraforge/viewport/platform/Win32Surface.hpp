@@ -17,7 +17,7 @@ public:
     Win32Surface(const Win32Surface&) = delete;
     Win32Surface& operator=(const Win32Surface&) = delete;
 
-    void create(std::uint64_t parentWindowHandle, const SurfacePlacement& placement) override;
+    void create(std::uint64_t parentWindowHandle, const SurfacePlacement& placement, bool initialVisible) override;
     void place(const SurfacePlacement& placement) override;
     void setVisible(bool visible) override;
     void requestClose() override;

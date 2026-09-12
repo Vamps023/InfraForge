@@ -26,6 +26,12 @@ interface PickerOption {
 // no value is ever converted or substituted. The engine's Geo service
 // remains the validation authority; geographic presets are selectable and
 // visibly marked invalid so users can discover why they fail.
+//
+// Dismissal is a component-level focus boundary: when focus leaves the
+// picker root (Tab, Shift+Tab, click into another field or empty dialog
+// space where relatedTarget is null/outside), the list closes. Options and
+// the toggle suppress mousedown's focus shift, so their clicks fire before
+// any blur-based dismissal can interfere.
 export function CrsPicker({ value, onChange }: CrsPickerProps) {
   const uid = useId()
   const inputRef = useRef<HTMLInputElement>(null)
@@ -101,7 +107,19 @@ export function CrsPicker({ value, onChange }: CrsPickerProps) {
   }
 
   return (
-    <div className="crs-picker">
+    <div
+      className="crs-picker"
+      onBlur={(event) => {
+        // Focus boundary: close when focus moves outside the picker (Tab,
+        // Shift+Tab, click into another control, or a click on
+        // non-focusable space where relatedTarget is null). Focus moving
+        // within the picker (input -> option is prevented via mousedown)
+        // does not close.
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+          closeDropdown()
+        }
+      }}
+    >
       <div className="crs-field">
         <input
           ref={inputRef}
@@ -134,6 +152,7 @@ export function CrsPicker({ value, onChange }: CrsPickerProps) {
           type="button"
           tabIndex={-1}
           aria-label={open ? 'Close CRS list' : 'Open CRS list'}
+          onMouseDown={(event) => event.preventDefault()}
           onClick={() => (open ? closeDropdown(true) : openDropdown())}
         >
           <ChevronDown size={14} />

@@ -109,6 +109,7 @@ bool parseApplicationArguments(
     bool haveWidth = false;
     bool haveHeight = false;
     bool haveDpi = false;
+    bool haveInitialVisible = false;
 
     for (int index = 1; index < argc;) {
         const std::string_view key{argv[index]};
@@ -118,6 +119,7 @@ bool parseApplicationArguments(
             ++index;
             continue;
         }
+
 
         if (index + 1 >= argc) {
             errorMessage = "missing value for argument";
@@ -154,7 +156,14 @@ bool parseApplicationArguments(
             return true;
         };
 
-        if (key == "--parent-window" && !haveParent) {
+        if (key == "--initial-visible" && !haveInitialVisible) {
+            if (value != "0" && value != "1") {
+                errorMessage = "invalid --initial-visible value (use 0 or 1)";
+                return false;
+            }
+            arguments.initialVisible = value == "1";
+            haveInitialVisible = true;
+        } else if (key == "--parent-window" && !haveParent) {
             std::uint64_t parsed = 0;
             if (!parseHex(parsed, 0xFFFFFFFFFFFFFFFFULL)) {
                 return false;
@@ -217,7 +226,7 @@ int runViewportApplication(const ApplicationArguments& arguments) {
 
     auto surface = createPlatformSurface();
     try {
-        surface->create(arguments.parentWindowHandle, arguments.initialPlacement);
+        surface->create(arguments.parentWindowHandle, arguments.initialPlacement, arguments.initialVisible);
     } catch (const NativeSurfaceError& error) {
         reportStatus("failed", error.what());
         runtime::logError("viewport", "surface.create_failed", {{"detail", error.what()}});

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  desiredStartupVisibility,
   planViewportVisibility,
   type ViewportVisibilityInputs,
 } from '../src/ViewportVisibilityPolicy.js'
@@ -94,5 +95,42 @@ describe('viewport visibility policy', () => {
       'hide', 'place', 'show',
       'hide', 'place', 'show',
     ])
+  })
+})
+
+describe('viewport startup visibility', () => {
+  it('starts visible when the page desires it and the window can display it', () => {
+    expect(desiredStartupVisibility({ pageDesiresViewport: true, windowDisplayable: true })).toBe(true)
+  })
+
+  it('starts hidden when a blocking overlay is active', () => {
+    expect(desiredStartupVisibility({ pageDesiresViewport: false, windowDisplayable: true })).toBe(false)
+  })
+
+  it('starts hidden while the window is minimized', () => {
+    expect(desiredStartupVisibility({ pageDesiresViewport: true, windowDisplayable: false })).toBe(false)
+  })
+
+  it('stays consistent with the runtime policy decision for the same inputs', () => {
+    for (const pageDesires of [true, false]) {
+      for (const displayable of [true, false]) {
+        const startup = desiredStartupVisibility({ pageDesiresViewport: pageDesires, windowDisplayable: displayable })
+        const runtime = planViewportVisibility(
+          inputs({ pageDesiresViewport: pageDesires, windowDisplayable: displayable, currentlyAppliedVisible: startup }),
+        )
+        // After a hidden startup the runtime policy must not re-hide/show
+        // spuriously; after a visible startup it must not need a show.
+        expect(runtime.visible).toBe(startup)
+        if (startup) {
+          expect(runtime.actions).toEqual([])
+        }
+      }
+    }
+  })
+
+  it('a hidden startup followed by desired visibility restores place-before-show', () => {
+    expect(
+      planViewportVisibility(inputs({ pageDesiresViewport: true, windowDisplayable: true, currentlyAppliedVisible: false })),
+    ).toEqual({ visible: true, actions: ['place', 'show'] })
   })
 })

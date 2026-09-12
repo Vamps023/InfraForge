@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { EngineSupervisor } from './EngineSupervisor.js'
 import { ViewportSupervisor, type ViewportPlacement } from './ViewportSupervisor.js'
-import { planViewportVisibility } from './ViewportVisibilityPolicy.js'
+import { planViewportVisibility, desiredStartupVisibility } from './ViewportVisibilityPolicy.js'
 
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url))
 let engineSupervisor: EngineSupervisor | null = null
@@ -218,10 +218,18 @@ app.whenReady().then(async () => {
           window.webContents.send('viewport:status', status)
         }
       })
-      void viewportSupervisor.start(window.getNativeWindowHandle(), placement).then(() => {
-        // A viewport that starts while a blocking overlay is open (or while
-        // the window is minimized) must not surface itself: the policy
-        // re-asserts the hidden state now that the child process exists.
+      // The native surface is created visible or hidden with the policy's
+      // startup decision — a viewport started behind a blocking overlay or a
+      // minimized host can never flash before the first control command.
+      const startupVisible = desiredStartupVisibility({
+        pageDesiresViewport: viewportPageDesiresVisible.get(window) ?? true,
+        windowDisplayable: viewportWindowDisplayable.get(window) ?? true,
+      })
+      void viewportSupervisor.start(window.getNativeWindowHandle(), placement, { initialVisible: startupVisible }).then(() => {
+        // Converge with anything that changed during startup (overlay or
+        // minimize state): re-assert the current policy decision now that
+        // the child process exists. A visible startup is a no-op here; a
+        // hidden startup that became desired-visible runs place -> show.
         applyViewportVisibilityPlan(window)
       })
       return

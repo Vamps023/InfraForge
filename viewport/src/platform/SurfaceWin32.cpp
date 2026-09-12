@@ -54,7 +54,10 @@ Win32Surface::~Win32Surface() {
     }
 }
 
-void Win32Surface::create(const std::uint64_t parentWindowHandle, const SurfacePlacement& placement) {
+void Win32Surface::create(
+    const std::uint64_t parentWindowHandle,
+    const SurfacePlacement& placement,
+    const bool initialVisible) {
     if (handle_ != nullptr) {
         throw NativeSurfaceError("child surface already created");
     }
@@ -84,12 +87,19 @@ void Win32Surface::create(const std::uint64_t parentWindowHandle, const SurfaceP
     }
 
     // Initial size is 1x1; the first place() call sets the real geometry
-    // through the same code path the shell will keep using.
+    // through the same code path the shell will keep using. WS_VISIBLE is
+    // applied only when the shell's startup visibility decision allows it:
+    // a surface created behind a blocking overlay must never flash before
+    // the first runtime visibility command. Renderer/surface setup below is
+    // identical either way; a hidden surface is shown later through the
+    // existing visibility control path (SW_SHOWNA, no activation steal).
+    const DWORD style = WS_CHILD | WS_CLIPSIBLINGS | WS_CLIPCHILDREN
+        | (initialVisible ? WS_VISIBLE : 0);
     const HWND window = CreateWindowExW(
         0,
         kClassName,
         L"InfraForge Viewport",
-        WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN,
+        style,
         0, 0, 1, 1,
         parent,
         nullptr,
@@ -104,6 +114,8 @@ void Win32Surface::create(const std::uint64_t parentWindowHandle, const SurfaceP
 
     // Keep the child above the web-contents sibling; the shell re-places the
     // surface on every layout change and never lets it steal activation.
+    // Without SWP_SHOWWINDOW this cannot change visibility, so a surface
+    // created hidden stays hidden here.
     SetWindowPos(window, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
 
     place(placement);

@@ -1,6 +1,8 @@
 #pragma once
 
 #include "infraforge/viewport/control/ControlProtocol.hpp"
+
+#include <cstdint>
 #include "infraforge/viewport/platform/NativeSurface.hpp"
 
 #include <atomic>

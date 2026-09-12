@@ -4,6 +4,8 @@
 
 #include "infraforge/viewport/renderer/VulkanSurface.hpp"
 
+#include <cstdint>
+
 #ifdef _WIN32
 #include <Windows.h>
 #include <vulkan/vulkan_win32.h>

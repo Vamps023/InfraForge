@@ -2,6 +2,8 @@
 
 #include "infraforge/viewport/renderer/Vulkan.hpp"
 
+#include <cstdint>
+
 #include <cstddef>
 #include <vector>
 

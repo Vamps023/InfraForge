@@ -1,5 +1,7 @@
 #include "infraforge/viewport/platform/SurfaceFactory.hpp"
 
+#include <cstdint>
+
 namespace infraforge::viewport {
 namespace {
 

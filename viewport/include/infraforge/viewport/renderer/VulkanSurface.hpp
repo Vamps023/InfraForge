@@ -2,6 +2,8 @@
 
 #include "infraforge/viewport/renderer/Vulkan.hpp"
 
+#include <cstdint>
+
 namespace infraforge::viewport {
 
 // Owns the VkSurfaceKHR bound to the native child surface. Platform-specific

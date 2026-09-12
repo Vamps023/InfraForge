@@ -1,5 +1,7 @@
 #include "infraforge/viewport/platform/Win32Surface.hpp"
 
+#include <cstdint>
+
 #include <Windows.h>
 
 #include <atomic>

@@ -1,5 +1,7 @@
 #include "infraforge/viewport/platform/SurfaceFactory.hpp"
 
+#include <cstdint>
+
 #include "infraforge/viewport/platform/Win32Surface.hpp"
 #include "infraforge/runtime/Logging.hpp"
 

@@ -1,5 +1,7 @@
 #include "infraforge/viewport/renderer/GridCamera.hpp"
 
+#include <cstdint>
+
 #include <algorithm>
 #include <cmath>
 

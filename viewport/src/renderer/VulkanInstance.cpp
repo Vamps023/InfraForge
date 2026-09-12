@@ -1,3 +1,14 @@
+// Platform macros must precede the first vulkan.h inclusion anywhere in
+// the translation unit (the header guard would skip the platform headers
+// otherwise).
+#if defined(_WIN32)
+#define VK_USE_PLATFORM_WIN32_KHR 1
+#elif defined(__linux__)
+// Compile-only on Linux: the surface creation stub fails explicitly at
+// runtime; the XCB extension name is referenced for the instance probe.
+#define VK_USE_PLATFORM_XCB_KHR 1
+#endif
+
 #include "infraforge/viewport/renderer/VulkanInstance.hpp"
 
 #include "infraforge/runtime/Logging.hpp"
@@ -5,11 +16,6 @@
 #ifdef _WIN32
 #include <Windows.h>
 #include <vulkan/vulkan_win32.h>
-#define VK_USE_PLATFORM_XCB_KHR 1
-#elif defined(__linux__)
-// Compile-only on Linux: the surface creation stub fails explicitly at
-// runtime; the XCB extension name is referenced for the instance probe.
-#define VK_USE_PLATFORM_XCB_KHR 1
 #endif
 
 #include <vulkan/vulkan.h>

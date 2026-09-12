@@ -9,6 +9,7 @@ Events are server-originated facts, not instructions.
 - `project.closed`
 - `project.revision_changed`
 - `project.dirty_state_changed`
+- `georeference.changed`
 - `job.queued`
 - `job.started`
 - `job.progress`

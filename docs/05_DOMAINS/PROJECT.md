@@ -22,10 +22,12 @@ Frontend action
 Projects are directories named `<name>.iforge` following
 `docs/02_DATA/PROJECT_FORMAT.md`:
 
-- `project.json` — strict manifest validated on every open (format id,
-  format version, project UUID, display name, timestamps, database path,
-  compatibility block, georeference summary). Unknown keys, unknown format
-  ids, and unsupported versions are rejected without modification.
+- `project.json` — strict manifest of immutable discovery metadata
+  validated on every open (format id, format version, project UUID, display
+  name, creation timestamp, database path, minimum application version,
+  georeference summary). Unknown keys, unknown format ids, and unsupported
+  versions are rejected without modification. The manifest carries no
+  schema-version copy; the database is the single migration authority.
 - `project.db` — SQLite database holding canonical structured state.
 - `assets/`, `terrain/`, `scenarios/` — file-backed content locations.
 - `cache/`, `autosave/`, `logs/` — non-canonical or session data.
@@ -56,8 +58,10 @@ version fails on a read-only probe; the project is not modified.
 - `saved_revision` marks the revision last covered by an explicit save.
 - A session is dirty while `revision != saved_revision`; dirty state is
   derived from persisted counters, so it survives reopen honestly.
-- `project.save` persists the save marker and manifest `modifiedAt`. Saving
-  a clean session is a no-op without events.
+- `project.save` is one SQLite transaction updating `saved_revision` and
+  `modified_at`; the manifest is not rewritten, so a failed save cannot
+  leave two files disagreeing. Saving a clean session is a no-op without
+  events.
 
 ## Save-as semantics
 
@@ -70,10 +74,11 @@ new project identity; treat save-as as forking, not renaming.
 ## Integrity policy
 
 On open, manifest and database must agree on project UUID, display name,
-georeference, `createdAt`, and schema version. A mismatch is reported as
-corruption and fails the open; the engine never silently repairs project
-files. `modifiedAt` is a save-time marker updated in both stores on save and
-is deliberately not equality-checked on open.
+georeference, and `createdAt`. A mismatch is reported as corruption and
+fails the open; the engine never silently repairs project files. The
+schema-version probe runs on a read-only connection (`query_only`, no
+journal-mode reconfiguration), so rejecting a newer project never modifies
+the file — including its journal mode.
 
 ## Events
 
@@ -86,11 +91,18 @@ Events carry an `event_id` and are broadcast to authenticated connections.
 They are projections of engine-side facts, never instructions or state
 transfers.
 
+## Security notes
+
+Connections join the event router only after ClientHello, protocol
+negotiation, and token validation succeed, and only after the ServerHello
+was delivered. Unauthenticated loopback peers receive no project events.
+
 ## Current limitations
 
 - Autosave, autosave recovery, and explicit recovery tooling are later
-  milestones; a crash between manifest and database writes surfaces as an
-  explicit integrity error on open.
+  milestones. Creation and save-as write the manifest before switching
+  sessions and roll back the whole target directory on failure; an ordinary
+  save touches only the database.
 - Concurrent open of the same project by two engine processes relies on
   SQLite locking; a dedicated project lockfile arrives with packaging and
   recovery hardening (issue #16).

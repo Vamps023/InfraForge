@@ -23,18 +23,22 @@ Example.iforge/
 
 ## `project.json`
 
-Contains small project-level metadata needed before opening the database, including:
+Contains small, immutable project-level metadata needed before opening the database, including:
 
 - format identifier (`infraforge-project`);
 - project format version;
 - project UUID;
 - display name;
-- created/modified timestamps;
+- creation timestamp;
 - database relative path;
-- minimum compatible application/project-schema information;
+- minimum compatible application version;
 - georeference summary required for safe project discovery/display.
 
-It does not duplicate full roads, lanes, terrain, or simulation state.
+It does not duplicate mutable canonical state. Revision, saved-revision,
+modified time, and the schema version are owned by `project.db` alone, so
+migrations and saves never have to synchronize two files. The manifest is
+rewritten only when project identity or discovery metadata changes
+(creation, save-as), never by an ordinary save.
 
 ## `project.db`
 
@@ -54,4 +58,8 @@ Canonical paths stored in project data are project-relative where content belong
 
 ## Save semantics
 
-A save is complete only after the database transaction and required durable metadata updates succeed. UI success is emitted after completion, never at operation start.
+A save is a single SQLite transaction (`saved_revision`, `modified_at`); it
+either fully lands or fails without half-persisted state. `project.json` is
+not rewritten by an ordinary save, so a failed save cannot leave the
+manifest and database disagreeing. UI success is emitted after the
+transaction commits, never at operation start.

@@ -1,9 +1,11 @@
 #include "infraforge/viewport/platform/SurfaceFactory.hpp"
 
 #include "infraforge/viewport/platform/Win32Surface.hpp"
+#include "infraforge/runtime/Logging.hpp"
 
 #include <Windows.h>
 
+#include <string>
 #include <string_view>
 
 namespace infraforge::viewport {
@@ -82,24 +84,33 @@ void Win32Surface::create(const std::uint64_t parentWindowHandle, const SurfaceP
     SetWindowPos(window, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
 
     place(placement);
+
+    runtime::logInfo("viewport", "surface.parent",
+        {{"parent", std::to_string(parentWindowHandle)},
+            {"child", std::to_string(static_cast<std::uint64_t>(reinterpret_cast<uintptr_t>(window)))}});
 }
 
 void Win32Surface::place(const SurfacePlacement& placement) {
     if (handle_ == nullptr) {
         throw NativeSurfaceError("cannot place a surface that has not been created");
     }
+    const HWND window = static_cast<HWND>(handle_);
+    const HWND parent = reinterpret_cast<HWND>(parentHandle_);
+
+    // Chromium re-parents children of its widget windows when it rebuilds the
+    // native window tree (for example on state changes); re-assert our
+    // parentage and stacking on every placement so the surface self-heals.
+    if (GetAncestor(window, GA_ROOT) != GetAncestor(parent, GA_ROOT) || GetParent(window) != parent) {
+        (void)SetParent(window, parent);
+        SetWindowPos(window, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    }
+
     POINT origin{placement.screenX, placement.screenY};
-    if (!ScreenToClient(reinterpret_cast<HWND>(parentHandle_), &origin)) {
+    if (!ScreenToClient(parent, &origin)) {
         throw NativeSurfaceError("failed to convert placement to parent-client coordinates");
     }
-    if (!SetWindowPos(
-            static_cast<HWND>(handle_),
-            HWND_TOP,
-            origin.x,
-            origin.y,
-            static_cast<int>(placement.width),
-            static_cast<int>(placement.height),
-            SWP_NOACTIVATE)) {
+    if (!SetWindowPos(window, HWND_TOP, origin.x, origin.y,
+            static_cast<int>(placement.width), static_cast<int>(placement.height), SWP_NOACTIVATE)) {
         throw NativeSurfaceError("failed to resize the viewport child window");
     }
     placement_ = placement;

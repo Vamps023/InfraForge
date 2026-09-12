@@ -1,15 +1,12 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
+    "module": "CommonJS",
     "strict": true,
-    "noUncheckedIndexedAccess": true,
     "outDir": "dist",
     "rootDir": "src",
     "types": ["node"],
     "skipLibCheck": true
   },
-  "include": ["src/**/*.ts"],
-  "exclude": ["src/preload.ts"]
+  "include": ["src/preload.ts"]
 }

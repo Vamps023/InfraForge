@@ -118,6 +118,14 @@ bool parseApplicationArguments(
             }
             return true;
         };
+        const auto parseUnsignedDecimal = [&](std::uint64_t& target, const std::uint64_t maximum) {
+            const auto result = std::from_chars(value.data(), value.data() + value.size(), target, 10);
+            if (result.ec != std::errc{} || result.ptr != value.data() + value.size() || target > maximum) {
+                errorMessage = "invalid numeric value for argument";
+                return false;
+            }
+            return true;
+        };
         const auto parseSigned = [&](std::int32_t& target) {
             std::int64_t parsed = 0;
             const auto result = std::from_chars(value.data(), value.data() + value.size(), parsed, 10);
@@ -149,14 +157,14 @@ bool parseApplicationArguments(
             haveY = true;
         } else if (key == "--width" && !haveWidth) {
             std::uint64_t parsed = 0;
-            if (!parseHex(parsed, 100000) || parsed == 0) {
+            if (!parseUnsignedDecimal(parsed, 100000) || parsed == 0) {
                 return false;
             }
             arguments.initialPlacement.width = static_cast<std::uint32_t>(parsed);
             haveWidth = true;
         } else if (key == "--height" && !haveHeight) {
             std::uint64_t parsed = 0;
-            if (!parseHex(parsed, 100000) || parsed == 0) {
+            if (!parseUnsignedDecimal(parsed, 100000) || parsed == 0) {
                 return false;
             }
             arguments.initialPlacement.height = static_cast<std::uint32_t>(parsed);
@@ -205,8 +213,12 @@ int runViewportApplication(const ApplicationArguments& arguments) {
     std::cout << formatReadyRecord(surface->placement(), surfacePlatformName()) << std::endl;
     reportStatus("ready", "native surface embedded; renderer integration pending");
     runtime::logInfo("viewport", "surface.created",
-        {{"width", std::to_string(surface->placement().width)},
-            {"height", std::to_string(surface->placement().height)}});
+        {{"parent", std::to_string(arguments.parentWindowHandle)},
+            {"screenX", std::to_string(surface->placement().screenX)},
+            {"screenY", std::to_string(surface->placement().screenY)},
+            {"width", std::to_string(surface->placement().width)},
+            {"height", std::to_string(surface->placement().height)},
+            {"dpiScale", std::to_string(surface->placement().dpiScale)}});
 
     std::atomic_bool stdinStopped{false};
     std::thread stdinThread([&queue, &stdinStopped] {

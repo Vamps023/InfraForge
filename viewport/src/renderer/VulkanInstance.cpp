@@ -5,6 +5,11 @@
 #ifdef _WIN32
 #include <Windows.h>
 #include <vulkan/vulkan_win32.h>
+#define VK_USE_PLATFORM_XCB_KHR 1
+#elif defined(__linux__)
+// Compile-only on Linux: the surface creation stub fails explicitly at
+// runtime; the XCB extension name is referenced for the instance probe.
+#define VK_USE_PLATFORM_XCB_KHR 1
 #endif
 
 #include <vulkan/vulkan.h>

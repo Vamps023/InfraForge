@@ -35,6 +35,10 @@ add_library(infraforge_core STATIC
     src/domain/geo/GeoTransformService.cpp
     src/domain/geo/ProjectGeoreference.cpp
     src/domain/project/ProjectModel.cpp
+    src/domain/world/ChunkGrid.cpp
+    src/domain/world/ChunkResidency.cpp
+    src/domain/world/Invalidation.cpp
+    src/domain/world/SpatialIndex.cpp
     src/persistence/ProjectManifest.cpp
     src/persistence/SchemaMigrations.cpp
     src/persistence/SqliteConnection.cpp
@@ -106,12 +110,18 @@ find_package(doctest CONFIG REQUIRED)
 add_executable(infraforge-engine-tests
     tests/test_main.cpp
     tests/TestHelpers.cpp
+    tests/ChunkCacheMetadataTests.cpp
+    tests/ChunkGridTests.cpp
+    tests/ChunkResidencyTests.cpp
     tests/CommandProcessorTests.cpp
     tests/GeoPersistenceTests.cpp
     tests/GeoServiceTests.cpp
     tests/GeoTransformServiceTests.cpp
+    tests/LargeWorldIndexTests.cpp
     tests/ProjectModelTests.cpp
     tests/ProjectServiceTests.cpp
+    tests/SpatialBoundsTests.cpp
+    tests/SpatialIndexTests.cpp
     tests/SqliteProjectStoreTests.cpp
     tests/WebSocketServerTests.cpp
     src/network/CommandRouter.cpp

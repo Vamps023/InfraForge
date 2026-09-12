@@ -9,6 +9,7 @@ export type ViewportState =
   | 'ready'
   | 'suspended'
   | 'recreating'
+  | 'device_lost'
   | 'failed'
   | 'stopped'
 

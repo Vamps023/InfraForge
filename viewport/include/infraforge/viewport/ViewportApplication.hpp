@@ -16,6 +16,7 @@ namespace infraforge::viewport {
 struct ApplicationArguments {
     std::uint64_t parentWindowHandle{0};
     SurfacePlacement initialPlacement;
+    bool validationEnabled{false};
 };
 
 // Parses strict command-line arguments:

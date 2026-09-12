@@ -59,7 +59,7 @@ button { color: inherit; }
 .renderer-ready { color: var(--success); }
 .renderer-starting, .renderer-recreating { color: var(--muted); }
 .renderer-unavailable, .renderer-suspended { color: var(--warning); }
-.renderer-failed, .renderer-stopped { color: var(--error); }
+.renderer-failed, .renderer-stopped, .renderer-device_lost { color: var(--error); }
 .empty-state { position: relative; max-width: 460px; padding: 28px; text-align: center; color: var(--muted); }
 .empty-state-icon { width: 42px; height: 42px; margin: 0 auto 13px; display: grid; place-items: center; border-radius: 6px; background: var(--raised); border: 1px solid var(--border-strong); color: #91a6bf; }
 .empty-state h1 { margin: 0 0 7px; color: var(--text); font-size: 17px; font-weight: 600; }

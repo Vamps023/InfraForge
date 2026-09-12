@@ -6,7 +6,7 @@ export interface PickDirectoryOptions {
 }
 
 export interface ViewportStatusPayload {
-  state: 'unavailable' | 'starting' | 'ready' | 'suspended' | 'recreating' | 'failed' | 'stopped'
+  state: 'unavailable' | 'starting' | 'ready' | 'suspended' | 'recreating' | 'device_lost' | 'failed' | 'stopped'
   detail: string
   validation?: boolean
   gpu?: string

@@ -159,7 +159,7 @@ TEST_SUITE("large-world spatial index acceptance") {
             CHECK(index.entitiesIntersecting(query)
                 == bruteForceIntersecting(synthetic.entities(), query));
         }
-        for (const auto probe : {std::pair{-49000.0, 49000.0},
+        for (const auto& probe : {std::pair{-49000.0, 49000.0},
                  std::pair{49000.0, -49000.0}, std::pair{-49000.0, -49000.0}}) {
             const auto query = world::SpatialBounds::ofEdges(
                 probe.first - 500.0, probe.second - 500.0,

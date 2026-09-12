@@ -1,10 +1,66 @@
-import { app, BrowserWindow, dialog, ipcMain } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, screen } from 'electron'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { EngineSupervisor } from './EngineSupervisor.js'
+import { ViewportSupervisor, type ViewportPlacement } from './ViewportSupervisor.js'
 
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url))
 let engineSupervisor: EngineSupervisor | null = null
+let viewportSupervisor: ViewportSupervisor | null = null
+
+interface ViewportBoundsPayload {
+  rect: { x: number; y: number; width: number; height: number }
+  dpiScale: number
+}
+
+function isValidBoundsPayload(payload: unknown): payload is ViewportBoundsPayload {
+  if (typeof payload !== 'object' || payload === null) {
+    return false
+  }
+  const candidate = payload as ViewportBoundsPayload
+  const rect = candidate.rect
+  return (
+    typeof candidate.dpiScale === 'number' &&
+    candidate.dpiScale > 0 &&
+    typeof rect === 'object' &&
+    rect !== null &&
+    Number.isFinite(rect.x) &&
+    Number.isFinite(rect.y) &&
+    Number.isFinite(rect.width) &&
+    Number.isFinite(rect.height) &&
+    rect.width >= 0 &&
+    rect.height >= 0
+  )
+}
+
+// Converts a CSS-pixel rect in the page into a physical-pixel screen
+// placement. The viewport process converts screen coordinates to
+// parent-client coordinates at apply time, so window moves between send and
+// apply never misplace the child surface.
+function computePlacement(window: BrowserWindow, payload: ViewportBoundsPayload): ViewportPlacement {
+  const contentBounds = window.getContentBounds()
+  const display = screen.getDisplayMatching(contentBounds)
+  const scale = display.scaleFactor
+  return {
+    screenX: Math.round((contentBounds.x + payload.rect.x) * scale),
+    screenY: Math.round((contentBounds.y + payload.rect.y) * scale),
+    width: Math.round(payload.rect.width * scale),
+    height: Math.round(payload.rect.height * scale),
+    dpiScale: payload.dpiScale,
+  }
+}
+
+function repositionViewport(window: BrowserWindow): void {
+  if (viewportSupervisor?.snapshot().state !== 'ready') {
+    return
+  }
+  const latest = lastViewportBounds.get(window)
+  if (latest) {
+    viewportSupervisor.place(computePlacement(window, latest))
+  }
+}
+
+const lastViewportBounds = new WeakMap<BrowserWindow, ViewportBoundsPayload>()
 
 function createMainWindow(): BrowserWindow {
   const preloadPath = path.join(currentDirectory, 'preload.js')
@@ -28,6 +84,16 @@ function createMainWindow(): BrowserWindow {
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   window.once('ready-to-show', () => window.show())
 
+  // Window-level geometry changes that the page's ResizeObserver cannot see
+  // (pure moves, maximize, monitor switches with unchanged layout) must
+  // re-place the child surface against fresh screen coordinates.
+  const reposition = () => repositionViewport(window)
+  window.on('move', reposition)
+  window.on('maximize', reposition)
+  window.on('restore', reposition)
+  window.on('enter-full-screen', reposition)
+  window.on('leave-full-screen', reposition)
+
   const developmentUrl = process.env.INFRAFORGE_FRONTEND_URL
   if (developmentUrl) {
     const parsed = new URL(developmentUrl)
@@ -46,6 +112,8 @@ function createMainWindow(): BrowserWindow {
 app.whenReady().then(async () => {
   engineSupervisor = new EngineSupervisor()
   await engineSupervisor.start()
+
+  viewportSupervisor = new ViewportSupervisor()
 
   ipcMain.handle('engine:get-bootstrap', () => engineSupervisor?.snapshot() ?? {
     state: 'failed',
@@ -73,6 +141,38 @@ app.whenReady().then(async () => {
     },
   )
 
+  // Native viewport hosting: the renderer measures its viewport-host
+  // rectangle; the shell converts it to a physical screen placement, owns
+  // the native viewport process, and forwards renderer status back.
+  ipcMain.on('viewport:set-bounds', (event, payload: unknown) => {
+    const window = BrowserWindow.fromWebContents(event.sender)
+    if (!window || !isValidBoundsPayload(payload)) {
+      return
+    }
+    lastViewportBounds.set(window, payload)
+    const placement = computePlacement(window, payload)
+
+    if (viewportSupervisor === null) {
+      return
+    }
+    if (viewportSupervisor.snapshot().state === 'unavailable' || viewportSupervisor.snapshot().state === 'stopped') {
+      viewportSupervisor.setStatusListener((status) => {
+        if (!window.isDestroyed()) {
+          window.webContents.send('viewport:status', status)
+        }
+      })
+      void viewportSupervisor.start(window.getNativeWindowHandle(), placement)
+      return
+    }
+    viewportSupervisor.place(placement)
+  })
+
+  ipcMain.on('viewport:set-visible', (_event, visible: unknown) => {
+    if (typeof visible === 'boolean') {
+      viewportSupervisor?.setVisible(visible)
+    }
+  })
+
   createMainWindow()
 
   app.on('activate', () => {
@@ -83,6 +183,7 @@ app.whenReady().then(async () => {
 })
 
 app.on('before-quit', () => {
+  viewportSupervisor?.stop()
   engineSupervisor?.stop()
 })
 

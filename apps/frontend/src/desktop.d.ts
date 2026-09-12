@@ -13,6 +13,16 @@ type EngineBootstrap =
   | Readonly<{ state: 'ready'; connection: EngineConnectionInfo }>
   | Readonly<{ state: 'unavailable' | 'failed'; message: string }>
 
+type ViewportStatusPayload = Readonly<{
+  state: 'unavailable' | 'starting' | 'ready' | 'suspended' | 'recreating' | 'failed' | 'stopped'
+  detail: string
+  validation?: boolean
+  gpu?: string
+  vulkan?: string
+}>
+
+type ViewportRect = Readonly<{ x: number; y: number; width: number; height: number }>
+
 declare global {
   interface Window {
     infraforgeDesktop?: Readonly<{
@@ -23,6 +33,9 @@ declare global {
       }>
       getEngineBootstrap: () => Promise<EngineBootstrap>
       pickDirectory: (options: Readonly<{ title: string; buttonLabel?: string }>) => Promise<string | null>
+      setViewportBounds: (rect: ViewportRect, dpiScale: number) => void
+      setViewportVisible: (visible: boolean) => void
+      onViewportStatus: (listener: (status: ViewportStatusPayload) => void) => () => void
     }>
   }
 }

@@ -1,60 +1,47 @@
 import { useEffect, useRef, useState } from 'react'
-import { Box, ChevronDown, CircleDot, PanelBottom, PanelLeft, PanelRight, Search } from 'lucide-react'
+import { Box, ChevronDown, CircleDot, FolderOpen, PanelBottom, PanelLeft, PanelRight, Search } from 'lucide-react'
 import { connectEngineSession, type EngineSession, type EngineSessionStatus } from './lib/engineSession'
 import { GeoreferencePanel } from './features/geo/GeoreferencePanel'
 import { NewProjectDialog } from './features/project/NewProjectDialog'
 import { closeProject, openProject, refreshProjectSummary, saveProject } from './features/project/projectApi'
 import { subscribeProjectEvents } from './features/project/projectEvents'
 import { useProjectStore } from './features/project/projectStore'
+import { useViewportHost } from './features/viewport/useViewportHost'
+import { useViewportStore, viewportSurfaceActive } from './features/viewport/viewportStore'
 import { useUiStore } from './state/uiStore'
 
 const bottomTabs = ['Problems', 'Operations'] as const
 
 type BottomTab = (typeof bottomTabs)[number]
 
-function EmptyViewport({
-  engineReady,
-  projectOpen,
-  busy,
-  onNewProject,
-  onOpenProject,
-}: {
-  engineReady: boolean
-  projectOpen: boolean
-  busy: boolean
-  onNewProject: () => void
-  onOpenProject: () => void
-}) {
+function ViewportArea({ hostRef }: { hostRef: React.RefObject<HTMLDivElement | null> }) {
+  const rendererStatus = useViewportStore((state) => state.status)
+  const surfaceActive = viewportSurfaceActive(rendererStatus.state)
+
   return (
-    <main className="viewport-empty" aria-label="Viewport">
-      <div className="viewport-grid" aria-hidden="true" />
-      <div className="empty-state">
-        <div className="empty-state-icon">
-          <Box size={22} />
-        </div>
-        {projectOpen ? (
-          <>
-            <h1>Viewport unavailable</h1>
-            <p>The project is open, but the native Vulkan viewport is not implemented yet (issue #2).</p>
-          </>
-        ) : (
-          <>
-            <h1>No project open</h1>
-            <p>Create an InfraForge project or open an existing .iforge directory.</p>
-            <div className="empty-state-actions">
-              <button className="button primary" type="button" disabled={!engineReady || busy} onClick={onNewProject}>
-                New Project…
-              </button>
-              <button className="button secondary" type="button" disabled={!engineReady || busy} onClick={onOpenProject}>
-                Open Project…
-              </button>
+    <main className="viewport-area" aria-label="Viewport">
+      <div className="viewport-host" ref={hostRef} />
+      {!surfaceActive ? (
+        <div className="viewport-overlay">
+          <div className="viewport-grid" aria-hidden="true" />
+          <div className="empty-state">
+            <div className="empty-state-icon">
+              <Box size={22} />
             </div>
-            {!engineReady ? (
-              <p className="empty-state-note">Project actions require a connected native engine session.</p>
-            ) : null}
-          </>
-        )}
-      </div>
+            {rendererStatus.state === 'failed' || rendererStatus.state === 'stopped' ? (
+              <>
+                <h1>Native viewport unavailable</h1>
+                <p className="empty-state-error">{rendererStatus.detail}</p>
+              </>
+            ) : (
+              <>
+                <h1>Starting native viewport…</h1>
+                <p>{rendererStatus.detail}</p>
+              </>
+            )}
+          </div>
+        </div>
+      ) : null}
     </main>
   )
 }
@@ -98,18 +85,35 @@ function AppHeader({
           </button>
         </div>
       ) : null}
-      <div className="build-label">Foundation 0.2.0</div>
+      <div className="build-label">Foundation 0.3.0</div>
     </header>
   )
 }
 
-function Toolbar() {
+function Toolbar({
+  engineReady,
+  busy,
+  onNewProject,
+  onOpenProject,
+}: {
+  engineReady: boolean
+  busy: boolean
+  onNewProject: () => void
+  onOpenProject: () => void
+}) {
   return (
     <div className="toolbar" aria-label="Editor toolbar">
       <button className="tool-button active" type="button" aria-pressed="true">
         Select
       </button>
       <div className="toolbar-separator" />
+      <button className="tool-button" type="button" disabled={!engineReady || busy} onClick={onNewProject}>
+        New Project…
+      </button>
+      <button className="tool-button" type="button" disabled={!engineReady || busy} onClick={onOpenProject}>
+        <FolderOpen size={13} /> Open Project…
+      </button>
+      <div className="toolbar-spacer" />
       <span className="toolbar-hint">Authoring tools appear only when their production domain is available.</span>
     </div>
   )
@@ -145,6 +149,11 @@ function Inspector() {
 
 function BottomPanel({ activeTab, setActiveTab }: { activeTab: BottomTab; setActiveTab: (tab: BottomTab) => void }) {
   const lastError = useProjectStore((state) => state.lastError)
+  const rendererStatus = useViewportStore((state) => state.status)
+  const rendererProblem =
+    rendererStatus.state === 'failed' || rendererStatus.state === 'stopped'
+      ? `Viewport: ${rendererStatus.detail}`
+      : null
   return (
     <section className="bottom-panel">
       <div className="bottom-tabs">
@@ -165,6 +174,8 @@ function BottomPanel({ activeTab, setActiveTab }: { activeTab: BottomTab; setAct
         {activeTab === 'Problems' ? (
           lastError ? (
             <span className="problem-row">{lastError.message}</span>
+          ) : rendererProblem ? (
+            <span className="problem-row">{rendererProblem}</span>
           ) : (
             'No diagnostics.'
           )
@@ -178,6 +189,15 @@ function BottomPanel({ activeTab, setActiveTab }: { activeTab: BottomTab; setAct
 
 function StatusBar({ engineStatus }: { engineStatus: EngineSessionStatus }) {
   const summary = useProjectStore((state) => state.summary)
+  const rendererStatus = useViewportStore((state) => state.status)
+  const rendererTitle = [
+    rendererStatus.detail,
+    rendererStatus.gpu ? `GPU: ${rendererStatus.gpu}` : null,
+    rendererStatus.vulkan ? `Vulkan ${rendererStatus.vulkan}` : null,
+    rendererStatus.validation ? 'Validation enabled' : null,
+  ]
+    .filter(Boolean)
+    .join(' — ')
   return (
     <footer className="status-bar">
       <span className={`status-item engine-${engineStatus.state}`} title={engineStatus.message}>
@@ -200,7 +220,10 @@ function StatusBar({ engineStatus }: { engineStatus: EngineSessionStatus }) {
         </>
       )}
       <div className="status-spacer" />
-      <span className="status-item">Renderer —</span>
+      <span className={`status-item renderer-${rendererStatus.state}`} title={rendererTitle}>
+        Renderer {rendererStatus.state}
+        {rendererStatus.gpu ? ` · ${rendererStatus.gpu}` : ''}
+      </span>
       <ChevronDown size={12} />
     </footer>
   )
@@ -215,6 +238,9 @@ export function App() {
   const [showNewProjectDialog, setShowNewProjectDialog] = useState(false)
   const [showGeoreferencePanel, setShowGeoreferencePanel] = useState(false)
   const disposersRef = useRef<(() => void) | null>(null)
+  const viewportHostRef = useRef<HTMLDivElement | null>(null)
+
+  useViewportHost(viewportHostRef)
 
   const summary = useProjectStore((state) => state.summary)
   const operation = useProjectStore((state) => state.operation)
@@ -315,16 +341,15 @@ export function App() {
         onGeoreference={() => setShowGeoreferencePanel(true)}
         onClose={() => void handleClose()}
       />
-      <Toolbar />
+      <Toolbar
+        engineReady={engineReady}
+        busy={busy}
+        onNewProject={handleNewProject}
+        onOpenProject={() => void handleOpenProject()}
+      />
       <div className="workspace">
         <Outliner />
-        <EmptyViewport
-          engineReady={engineReady}
-          projectOpen={projectOpen}
-          busy={busy}
-          onNewProject={handleNewProject}
-          onOpenProject={() => void handleOpenProject()}
-        />
+        <ViewportArea hostRef={viewportHostRef} />
         <Inspector />
       </div>
       <BottomPanel activeTab={activeBottomTab} setActiveTab={setActiveBottomTab} />

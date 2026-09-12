@@ -240,7 +240,13 @@ export function App() {
   const disposersRef = useRef<(() => void) | null>(null)
   const viewportHostRef = useRef<HTMLDivElement | null>(null)
 
-  useViewportHost(viewportHostRef)
+  // Blocking application overlays that render over the editor surface. The
+  // native child-HWND viewport cannot be occluded by CSS z-index, so the
+  // page reports this centrally and the desktop shell hides/restores the
+  // native viewport (with a placement refresh) through its visibility
+  // policy.
+  const blockingOverlayActive = showNewProjectDialog || showGeoreferencePanel
+  useViewportHost(viewportHostRef, { blockedByOverlay: blockingOverlayActive })
 
   const summary = useProjectStore((state) => state.summary)
   const operation = useProjectStore((state) => state.operation)

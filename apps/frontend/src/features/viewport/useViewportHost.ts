@@ -5,8 +5,18 @@ import { useViewportStore } from './viewportStore'
 // renderer status into the projection store. Bounds are re-sent on every
 // layout change of the host element and on device-pixel-ratio changes; the
 // shell additionally re-places the surface on pure window moves.
-export function useViewportHost(hostRef: RefObject<HTMLDivElement | null>): void {
+//
+// Visibility: the page reports its combined desired visibility — host on
+// screen AND no blocking application overlay — over the existing
+// viewport:set-visible channel. The desktop shell owns the native viewport
+// process/HWND and folds in window displayability plus the deterministic
+// restore ordering (ViewportVisibilityPolicy).
+export function useViewportHost(
+  hostRef: RefObject<HTMLDivElement | null>,
+  occlusion: { blockedByOverlay?: boolean } = {},
+): void {
   const setStatus = useViewportStore((state) => state.setStatus)
+  const blockedByOverlay = occlusion.blockedByOverlay ?? false
 
   useEffect(() => {
     const desktop = window.infraforgeDesktop
@@ -51,16 +61,28 @@ export function useViewportHost(hostRef: RefObject<HTMLDivElement | null>): void
     }
     listenDpr()
 
-    const visibilityListener = () => {
-      desktop.setViewportVisible?.(!document.hidden)
-    }
-    document.addEventListener('visibilitychange', visibilityListener)
-
     return () => {
       observer?.disconnect()
       dprQuery?.removeEventListener('change', listenDpr)
-      document.removeEventListener('visibilitychange', visibilityListener)
       unsubscribeStatus?.()
     }
   }, [hostRef, setStatus])
+
+  useEffect(() => {
+    const desktop = window.infraforgeDesktop
+    if (!desktop?.setViewportVisible) {
+      return
+    }
+    const sendDesiredVisibility = () => {
+      desktop.setViewportVisible(!document.hidden && !blockedByOverlay)
+    }
+    const visibilityListener = () => sendDesiredVisibility()
+    document.addEventListener('visibilitychange', visibilityListener)
+    // Assert on every overlay/state change (and once on mount) so the shell
+    // converges even when an earlier signal raced viewport startup.
+    sendDesiredVisibility()
+    return () => {
+      document.removeEventListener('visibilitychange', visibilityListener)
+    }
+  }, [blockedByOverlay])
 }

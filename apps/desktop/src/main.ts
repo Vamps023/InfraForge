@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { EngineSupervisor } from './EngineSupervisor.js'
 import { ViewportSupervisor, type ViewportPlacement } from './ViewportSupervisor.js'
+import { planViewportVisibility } from './ViewportVisibilityPolicy.js'
 
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url))
 let engineSupervisor: EngineSupervisor | null = null
@@ -70,6 +71,43 @@ function repositionViewport(window: BrowserWindow): void {
 
 const lastViewportBounds = new WeakMap<BrowserWindow, ViewportBoundsPayload>()
 
+// Centralized native-viewport visibility state, per window. The page reports
+// its combined desired visibility (host on screen, no blocking overlay) over
+// viewport:set-visible; the shell folds in window displayability and executes
+// the policy's ordered actions (ViewportVisibilityPolicy): hiding is always
+// re-asserted, and restoration recomputes placement from the latest cached
+// bounds BEFORE the surface is shown again.
+const viewportPageDesiresVisible = new WeakMap<BrowserWindow, boolean>()
+const viewportWindowDisplayable = new WeakMap<BrowserWindow, boolean>()
+const viewportVisibilityApplied = new WeakMap<BrowserWindow, boolean>()
+
+function applyViewportVisibilityPlan(window: BrowserWindow): void {
+  const supervisor = viewportSupervisor
+  if (!supervisor || window.isDestroyed()) {
+    return
+  }
+  const plan = planViewportVisibility({
+    pageDesiresViewport: viewportPageDesiresVisible.get(window) ?? true,
+    windowDisplayable: viewportWindowDisplayable.get(window) ?? true,
+    currentlyAppliedVisible: viewportVisibilityApplied.get(window) ?? false,
+    hasCachedBounds: lastViewportBounds.has(window),
+  })
+  for (const action of plan.actions) {
+    if (action === 'hide') {
+      viewportVisibilityApplied.set(window, false)
+      supervisor.setVisible(false)
+    } else if (action === 'place') {
+      const latest = lastViewportBounds.get(window)
+      if (latest) {
+        supervisor.place(computePlacement(window, latest))
+      }
+    } else if (action === 'show') {
+      viewportVisibilityApplied.set(window, true)
+      supervisor.setVisible(true)
+    }
+  }
+}
+
 function createMainWindow(): BrowserWindow {
   const preloadPath = path.join(currentDirectory, 'preload.js')
 
@@ -101,6 +139,17 @@ function createMainWindow(): BrowserWindow {
   window.on('restore', reposition)
   window.on('enter-full-screen', reposition)
   window.on('leave-full-screen', reposition)
+
+  // The shell's own visibility input: a minimized window cannot display the
+  // viewport. Restore re-runs the policy, which re-places before showing.
+  window.on('minimize', () => {
+    viewportWindowDisplayable.set(window, false)
+    applyViewportVisibilityPlan(window)
+  })
+  window.on('restore', () => {
+    viewportWindowDisplayable.set(window, true)
+    applyViewportVisibilityPlan(window)
+  })
 
   const developmentUrl = process.env.INFRAFORGE_FRONTEND_URL
   if (developmentUrl) {
@@ -169,16 +218,24 @@ app.whenReady().then(async () => {
           window.webContents.send('viewport:status', status)
         }
       })
-      void viewportSupervisor.start(window.getNativeWindowHandle(), placement)
+      void viewportSupervisor.start(window.getNativeWindowHandle(), placement).then(() => {
+        // A viewport that starts while a blocking overlay is open (or while
+        // the window is minimized) must not surface itself: the policy
+        // re-asserts the hidden state now that the child process exists.
+        applyViewportVisibilityPlan(window)
+      })
       return
     }
     viewportSupervisor.place(placement)
   })
 
-  ipcMain.on('viewport:set-visible', (_event, visible: unknown) => {
-    if (typeof visible === 'boolean') {
-      viewportSupervisor?.setVisible(visible)
+  ipcMain.on('viewport:set-visible', (event, desired: unknown) => {
+    const window = BrowserWindow.fromWebContents(event.sender)
+    if (!window || typeof desired !== 'boolean') {
+      return
     }
+    viewportPageDesiresVisible.set(window, desired)
+    applyViewportVisibilityPlan(window)
   })
 
   createMainWindow()

@@ -9,6 +9,7 @@
 #include "infraforge/ports/ProjectStore.hpp"
 
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 namespace infraforge::application::validation {
@@ -21,9 +22,8 @@ struct ValidationResult {
     std::vector<domain::validation::Diagnostic> diagnostics;
     std::uint64_t revision{0};
     // True when the run was cancelled before all validators completed. When
-    // cancelled, `diagnostics` contains only the partial results that were
-    // produced before cancellation and the caller must not treat them as a
-    // complete world assessment.
+    // cancelled, `diagnostics` is EMPTY — partial results are never published
+    // as authoritative. The caller must not update the diagnostic store.
     bool cancelled{false};
 };
 
@@ -32,13 +32,14 @@ struct ValidationResult {
 // deterministic against a fixed revision even if a mutation arrives mid-run.
 //
 // Runs on the single application executor thread. Cancellation is cooperative:
-// the caller may request cancellation through the token and validators poll
-// it at safe points.
+// the caller passes a shared CancellationToken that may be signalled from the
+// network thread by `world.cancel_check`. Validators poll it at safe points.
 //
 // Failure behavior:
 // - No open project → throws CommandFailure(ProjectNotOpen).
 // - Validator internal error → reported as a diagnostic, not an exception.
-// - Cancellation → returns a result with `cancelled=true`.
+// - Cancellation → returns a result with `cancelled=true` and empty diagnostics.
+//   Partial results are discarded, never published.
 class ValidationService final {
 public:
     explicit ValidationService(ports::ProjectStore& store, const ValidatorRegistry& registry);
@@ -47,7 +48,12 @@ public:
     // canonical project state. The snapshot is captured before any validator
     // runs, so the revision in every diagnostic is the revision at the start
     // of the run.
-    [[nodiscard]] ValidationResult check(CancellationToken& cancellation) const;
+    //
+    // `cancellation` is a shared token so the network thread can request
+    // cancellation of an in-progress run. When cancelled, the service stops
+    // invoking further validators and returns `cancelled=true` with empty
+    // diagnostics.
+    [[nodiscard]] ValidationResult check(const std::shared_ptr<CancellationToken>& cancellation) const;
 
 private:
     ports::ProjectStore& store_;

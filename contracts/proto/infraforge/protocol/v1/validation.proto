@@ -57,7 +57,23 @@ message WorldCheckResult {
   // Project revision the diagnostics were computed against.
   uint64 revision = 2;
   // True when the run was cancelled before all validators completed.
+  // When true, `diagnostics` is empty — partial results are never published.
   bool cancelled = 3;
+  // True when the diagnostics are stale because the project revision has
+  // changed since the last run. The frontend should prompt the user to
+  // re-run Check World. Stale diagnostics are not included in `diagnostics`.
+  bool stale = 4;
+}
+
+// Command: cancel an in-progress world validation run. Processed on the
+// network thread (not queued on the executor) so the cancellation signal
+// reaches the active validator immediately.
+message WorldCancelCheckCommand {}
+
+// Result: acknowledgement of a cancel request.
+message WorldCancelCheckResult {
+  // True when a validation run was active and cancellation was requested.
+  bool cancellation_requested = 1;
 }
 
 // Event: a diagnostic was added to the current set. Emitted when a validation
@@ -66,16 +82,25 @@ message DiagnosticAddedEvent {
   Diagnostic diagnostic = 1;
 }
 
-// Event: a diagnostic was removed from the current set. Emitted when a
-// validation run no longer produces a diagnostic that was present before.
+// Event: a specific diagnostic was removed from the current set. Emitted when
+// a validation run no longer produces a diagnostic that was present before.
+// The identity is (code, entities) — not code alone — so multi-entity
+// diagnostics with the same code can be removed individually.
 message DiagnosticRemovedEvent {
-  // Stable code of the removed diagnostic.
+  // Stable diagnostic code of the removed diagnostic.
   string code = 1;
+  // Entity references of the removed diagnostic, identifying the specific
+  // instance when multiple diagnostics share the same code.
+  repeated DiagnosticEntityRef entities = 2;
   // Project revision the removal was computed against.
-  uint64 revision = 2;
+  uint64 revision = 3;
 }
 
-// Event: all diagnostics were cleared (e.g. project closed).
+// Event: all diagnostics were cleared (e.g. project closed, revision changed).
 message DiagnosticClearedEvent {
-  uint64 revision = 1;
+  // Reason the diagnostics were cleared.
+  // "project_closed" — the project was closed.
+  // "revision_changed" — the project revision changed; diagnostics are stale.
+  string reason = 1;
+  uint64 revision = 2;
 }

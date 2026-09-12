@@ -16,6 +16,7 @@ file(MAKE_DIRECTORY ${INFRAFORGE_PROTO_BINARY_DIR})
 add_library(infraforge_core STATIC
     src/application/CommandProcessor.cpp
     src/application/ProjectService.cpp
+    src/application/validation/DiagnosticStore.cpp
     src/application/validation/ValidationService.cpp
     src/application/validation/ValidatorRegistry.cpp
     src/application/validation/ProjectFoundationValidator.cpp

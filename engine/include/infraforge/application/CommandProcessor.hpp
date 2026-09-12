@@ -1,6 +1,8 @@
 #pragma once
 
 #include "infraforge/application/ProjectService.hpp"
+#include "infraforge/application/validation/CancellationToken.hpp"
+#include "infraforge/application/validation/DiagnosticStore.hpp"
 #include "infraforge/application/validation/ValidationService.hpp"
 #include "infraforge/application/validation/ValidatorRegistry.hpp"
 #include "infraforge/ports/ProjectStore.hpp"
@@ -62,6 +64,13 @@ private:
     void handleOpenProject(const std::string& connectionId, const protocol::v1::Frame& frame);
     void handleSaveProjectAs(const std::string& connectionId, const protocol::v1::Frame& frame);
     void handleWorldCheck(const std::string& connectionId, const protocol::v1::Frame& frame);
+    void handleWorldCancelCheck(const std::string& connectionId, const protocol::v1::Frame& frame);
+
+    // Publishes diagnostic added/removed/cleared events based on the diff
+    // between the new validation result and the previously published set.
+    void publishDiagnosticEvents(const std::vector<domain::validation::Diagnostic>& next, std::uint64_t revision);
+    // Clears the diagnostic store and broadcasts a cleared event.
+    void clearDiagnostics(const std::string& reason);
 
     // Executes one service use case, then emits the correlated result frame
     // (state or closed) and the derived event frames. Argument-validation
@@ -80,6 +89,12 @@ private:
     ProjectService service_;
     validation::ValidatorRegistry validatorRegistry_;
     validation::ValidationService validationService_;
+    validation::DiagnosticStore diagnosticStore_;
+    // Shared cancellation token for the active validation run. When null,
+    // no validation run is in progress. Set on the executor thread before
+    // the run and cleared after. Read by the network thread to request
+    // cancellation.
+    std::shared_ptr<validation::CancellationToken> activeCancellation_;
     CommandSink& sink_;
 
     std::thread executor_;

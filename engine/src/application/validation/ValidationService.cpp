@@ -18,7 +18,7 @@ ValidationService::ValidationService(ports::ProjectStore& store, const Validator
     : store_(store),
       registry_(registry) {}
 
-ValidationResult ValidationService::check(CancellationToken& cancellation) const {
+ValidationResult ValidationService::check(const std::shared_ptr<CancellationToken>& cancellation) const {
     if (!store_.isOpen()) {
         failNotOpen();
     }
@@ -35,12 +35,15 @@ ValidationResult ValidationService::check(CancellationToken& cancellation) const
     result.revision = context.revision;
 
     for (const auto& validator : registry_.validators()) {
-        if (cancellation.isCancelled()) {
+        if (cancellation->isCancelled()) {
+            // Cancellation requested: discard all partial results. We never
+            // publish incomplete diagnostics as an authoritative result.
             result.cancelled = true;
+            result.diagnostics.clear();
             return result;
         }
         try {
-            validator->validate(context, cancellation, result.diagnostics);
+            validator->validate(context, *cancellation, result.diagnostics);
         } catch (const std::exception& error) {
             // A validator throwing is an engine bug; report it as a diagnostic
             // with a stable code rather than killing the run.
@@ -60,6 +63,12 @@ ValidationResult ValidationService::check(CancellationToken& cancellation) const
             diagnostic.revision = context.revision;
             result.diagnostics.push_back(std::move(diagnostic));
         }
+    }
+
+    // If cancellation arrived during the last validator, discard results.
+    if (cancellation->isCancelled()) {
+        result.cancelled = true;
+        result.diagnostics.clear();
     }
 
     return result;

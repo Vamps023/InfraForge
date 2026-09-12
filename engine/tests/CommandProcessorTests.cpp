@@ -196,7 +196,7 @@ TEST_SUITE("command processor") {
 
         processor.post("conn-1", simpleCommandFrame(
             "req-close", [](auto* envelope) { envelope->mutable_close_project(); }));
-        REQUIRE(sink.waitForTotal(6, kWaitTimeout));
+        REQUIRE(sink.waitForTotal(7, kWaitTimeout));
 
         const auto results = sink.results();
         REQUIRE(results.size() == 4);
@@ -209,14 +209,16 @@ TEST_SUITE("command processor") {
         CHECK_FALSE(results[3].result().project_closed().project_uuid().empty());
 
         const auto events = sink.events();
-        REQUIRE(events.size() == 2);
+        REQUIRE(events.size() == 3);
         CHECK(events[0].event().has_project_opened());
         CHECK(events[1].event().has_project_closed());
+        CHECK(events[2].event().has_diagnostic_cleared());
+        CHECK_EQ(events[2].event().diagnostic_cleared().reason(), "project_closed");
 
         // The project summary command now reports PROJECT_NOT_OPEN.
         processor.post("conn-1", simpleCommandFrame(
             "req-after-close", [](auto* envelope) { envelope->mutable_get_project_summary(); }));
-        REQUIRE(sink.waitForTotal(7, kWaitTimeout));
+        REQUIRE(sink.waitForTotal(8, kWaitTimeout));
         const auto afterClose = sink.results();
         REQUIRE(afterClose.size() == 5);
         CHECK_EQ(afterClose[4].request_id(), "req-after-close");
@@ -259,7 +261,7 @@ TEST_SUITE("command processor") {
 
         processor.post("conn-1", simpleCommandFrame(
             "req-close", [](auto* envelope) { envelope->mutable_close_project(); }));
-        REQUIRE(sink.waitForTotal(4, kWaitTimeout));
+        REQUIRE(sink.waitForTotal(5, kWaitTimeout));
 
         const auto results = sink.results();
         REQUIRE(results.size() == 2);
@@ -273,7 +275,7 @@ TEST_SUITE("command processor") {
         }
 
         processor.post("conn-1", openCommandFrame("req-open-corrupt", projectDirectory));
-        REQUIRE(sink.waitForTotal(5, kWaitTimeout));
+        REQUIRE(sink.waitForTotal(6, kWaitTimeout));
 
         const auto after = sink.results();
         REQUIRE(after.size() == 3);

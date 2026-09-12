@@ -45,12 +45,18 @@ struct SuggestedAction {
 // deterministic for a given project revision: the same canonical state always
 // yields the same diagnostics in the same order.
 //
-// Invariants enforced by construction:
+// Invariants enforced by the service:
 // - `code` is non-empty and stable across runs (e.g. "project.georeference.missing").
-// - `source` identifies the validator that produced this diagnostic.
+// - `source` is non-empty and identifies the validator that produced this diagnostic.
 // - `message` is human-readable and may change between engine versions; it is
-//   never parsed by machines.
+//   never parsed by machines and never used as identity.
 // - `revision` is the project revision the diagnostic was computed against.
+//
+// Diagnostic identity:
+// A diagnostic `code` alone is not a unique instance — multiple entities may
+// produce the same code (e.g. `road.geometry.self_intersection` on two roads).
+// Identity is the stable tuple (code, entities). The `message` is never part
+// of identity. Use `diagnosticIdentity()` for a deterministic string key.
 struct Diagnostic {
     std::string code;
     Severity severity{Severity::Warning};
@@ -63,6 +69,12 @@ struct Diagnostic {
     std::optional<SuggestedAction> suggestedAction;
 
     friend bool operator==(const Diagnostic&, const Diagnostic&) = default;
+
+    // Returns a deterministic identity string derived from (code, entities).
+    // Two diagnostics with the same code but different entity refs produce
+    // different identity strings. The message is never included.
+    // Format: "<code>|<kind:id>,<kind:id>,..." with entities sorted for stability.
+    [[nodiscard]] std::string diagnosticIdentity() const;
 };
 
 } // namespace infraforge::domain::validation

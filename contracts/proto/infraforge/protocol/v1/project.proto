@@ -129,6 +129,7 @@ message CommandEnvelope {
     CloseProjectCommand close_project = 5;
     GetProjectSummaryCommand get_project_summary = 6;
     WorldCheckCommand world_check = 7;
+    WorldCancelCheckCommand world_cancel_check = 8;
   }
 }
 
@@ -138,6 +139,7 @@ message ResultEnvelope {
     ProjectClosedResult project_closed = 2;
     CommandError error = 3;
     WorldCheckResult world_check = 4;
+    WorldCancelCheckResult world_cancel_check = 5;
   }
 }
 

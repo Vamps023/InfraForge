@@ -106,6 +106,8 @@ std::string_view commandName(const ProtocolFrame& frame) {
         return "project.get_summary";
     case protocol::v1::CommandEnvelope::kWorldCheck:
         return "world.check";
+    case protocol::v1::CommandEnvelope::kWorldCancelCheck:
+        return "world.cancel_check";
     case protocol::v1::CommandEnvelope::COMMAND_NOT_SET:
         break;
     }
@@ -168,6 +170,15 @@ void CommandProcessor::start() {
 
 void CommandProcessor::post(std::string connectionId, protocol::v1::Frame frame) {
     const std::string_view label = frame.has_command() ? commandName(frame) : std::string_view{"unknown"};
+
+    // Cancellation is handled on the calling (network) thread, not queued on
+    // the executor, so the signal reaches an in-progress validator without
+    // waiting for the executor to drain. The result is sent immediately.
+    if (frame.has_command() && frame.command().command_case() == protocol::v1::CommandEnvelope::kWorldCancelCheck) {
+        handleWorldCancelCheck(connectionId, frame);
+        return;
+    }
+
     {
         std::lock_guard lock{mutex_};
         if (stopped_) {
@@ -248,6 +259,9 @@ void CommandProcessor::processCommand(const std::string& connectionId, const Pro
     case protocol::v1::CommandEnvelope::kWorldCheck:
         handleWorldCheck(connectionId, frame);
         break;
+    case protocol::v1::CommandEnvelope::kWorldCancelCheck:
+        handleWorldCancelCheck(connectionId, frame);
+        break;
     case protocol::v1::CommandEnvelope::COMMAND_NOT_SET:
         sendFailureResult(connectionId, frame.request_id(),
             CommandFailure{CommandFailureCode::InvalidArgument, "command envelope is empty"});
@@ -302,17 +316,47 @@ void CommandProcessor::handleWorldCheck(const std::string& connectionId, const P
     const auto startedAt = std::chrono::steady_clock::now();
 
     try {
-        validation::CancellationToken cancellation;
+        // Create a shared cancellation token so the network thread can
+        // request cancellation via world.cancel_check while this run is
+        // in progress on the executor.
+        auto cancellation = std::make_shared<validation::CancellationToken>();
+        {
+            std::lock_guard lock{mutex_};
+            activeCancellation_ = cancellation;
+        }
+
         const validation::ValidationResult result = validationService_.check(cancellation);
+
+        {
+            std::lock_guard lock{mutex_};
+            activeCancellation_.reset();
+        }
 
         ProtocolFrame response;
         response.set_request_id(requestId);
         auto* worldCheck = response.mutable_result()->mutable_world_check();
         worldCheck->set_revision(result.revision);
         worldCheck->set_cancelled(result.cancelled);
-        for (const auto& diagnostic : result.diagnostics) {
-            fillDiagnostic(worldCheck->add_diagnostics(), diagnostic);
+
+        // When cancelled, partial results are never published. The frontend
+        // receives cancelled=true with empty diagnostics and knows the
+        // previous published set is still valid (if any).
+        if (!result.cancelled) {
+            // Mark stale if the published diagnostics were computed against a
+            // different revision than the current canonical revision.
+            const bool stale = diagnosticStore_.hasPublished()
+                && diagnosticStore_.publishedRevision() != result.revision;
+            worldCheck->set_stale(stale);
+
+            for (const auto& diagnostic : result.diagnostics) {
+                fillDiagnostic(worldCheck->add_diagnostics(), diagnostic);
+            }
+
+            // Publish the new diagnostic set and broadcast incremental
+            // added/removed events to all connections.
+            publishDiagnosticEvents(result.diagnostics, result.revision);
         }
+
         sink_.sendToConnection(connectionId, response);
 
         const auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -332,6 +376,70 @@ void CommandProcessor::handleWorldCheck(const std::string& connectionId, const P
         runtime::logError("application", "world.check_internal_error", {{"detail", error.what()}});
         sendInternalErrorResult(connectionId, requestId, "world.check");
     }
+}
+
+void CommandProcessor::handleWorldCancelCheck(const std::string& connectionId, const ProtocolFrame& frame) {
+    const std::string requestId = frame.request_id();
+
+    // Signal the active validation run to cancel. This is called from the
+    // network thread (intercepted in post()) so the signal reaches the
+    // executor thread's active validator without queue latency.
+    bool requested = false;
+    {
+        std::lock_guard lock{mutex_};
+        if (activeCancellation_) {
+            activeCancellation_->requestCancellation();
+            requested = true;
+        }
+    }
+
+    ProtocolFrame response;
+    response.set_request_id(requestId);
+    response.mutable_result()->mutable_world_cancel_check()->set_cancellation_requested(requested);
+    sink_.sendToConnection(connectionId, response);
+
+    runtime::logInfo("application", "world.cancel_check_handled",
+        {{"requestId", requestId},
+            {"requested", requested ? "true" : "false"}});
+}
+
+void CommandProcessor::publishDiagnosticEvents(
+    const std::vector<domain::validation::Diagnostic>& next,
+    std::uint64_t revision) {
+    const auto changes = diagnosticStore_.publish(next, revision);
+    for (const auto& change : changes) {
+        ProtocolFrame eventFrame;
+        auto* envelope = eventFrame.mutable_event();
+        envelope->set_event_id(runtime::generateUuidV4());
+        if (change.kind == validation::DiagnosticStore::ChangeKind::Added) {
+            auto* added = envelope->mutable_diagnostic_added();
+            fillDiagnostic(added->mutable_diagnostic(), change.diagnostic);
+        } else {
+            auto* removed = envelope->mutable_diagnostic_removed();
+            removed->set_code(change.diagnostic.code);
+            for (const auto& entity : change.diagnostic.entities) {
+                auto* ref = removed->add_entities();
+                ref->set_kind(entity.kind);
+                ref->set_id(entity.id);
+            }
+            removed->set_revision(revision);
+        }
+        sink_.broadcastEvent(eventFrame);
+    }
+}
+
+void CommandProcessor::clearDiagnostics(const std::string& reason) {
+    // Always broadcast a cleared event: even if the store was already empty,
+    // the frontend needs to know diagnostics are invalidated for the given
+    // reason (project_closed, revision_changed).
+    (void)diagnosticStore_.clear();
+    ProtocolFrame eventFrame;
+    auto* envelope = eventFrame.mutable_event();
+    envelope->set_event_id(runtime::generateUuidV4());
+    auto* cleared = envelope->mutable_diagnostic_cleared();
+    cleared->set_reason(reason);
+    cleared->set_revision(0);
+    sink_.broadcastEvent(eventFrame);
 }
 
 template <typename UseCase>
@@ -406,6 +514,15 @@ void CommandProcessor::publishEvents(const ProjectCommandResult& result) {
         }
         }
         sink_.broadcastEvent(eventFrame);
+
+        // After broadcasting the project lifecycle event, invalidate
+        // diagnostics if the canonical state changed in a way that makes
+        // them stale.
+        if (event.kind == ProjectEventKind::Closed) {
+            clearDiagnostics("project_closed");
+        } else if (event.kind == ProjectEventKind::RevisionChanged) {
+            clearDiagnostics("revision_changed");
+        }
     }
 }
 

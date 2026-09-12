@@ -150,6 +150,8 @@ function BottomPanel({ activeTab, setActiveTab }: { activeTab: BottomTab; setAct
   const diagnostics = useValidationStore((state) => state.diagnostics)
   const checking = useValidationStore((state) => state.checking)
   const validationRevision = useValidationStore((state) => state.revision)
+  const stale = useValidationStore((state) => state.stale)
+  const cancelled = useValidationStore((state) => state.cancelled)
   const projectSummary = useProjectStore((state) => state.summary)
   const projectOpen = projectSummary !== null
   return (
@@ -174,6 +176,10 @@ function BottomPanel({ activeTab, setActiveTab }: { activeTab: BottomTab; setAct
             <span className="problem-row">Checking world…</span>
           ) : lastError && !projectOpen ? (
             <span className="problem-row">{lastError.message}</span>
+          ) : cancelled ? (
+            <span className="problem-row">Validation was cancelled. Re-run Check World to get fresh diagnostics.</span>
+          ) : stale && projectOpen ? (
+            <span className="problem-row">Diagnostics are stale (revision changed). Re-run Check World.</span>
           ) : diagnostics.length > 0 ? (
             diagnostics.map((d, i) => (
               <span key={`${d.code}-${i}`} className="problem-row">

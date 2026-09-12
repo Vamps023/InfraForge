@@ -1,12 +1,10 @@
 // Platform macros must precede the first vulkan.h inclusion anywhere in
 // the translation unit (the header guard would skip the platform headers
-// otherwise).
+// otherwise). Linux compiles without a platform surface extension: the
+// surface stub then fails explicitly at runtime (Windows is the first
+// runtime acceptance platform), so no XCB headers are needed in CI.
 #if defined(_WIN32)
 #define VK_USE_PLATFORM_WIN32_KHR 1
-#elif defined(__linux__)
-// Compile-only on Linux: the surface creation stub fails explicitly at
-// runtime; the XCB extension name is referenced for the instance probe.
-#define VK_USE_PLATFORM_XCB_KHR 1
 #endif
 
 #include "infraforge/viewport/renderer/VulkanInstance.hpp"
@@ -92,8 +90,6 @@ void VulkanInstance::create(const bool validationEnabled) {
         VK_KHR_SURFACE_EXTENSION_NAME,
 #ifdef _WIN32
         VK_KHR_WIN32_SURFACE_EXTENSION_NAME,
-#else
-        VK_KHR_XCB_SURFACE_EXTENSION_NAME,
 #endif
     };
     if (validationEnabled) {

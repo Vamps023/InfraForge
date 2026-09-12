@@ -35,6 +35,8 @@ public:
     [[nodiscard]] domain::project::ProjectRecord open(const std::filesystem::path& projectDirectory) override;
     [[nodiscard]] domain::project::ProjectRecord save() override;
     [[nodiscard]] domain::project::ProjectRecord saveAs(const domain::project::SaveAsSpec& spec) override;
+    [[nodiscard]] domain::project::ProjectRecord updateGeoreference(
+        const domain::geo::GeoreferenceConfig& georeference) override;
     void close() override;
 
 private:
@@ -51,12 +53,20 @@ private:
     [[nodiscard]] domain::project::ProjectRecord openImpl(const std::filesystem::path& projectDirectory);
     [[nodiscard]] domain::project::ProjectRecord saveImpl();
     [[nodiscard]] domain::project::ProjectRecord saveAsImpl(const domain::project::SaveAsSpec& spec);
+    [[nodiscard]] domain::project::ProjectRecord updateGeoreferenceImpl(
+        const domain::geo::GeoreferenceConfig& georeference);
     void closeImpl();
 
     [[nodiscard]] domain::project::ProjectRecord readRecord(const SqliteConnection& connection) const;
     [[nodiscard]] std::int64_t latestSupportedSchemaVersion() const;
+    // Set after schema setup on create/open: whether the live georeference
+    // table carries the migration-2 origin_height column. Older schemas
+    // (and test stores pinned to earlier migration lists) keep v1 behavior
+    // so reads and writes stay consistent with the actual database.
+    [[nodiscard]] bool georeferenceHasOriginHeight() const { return originHeightSupported_; }
 
     std::span<const MigrationDefinition> migrations_;
+    bool originHeightSupported_{false};
     std::optional<SqliteConnection> connection_;
     domain::project::ProjectRecord record_;
     std::filesystem::path directory_;

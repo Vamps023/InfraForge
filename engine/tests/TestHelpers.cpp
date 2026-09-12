@@ -24,11 +24,11 @@ ScratchDirectory::~ScratchDirectory() {
     (void)std::filesystem::remove_all(path_, ioError);
 }
 
-domain::project::GeoreferenceConfig sampleGeoreference() {
-    domain::project::GeoreferenceConfig georeference;
+domain::geo::GeoreferenceConfig sampleGeoreference() {
+    domain::geo::GeoreferenceConfig georeference;
     georeference.horizontalCrs = "EPSG:32633";
     georeference.linearUnit = "metre";
-    georeference.axisConvention = domain::project::AxisConvention::EastingNorthingUp;
+    georeference.axisConvention = domain::geo::AxisConvention::EastingNorthingUp;
     georeference.originEasting = 500000.0;
     georeference.originNorthing = 4649776.0;
     georeference.verticalCrs = "";

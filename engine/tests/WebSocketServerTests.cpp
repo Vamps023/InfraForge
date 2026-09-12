@@ -194,7 +194,8 @@ struct ServerHarness {
     infraforge::testhelpers::ScratchDirectory scratch;
     infraforge::persistence::SqliteProjectStore store;
     infraforge::network::WebSocketCommandRouter router;
-    infraforge::application::CommandProcessor processor{store, router};
+    infraforge::domain::geo::GeoTransformService transforms;
+    infraforge::application::CommandProcessor processor{store, transforms, router};
     std::uint16_t port{freeLoopbackPort()};
     std::string token{std::string(64, 'a')};
     infraforge::network::WebSocketServer server{

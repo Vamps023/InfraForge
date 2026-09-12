@@ -9,6 +9,7 @@
 #include <infraforge/protocol/v1/foundation.pb.h>
 
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -39,6 +40,8 @@ ProtocolCommandErrorCode mapFailureCode(const CommandFailureCode code) {
         return ProtocolCommandErrorCode::COMMAND_ERROR_CODE_PERSISTENCE_FAILURE;
     case CommandFailureCode::Internal:
         return ProtocolCommandErrorCode::COMMAND_ERROR_CODE_INTERNAL;
+    case CommandFailureCode::GeoUnsupported:
+        return ProtocolCommandErrorCode::COMMAND_ERROR_CODE_GEO_UNSUPPORTED;
     }
     return ProtocolCommandErrorCode::COMMAND_ERROR_CODE_INTERNAL;
 }
@@ -54,13 +57,54 @@ std::optional<domain::project::TrafficSide> mapTrafficSide(const protocol::v1::T
     }
 }
 
-std::optional<domain::project::AxisConvention> mapAxisConvention(const protocol::v1::AxisConvention convention) {
+std::optional<domain::geo::AxisConvention> mapAxisConvention(const protocol::v1::AxisConvention convention) {
     switch (convention) {
     case protocol::v1::AXIS_CONVENTION_EASTING_NORTHING_UP:
-        return domain::project::AxisConvention::EastingNorthingUp;
+        return domain::geo::AxisConvention::EastingNorthingUp;
     default:
         return std::nullopt;
     }
+}
+
+void fillGeoreferenceConfig(
+    protocol::v1::GeoreferenceConfig* output,
+    const domain::geo::GeoreferenceConfig& config) {
+    output->set_horizontal_crs(config.horizontalCrs);
+    output->set_linear_unit(config.linearUnit);
+    output->set_axis_convention(
+        config.axisConvention == domain::geo::AxisConvention::EastingNorthingUp
+            ? protocol::v1::AXIS_CONVENTION_EASTING_NORTHING_UP
+            : protocol::v1::AXIS_CONVENTION_UNSPECIFIED);
+    output->set_origin_easting(config.originEasting);
+    output->set_origin_northing(config.originNorthing);
+    output->set_origin_height(config.originHeight);
+    output->set_vertical_crs(config.verticalCrs);
+}
+
+// Projects the resolved canonical georeference into the wire info shape.
+void fillGeoreferenceInfo(
+    protocol::v1::GeoreferenceInfo* info,
+    const domain::geo::GeoreferenceConfig& config,
+    const domain::geo::ProjectGeoreference& resolved) {
+    fillGeoreferenceConfig(info->mutable_config(), config);
+
+    auto* crs = info->mutable_horizontal_crs();
+    crs->set_identifier(resolved.horizontalCrs.identifier);
+    crs->set_name(resolved.horizontalCrs.name);
+    crs->set_authority(resolved.horizontalCrs.authority);
+    crs->set_code(resolved.horizontalCrs.code);
+    crs->set_kind(std::string{domain::geo::crsKindName(resolved.horizontalCrs.kind)});
+    crs->set_axis_unit_to_metre(resolved.horizontalCrs.axisUnitToMetre);
+
+    info->set_linear_unit_name(resolved.linearUnit.name);
+    info->set_linear_unit_to_metre(resolved.linearUnit.toMetre);
+
+    auto* vertical = info->mutable_vertical_reference();
+    vertical->set_present(resolved.vertical.present);
+    vertical->set_identifier(resolved.vertical.identifier);
+    vertical->set_name(resolved.vertical.name);
+    vertical->set_transform_supported(resolved.vertical.transformSupported);
+    vertical->set_axis_unit_to_metre(resolved.vertical.axisUnitToMetre);
 }
 
 void fillSummary(protocol::v1::ProjectSummary* summary, const domain::project::ProjectRecord& record) {
@@ -76,16 +120,7 @@ void fillSummary(protocol::v1::ProjectSummary* summary, const domain::project::P
     summary->set_created_at(record.createdAt);
     summary->set_modified_at(record.modifiedAt);
 
-    auto* georeference = summary->mutable_georeference();
-    georeference->set_horizontal_crs(record.georeference.horizontalCrs);
-    georeference->set_linear_unit(record.georeference.linearUnit);
-    georeference->set_axis_convention(
-        record.georeference.axisConvention == domain::project::AxisConvention::EastingNorthingUp
-            ? protocol::v1::AXIS_CONVENTION_EASTING_NORTHING_UP
-            : protocol::v1::AXIS_CONVENTION_UNSPECIFIED);
-    georeference->set_origin_easting(record.georeference.originEasting);
-    georeference->set_origin_northing(record.georeference.originNorthing);
-    georeference->set_vertical_crs(record.georeference.verticalCrs);
+    fillGeoreferenceConfig(summary->mutable_georeference(), record.georeference);
 }
 
 std::string_view commandName(const ProtocolFrame& frame) {
@@ -102,6 +137,12 @@ std::string_view commandName(const ProtocolFrame& frame) {
         return "project.close";
     case protocol::v1::CommandEnvelope::kGetProjectSummary:
         return "project.get_summary";
+    case protocol::v1::CommandEnvelope::kGetGeoreference:
+        return "geo.get_georeference";
+    case protocol::v1::CommandEnvelope::kSetGeoreference:
+        return "geo.set_georeference";
+    case protocol::v1::CommandEnvelope::kTransformToProjectGlobal:
+        return "geo.transform_to_project_global";
     case protocol::v1::CommandEnvelope::COMMAND_NOT_SET:
         break;
     }
@@ -110,9 +151,13 @@ std::string_view commandName(const ProtocolFrame& frame) {
 
 } // namespace
 
-CommandProcessor::CommandProcessor(ports::ProjectStore& store, CommandSink& sink)
+CommandProcessor::CommandProcessor(
+    ports::ProjectStore& store,
+    const domain::geo::GeoTransformService& transforms,
+    CommandSink& sink)
     : store_(store),
-      service_(store),
+      service_(store, transforms),
+      geoService_(store, transforms),
       sink_(sink) {}
 
 CommandProcessor::~CommandProcessor() {
@@ -208,6 +253,15 @@ void CommandProcessor::processCommand(const std::string& connectionId, const Pro
     case protocol::v1::CommandEnvelope::kGetProjectSummary:
         runServiceCommand(connectionId, frame, [this] { return service_.getSummary(); });
         break;
+    case protocol::v1::CommandEnvelope::kGetGeoreference:
+        handleGetGeoreference(connectionId, frame);
+        break;
+    case protocol::v1::CommandEnvelope::kSetGeoreference:
+        handleSetGeoreference(connectionId, frame);
+        break;
+    case protocol::v1::CommandEnvelope::kTransformToProjectGlobal:
+        handleTransformToProjectGlobal(connectionId, frame);
+        break;
     case protocol::v1::CommandEnvelope::COMMAND_NOT_SET:
         sendFailureResult(connectionId, frame.request_id(),
             CommandFailure{CommandFailureCode::InvalidArgument, "command envelope is empty"});
@@ -262,22 +316,123 @@ void CommandProcessor::runServiceCommand(
     const std::string& connectionId,
     const ProtocolFrame& frame,
     UseCase&& useCase) {
-    const std::string requestId = frame.request_id();
-    const std::string_view label = commandName(frame);
-    const auto startedAt = std::chrono::steady_clock::now();
-
-    try {
+    executeCommand(connectionId, frame, [this, &connectionId, &frame, &useCase] {
         const ProjectCommandResult result = useCase();
 
         ProtocolFrame response;
-        response.set_request_id(requestId);
+        response.set_request_id(frame.request_id());
         if (result.sessionClosed) {
             response.mutable_result()->mutable_project_closed()->set_project_uuid(result.record.uuid);
         } else {
             fillSummary(response.mutable_result()->mutable_project_state()->mutable_summary(), result.record);
         }
         sink_.sendToConnection(connectionId, response);
-        publishEvents(result);
+        publishEvents(result.events);
+    });
+}
+
+void CommandProcessor::handleGetGeoreference(const std::string& connectionId, const ProtocolFrame& frame) {
+    executeCommand(connectionId, frame, [this, &connectionId, &frame] {
+        const GeoreferenceInfoResult result = geoService_.getGeoreference();
+
+        ProtocolFrame response;
+        response.set_request_id(frame.request_id());
+        auto* state = response.mutable_result()->mutable_georeference_state();
+        fillGeoreferenceInfo(state->mutable_georeference(), result.config, result.resolved);
+        state->set_revision(result.revision);
+        sink_.sendToConnection(connectionId, response);
+    });
+}
+
+void CommandProcessor::handleSetGeoreference(const std::string& connectionId, const ProtocolFrame& frame) {
+    const auto& command = frame.command().set_georeference();
+    const auto axisConvention = mapAxisConvention(command.georeference().axis_convention());
+    if (!axisConvention.has_value()) {
+        sendFailureResult(connectionId, frame.request_id(),
+            CommandFailure{CommandFailureCode::InvalidArgument,
+                "axis_convention must be EASTING_NORTHING_UP"});
+        return;
+    }
+
+    domain::geo::GeoreferenceConfig config;
+    config.horizontalCrs = command.georeference().horizontal_crs();
+    config.linearUnit = command.georeference().linear_unit();
+    config.axisConvention = *axisConvention;
+    config.originEasting = command.georeference().origin_easting();
+    config.originNorthing = command.georeference().origin_northing();
+    config.originHeight = command.georeference().origin_height();
+    config.verticalCrs = command.georeference().vertical_crs();
+
+    const std::optional<std::uint64_t> expectedRevision = command.has_expected_revision()
+        ? std::optional<std::uint64_t>{command.expected_revision()}
+        : std::nullopt;
+
+    executeCommand(connectionId, frame,
+        [this, &connectionId, &frame, config = std::move(config), expectedRevision] {
+            const GeoreferenceMutationResult result =
+                geoService_.setGeoreference(config, expectedRevision);
+
+            ProtocolFrame response;
+            response.set_request_id(frame.request_id());
+            auto* state = response.mutable_result()->mutable_georeference_state();
+            fillGeoreferenceInfo(state->mutable_georeference(), result.record.georeference, result.resolved);
+            state->set_revision(result.record.revision);
+            sink_.sendToConnection(connectionId, response);
+            publishEvents(result.events);
+        });
+}
+
+void CommandProcessor::handleTransformToProjectGlobal(
+    const std::string& connectionId,
+    const ProtocolFrame& frame) {
+    const auto& command = frame.command().transform_to_project_global();
+    if (command.coordinates_size() > static_cast<int>(kMaxTransformCoordinates)) {
+        sendFailureResult(connectionId, frame.request_id(),
+            CommandFailure{CommandFailureCode::InvalidArgument,
+                "transform batch exceeds the " + std::to_string(kMaxTransformCoordinates)
+                    + " coordinate limit"});
+        return;
+    }
+
+    domain::geo::SourceSpatialReference source;
+    source.horizontalCrs = command.source_crs();
+    source.verticalCrs = command.source_vertical_crs();
+
+    std::vector<domain::geo::GeoCoordinate> coordinates;
+    coordinates.reserve(static_cast<std::size_t>(command.coordinates_size()));
+    for (const auto& coordinate : command.coordinates()) {
+        coordinates.push_back({coordinate.x(), coordinate.y(), coordinate.z()});
+    }
+
+    executeCommand(connectionId, frame,
+        [this, &connectionId, &frame, source = std::move(source), coordinates = std::move(coordinates)] {
+            const std::vector<domain::geo::ProjectGlobalPosition> positions =
+                geoService_.transformToProjectGlobal(source, coordinates);
+
+            ProtocolFrame response;
+            response.set_request_id(frame.request_id());
+            auto* result = response.mutable_result()->mutable_transform_to_project_global();
+            for (const auto& position : positions) {
+                auto* coordinate = result->add_coordinates();
+                coordinate->set_easting(position.easting);
+                coordinate->set_northing(position.northing);
+                coordinate->set_height(position.height);
+            }
+            sink_.sendToConnection(connectionId, response);
+        });
+}
+
+template <typename Emit>
+void CommandProcessor::executeCommand(
+    const std::string& connectionId,
+    const ProtocolFrame& frame,
+    Emit&& emit) {
+    const std::string requestId = frame.request_id();
+    const std::string_view label = commandName(frame);
+    const auto startedAt = std::chrono::steady_clock::now();
+
+    try {
+        emit();
 
         const auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - startedAt);
@@ -304,8 +459,8 @@ void CommandProcessor::runServiceCommand(
     }
 }
 
-void CommandProcessor::publishEvents(const ProjectCommandResult& result) {
-    for (const ProjectEvent& event : result.events) {
+void CommandProcessor::publishEvents(const std::span<const ProjectEvent> events) {
+    for (const ProjectEvent& event : events) {
         ProtocolFrame eventFrame;
         auto* envelope = eventFrame.mutable_event();
         envelope->set_event_id(runtime::generateUuidV4());
@@ -325,6 +480,15 @@ void CommandProcessor::publishEvents(const ProjectCommandResult& result) {
             auto* dirty = envelope->mutable_project_dirty_state_changed();
             dirty->set_dirty(event.record.isDirty());
             dirty->set_revision(event.record.revision);
+            break;
+        }
+        case ProjectEventKind::GeoreferenceChanged: {
+            auto* changed = envelope->mutable_georeference_changed();
+            if (event.georeference.has_value()) {
+                fillGeoreferenceInfo(changed->mutable_georeference(),
+                    event.record.georeference, *event.georeference);
+            }
+            changed->set_revision(event.record.revision);
             break;
         }
         }

@@ -174,8 +174,9 @@ ProjectManifest manifestFromJson(const ordered_json& json) {
     }
 
     const auto& georeference = json.at("georeference");
-    static constexpr std::array<std::string_view, 6> kGeoKeys{
-        "horizontalCrs", "linearUnit", "axisConvention", "originEasting", "originNorthing", "verticalCrs",
+    static constexpr std::array<std::string_view, 7> kGeoKeys{
+        "horizontalCrs", "linearUnit", "axisConvention", "originEasting", "originNorthing",
+        "originHeight", "verticalCrs",
     };
     if (!georeference.is_object()) {
         failFormat("manifest georeference section is malformed");
@@ -197,16 +198,21 @@ ProjectManifest manifestFromJson(const ordered_json& json) {
     manifest.georeference.horizontalCrs = georeference.at("horizontalCrs").get<std::string>();
     manifest.georeference.linearUnit = georeference.at("linearUnit").get<std::string>();
     const auto axisConvention =
-        domain::project::axisConventionFromName(georeference.at("axisConvention").get<std::string>());
+        domain::geo::axisConventionFromName(georeference.at("axisConvention").get<std::string>());
     if (!axisConvention.has_value()) {
         failFormat("manifest georeference axisConvention is not recognized");
     }
     manifest.georeference.axisConvention = *axisConvention;
     manifest.georeference.originEasting = georeference.at("originEasting").get<double>();
     manifest.georeference.originNorthing = georeference.at("originNorthing").get<double>();
+    // originHeight joins the format within version 1: manifests written
+    // before the field existed carry the schema default of 0.
+    manifest.georeference.originHeight = georeference.contains("originHeight")
+        ? georeference.at("originHeight").get<double>()
+        : 0.0;
     manifest.georeference.verticalCrs = georeference.at("verticalCrs").get<std::string>();
 
-    if (const auto error = domain::project::validateGeoreference(manifest.georeference); error.has_value()) {
+    if (const auto error = domain::geo::validateGeoreference(manifest.georeference); error.has_value()) {
         failFormat("manifest georeference is invalid: " + error->message);
     }
     return manifest;
@@ -250,9 +256,10 @@ void writeProjectManifest(const std::filesystem::path& projectDirectory, const P
     ordered_json georeference;
     georeference["horizontalCrs"] = manifest.georeference.horizontalCrs;
     georeference["linearUnit"] = manifest.georeference.linearUnit;
-    georeference["axisConvention"] = domain::project::axisConventionName(manifest.georeference.axisConvention);
+    georeference["axisConvention"] = domain::geo::axisConventionName(manifest.georeference.axisConvention);
     georeference["originEasting"] = manifest.georeference.originEasting;
     georeference["originNorthing"] = manifest.georeference.originNorthing;
+    georeference["originHeight"] = manifest.georeference.originHeight;
     georeference["verticalCrs"] = manifest.georeference.verticalCrs;
 
     ordered_json database;

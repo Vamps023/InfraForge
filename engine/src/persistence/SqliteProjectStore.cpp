@@ -59,7 +59,7 @@ void createDirectorySkeleton(const std::filesystem::path& directory) {
     }
 }
 
-void insertProjectRows(SqliteConnection& connection, const ProjectRecord& record) {
+void insertProjectRows(SqliteConnection& connection, const ProjectRecord& record, const bool withOriginHeight) {
     SqliteTransaction transaction{connection};
 
     SqliteStatement state{connection,
@@ -76,18 +76,39 @@ void insertProjectRows(SqliteConnection& connection, const ProjectRecord& record
     (void)state.step();
 
     SqliteStatement georeference{connection,
-        "INSERT INTO georeference "
-        "(id, horizontal_crs, linear_unit, axis_convention, origin_easting, origin_northing, vertical_crs) "
-        "VALUES (1, ?, ?, ?, ?, ?, ?)"};
+        withOriginHeight
+            ? "INSERT INTO georeference "
+              "(id, horizontal_crs, linear_unit, axis_convention, origin_easting, origin_northing, origin_height, vertical_crs) "
+              "VALUES (1, ?, ?, ?, ?, ?, ?, ?)"
+            : "INSERT INTO georeference "
+              "(id, horizontal_crs, linear_unit, axis_convention, origin_easting, origin_northing, vertical_crs) "
+              "VALUES (1, ?, ?, ?, ?, ?, ?)"};
     georeference.bindText(1, record.georeference.horizontalCrs);
     georeference.bindText(2, record.georeference.linearUnit);
-    georeference.bindText(3, domain::project::axisConventionName(record.georeference.axisConvention));
+    georeference.bindText(3, domain::geo::axisConventionName(record.georeference.axisConvention));
     georeference.bindDouble(4, record.georeference.originEasting);
     georeference.bindDouble(5, record.georeference.originNorthing);
-    georeference.bindText(6, record.georeference.verticalCrs);
+    if (withOriginHeight) {
+        georeference.bindDouble(6, record.georeference.originHeight);
+        georeference.bindText(7, record.georeference.verticalCrs);
+    } else {
+        georeference.bindText(6, record.georeference.verticalCrs);
+    }
     (void)georeference.step();
 
     transaction.commit();
+}
+
+// Whether the georeference table in this database carries the migration-2
+// origin_height column. Probed by preparing a read; statement preparation
+// fails when the column is absent.
+[[nodiscard]] bool probeOriginHeightColumn(const SqliteConnection& connection) {
+    try {
+        SqliteStatement probe{connection, "SELECT origin_height FROM georeference WHERE 0"};
+        return true;
+    } catch (const SqliteError&) {
+        return false;
+    }
 }
 
 } // namespace
@@ -128,6 +149,10 @@ ProjectRecord SqliteProjectStore::saveAs(const domain::project::SaveAsSpec& spec
 
 void SqliteProjectStore::close() {
     withinStoreBoundary([&] { closeImpl(); });
+}
+
+ProjectRecord SqliteProjectStore::updateGeoreference(const domain::geo::GeoreferenceConfig& georeference) {
+    return withinStoreBoundary([&] { return updateGeoreferenceImpl(georeference); });
 }
 
 ProjectRecord SqliteProjectStore::createImpl(const domain::project::CreateProjectSpec& spec) {
@@ -171,7 +196,8 @@ ProjectRecord SqliteProjectStore::createImpl(const domain::project::CreateProjec
 
         auto connection = SqliteConnection::open(directory / kDatabaseFileName, SqliteOpenMode::ReadWriteCreate);
         applyPendingMigrations(connection, migrations_);
-        insertProjectRows(connection, record);
+        originHeightSupported_ = probeOriginHeightColumn(connection);
+        insertProjectRows(connection, record, originHeightSupported_);
 
         connection_ = std::move(connection);
         directory_ = directory;
@@ -217,6 +243,7 @@ ProjectRecord SqliteProjectStore::openImpl(const std::filesystem::path& projectD
 
     auto connection = SqliteConnection::open(databaseFile, SqliteOpenMode::ReadWrite);
     applyPendingMigrations(connection, migrations_);
+    originHeightSupported_ = probeOriginHeightColumn(connection);
 
     ProjectRecord record = readRecord(connection);
     if (record.uuid != manifest.projectUuid) {
@@ -228,8 +255,19 @@ ProjectRecord SqliteProjectStore::openImpl(const std::filesystem::path& projectD
             "project display name mismatch between manifest and database (corrupt project)");
     }
     if (!(record.georeference == manifest.georeference)) {
-        fail(ports::StoreErrorCategory::PersistenceFailure,
-            "georeference mismatch between manifest and database (corrupt project)");
+        // Deterministic crash recovery: a georeference update writes the
+        // manifest first and commits the database row second. A crash in
+        // between leaves the manifest ahead of the canonical database.
+        // The database row is the authority, so the manifest is rewritten
+        // from it and the divergence is logged; the open then proceeds
+        // with canonical state. Any other identity mismatch above still
+        // fails as corruption.
+        runtime::logError("persistence", "project.manifest_georeference_repaired",
+            {{"detail", "manifest georeference diverged from the canonical database row; "
+                "restoring the manifest from the database (possible interrupted update)"}});
+        ProjectManifest repaired = manifest;
+        repaired.georeference = record.georeference;
+        writeProjectManifest(projectDirectory, repaired);
     }
     if (record.createdAt != manifest.createdAt) {
         fail(ports::StoreErrorCategory::PersistenceFailure,
@@ -335,6 +373,7 @@ ProjectRecord SqliteProjectStore::saveAsImpl(const domain::project::SaveAsSpec& 
             transaction.commit();
         }
 
+        originHeightSupported_ = probeOriginHeightColumn(targetConnection);
         targetRecord = readRecord(targetConnection);
         if (targetRecord.uuid != newUuid || targetRecord.displayName != spec.displayName
             || targetRecord.revision != record_.revision
@@ -355,6 +394,74 @@ ProjectRecord SqliteProjectStore::saveAsImpl(const domain::project::SaveAsSpec& 
         (void)std::filesystem::remove_all(targetDirectory, cleanupError);
         throw;
     }
+}
+
+ProjectRecord SqliteProjectStore::updateGeoreferenceImpl(const domain::geo::GeoreferenceConfig& georeference) {
+    if (!connection_.has_value()) {
+        throw std::logic_error("cannot update the georeference without an open project session");
+    }
+
+    // The manifest carries a discovery copy of the georeference and is
+    // verified against the database on open. Rewrite it first so a database
+    // failure can be compensated by restoring the previous manifest; the
+    // database transaction is the canonical write.
+    const ProjectRecord previousRecord = record_;
+    ProjectRecord updated = record_;
+    updated.georeference = georeference;
+    writeProjectManifest(directory_, manifestFromRecord(updated, updated.createdAt));
+
+    const std::string modifiedAt = runtime::utcTimestampNow();
+    try {
+        SqliteTransaction transaction{*connection_};
+
+        SqliteStatement update{*connection_,
+            georeferenceHasOriginHeight()
+                ? "UPDATE georeference SET horizontal_crs = ?, linear_unit = ?, axis_convention = ?, "
+                  "origin_easting = ?, origin_northing = ?, origin_height = ?, vertical_crs = ? WHERE id = 1"
+                : "UPDATE georeference SET horizontal_crs = ?, linear_unit = ?, axis_convention = ?, "
+                  "origin_easting = ?, origin_northing = ?, vertical_crs = ? WHERE id = 1"};
+        update.bindText(1, georeference.horizontalCrs);
+        update.bindText(2, georeference.linearUnit);
+        update.bindText(3, domain::geo::axisConventionName(georeference.axisConvention));
+        update.bindDouble(4, georeference.originEasting);
+        update.bindDouble(5, georeference.originNorthing);
+        if (georeferenceHasOriginHeight()) {
+            update.bindDouble(6, georeference.originHeight);
+            update.bindText(7, georeference.verticalCrs);
+        } else {
+            update.bindText(6, georeference.verticalCrs);
+        }
+        (void)update.step();
+        if (connection_->lastChanges() != 1) {
+            fail(ports::StoreErrorCategory::PersistenceFailure,
+                "georeference row went missing during update (corrupt project database)");
+        }
+
+        SqliteStatement state{*connection_,
+            "UPDATE project_state SET revision = revision + 1, modified_at = ? WHERE id = 1"};
+        state.bindText(1, modifiedAt);
+        (void)state.step();
+        if (connection_->lastChanges() != 1) {
+            fail(ports::StoreErrorCategory::PersistenceFailure,
+                "project_state row went missing during georeference update (corrupt project database)");
+        }
+        transaction.commit();
+    } catch (...) {
+        // Compensate the manifest rewrite so both files still describe the
+        // same canonical georeference after the failed mutation.
+        try {
+            writeProjectManifest(directory_, manifestFromRecord(previousRecord, previousRecord.createdAt));
+        } catch (const std::exception& restoreError) {
+            runtime::logError("persistence", "project.manifest_restore_failed",
+                {{"detail", restoreError.what()}});
+        }
+        throw;
+    }
+
+    record_ = updated;
+    record_.revision += 1;
+    record_.modifiedAt = modifiedAt;
+    return record_;
 }
 
 void SqliteProjectStore::closeImpl() {
@@ -391,15 +498,18 @@ ProjectRecord SqliteProjectStore::readRecord(const SqliteConnection& connection)
     record.modifiedAt = std::string{state.columnText(6)};
 
     SqliteStatement georeference{connection,
-        "SELECT horizontal_crs, linear_unit, axis_convention, origin_easting, origin_northing, vertical_crs "
-        "FROM georeference WHERE id = 1"};
+        georeferenceHasOriginHeight()
+            ? "SELECT horizontal_crs, linear_unit, axis_convention, origin_easting, origin_northing, origin_height, vertical_crs "
+              "FROM georeference WHERE id = 1"
+            : "SELECT horizontal_crs, linear_unit, axis_convention, origin_easting, origin_northing, vertical_crs "
+              "FROM georeference WHERE id = 1"};
     if (!georeference.step()) {
         fail(ports::StoreErrorCategory::PersistenceFailure,
             "georeference row is missing (corrupt project database)");
     }
     record.georeference.horizontalCrs = std::string{georeference.columnText(0)};
     record.georeference.linearUnit = std::string{georeference.columnText(1)};
-    const auto axisConvention = domain::project::axisConventionFromName(georeference.columnText(2));
+    const auto axisConvention = domain::geo::axisConventionFromName(georeference.columnText(2));
     if (!axisConvention.has_value()) {
         fail(ports::StoreErrorCategory::PersistenceFailure,
             "georeference axis_convention value is not recognized (corrupt project database)");
@@ -407,7 +517,13 @@ ProjectRecord SqliteProjectStore::readRecord(const SqliteConnection& connection)
     record.georeference.axisConvention = *axisConvention;
     record.georeference.originEasting = georeference.columnDouble(3);
     record.georeference.originNorthing = georeference.columnDouble(4);
-    record.georeference.verticalCrs = std::string{georeference.columnText(5)};
+    if (georeferenceHasOriginHeight()) {
+        record.georeference.originHeight = georeference.columnDouble(5);
+        record.georeference.verticalCrs = std::string{georeference.columnText(6)};
+    } else {
+        record.georeference.originHeight = 0.0;
+        record.georeference.verticalCrs = std::string{georeference.columnText(5)};
+    }
 
     if (record.revision < 1 || record.savedRevision > record.revision) {
         fail(ports::StoreErrorCategory::PersistenceFailure,

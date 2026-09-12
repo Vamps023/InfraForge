@@ -1,4 +1,5 @@
 #include "infraforge/application/CommandProcessor.hpp"
+#include "infraforge/domain/geo/GeoTransformService.hpp"
 #include "infraforge/network/CommandRouter.hpp"
 #include "infraforge/network/WebSocketServer.hpp"
 #include "infraforge/persistence/SqliteProjectStore.hpp"
@@ -151,7 +152,7 @@ int run_self_check() {
         spec.trafficSide = infraforge::domain::project::TrafficSide::Right;
         spec.georeference.horizontalCrs = "EPSG:32633";
         spec.georeference.linearUnit = "metre";
-        spec.georeference.axisConvention = infraforge::domain::project::AxisConvention::EastingNorthingUp;
+        spec.georeference.axisConvention = infraforge::domain::geo::AxisConvention::EastingNorthingUp;
         spec.georeference.originEasting = 500000.0;
         spec.georeference.originNorthing = 4649776.0;
 
@@ -178,6 +179,37 @@ int run_self_check() {
         return 1;
     }
 
+    // 3. Canonical georeference resolution and a control-point transform
+    //    through the Geo transform service (verifies the geospatial runtime
+    //    database is reachable).
+    try {
+        infraforge::domain::geo::GeoTransformService transforms;
+
+        infraforge::domain::geo::GeoreferenceConfig config;
+        config.horizontalCrs = "EPSG:32633";
+        config.linearUnit = "metre";
+        config.axisConvention = infraforge::domain::geo::AxisConvention::EastingNorthingUp;
+        config.originEasting = 500000.0;
+        config.originNorthing = 6094791.42;
+        const auto project = transforms.resolveProjectGeoreference(config);
+
+        // UTM zone 33N central meridian: lon 15 -> easting 500000 and
+        // northing = 0.9996 * meridional arc (55 deg) ~= 6094791.42 m.
+        const auto position = transforms.sourceToProjectGlobal(
+            project,
+            infraforge::domain::geo::SourceSpatialReference{.horizontalCrs = "EPSG:4326", .verticalCrs = ""},
+            infraforge::domain::geo::GeoCoordinate{15.0, 55.0, 0.0});
+        if (std::abs(position.easting - 500000.0) > 0.001
+            || std::abs(position.northing - 6094791.42) > 0.001) {
+            std::cerr << "Georeference transform self-check failed\n";
+            return 1;
+        }
+    } catch (const std::exception& error) {
+        std::cerr << "Georeference self-check failed: " << error.what() << '\n';
+        std::filesystem::remove_all(scratchRoot, ioError);
+        return 1;
+    }
+
     std::filesystem::remove_all(scratchRoot, ioError);
 
     std::cout
@@ -187,6 +219,33 @@ int run_self_check() {
         << ",\"protocolMinor\":" << infraforge::kProtocolMinor
         << ",\"status\":\"ok\"}\n";
     return 0;
+}
+
+int run_server(const ServeArguments& arguments) {
+    infraforge::persistence::SqliteProjectStore store;
+    infraforge::network::WebSocketCommandRouter router;
+    infraforge::domain::geo::GeoTransformService geoTransforms;
+    infraforge::application::CommandProcessor processor(store, geoTransforms, router);
+    processor.start();
+
+    const int exitCode = infraforge::network::WebSocketServer(
+        {
+            .host = arguments.host,
+            .port = arguments.port,
+            .session_token = arguments.session_token,
+        },
+        processor,
+        router).run();
+
+    processor.shutdown();
+    if (store.isOpen()) {
+        // The graceful project-aware shutdown protocol is a later
+        // milestone; flush and close the session so SQLite exits cleanly.
+        const auto projectUuid = store.current().uuid;
+        store.close();
+        infraforge::runtime::logInfo("engine", "project.session_closed_at_shutdown", {{"projectUuid", projectUuid}});
+    }
+    return exitCode;
 }
 
 } // namespace
@@ -221,29 +280,12 @@ int main(int argc, char** argv) {
             return 2;
         }
 
-        infraforge::persistence::SqliteProjectStore store;
-        infraforge::network::WebSocketCommandRouter router;
-        infraforge::application::CommandProcessor processor(store, router);
-        processor.start();
-
-        const int exitCode = infraforge::network::WebSocketServer(
-            {
-                .host = arguments->host,
-                .port = arguments->port,
-                .session_token = arguments->session_token,
-            },
-            processor,
-            router).run();
-
-        processor.shutdown();
-        if (store.isOpen()) {
-            // The graceful project-aware shutdown protocol is a later
-            // milestone; flush and close the session so SQLite exits cleanly.
-            const auto projectUuid = store.current().uuid;
-            store.close();
-            infraforge::runtime::logInfo("engine", "project.session_closed_at_shutdown", {{"projectUuid", projectUuid}});
+        try {
+            return run_server(*arguments);
+        } catch (const std::exception& error) {
+            std::cerr << "Engine startup failed: " << error.what() << '\n';
+            return 1;
         }
-        return exitCode;
     }
 
     std::cerr << "Unknown command or invalid arguments\n";

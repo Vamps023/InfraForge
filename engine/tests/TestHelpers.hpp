@@ -1,5 +1,7 @@
 #pragma once
 
+#include "infraforge/domain/geo/GeoTransformService.hpp"
+#include "infraforge/domain/geo/GeoreferenceConfig.hpp"
 #include "infraforge/domain/project/ProjectModel.hpp"
 
 #include <filesystem>
@@ -38,7 +40,7 @@ private:
     std::filesystem::path path_;
 };
 
-[[nodiscard]] domain::project::GeoreferenceConfig sampleGeoreference();
+[[nodiscard]] domain::geo::GeoreferenceConfig sampleGeoreference();
 [[nodiscard]] domain::project::CreateProjectSpec sampleCreateSpec(const std::filesystem::path& parent);
 
 } // namespace infraforge::testhelpers

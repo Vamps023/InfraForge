@@ -11,7 +11,7 @@
 namespace infraforge::persistence {
 namespace {
 
-constexpr std::array<MigrationDefinition, 1> kCanonicalMigrations{{
+constexpr std::array<MigrationDefinition, 2> kCanonicalMigrations{{
     {
         .id = 1,
         .name = "core project foundation",
@@ -36,6 +36,14 @@ CREATE TABLE georeference (
     origin_northing REAL NOT NULL,
     vertical_crs TEXT NOT NULL
 );
+)sql",
+    },
+    {
+        .id = 2,
+        .name = "georeference origin height",
+        .sql = R"sql(
+ALTER TABLE georeference
+    ADD COLUMN origin_height REAL NOT NULL DEFAULT 0.0;
 )sql",
     }},
 };

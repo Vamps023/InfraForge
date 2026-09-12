@@ -1,5 +1,9 @@
 #include "infraforge/application/ProjectService.hpp"
 
+#include "infraforge/domain/geo/GeoTransformService.hpp"
+
+#include "StoreErrorTranslation.hpp"
+
 namespace infraforge::application {
 namespace {
 
@@ -7,24 +11,11 @@ namespace {
     throw CommandFailure(code, std::move(message));
 }
 
-[[noreturn]] void translate(const ports::StoreError& error) {
-    switch (error.category()) {
-    case ports::StoreErrorCategory::DirectoryInvalid:
-        throw CommandFailure(CommandFailureCode::ProjectDirectoryInvalid, error.what());
-    case ports::StoreErrorCategory::FormatUnsupported:
-        throw CommandFailure(CommandFailureCode::ProjectFormatUnsupported, error.what());
-    case ports::StoreErrorCategory::SchemaUnsupported:
-        throw CommandFailure(CommandFailureCode::SchemaVersionUnsupported, error.what());
-    case ports::StoreErrorCategory::PersistenceFailure:
-        throw CommandFailure(CommandFailureCode::PersistenceFailure, error.what());
-    }
-    throw CommandFailure(CommandFailureCode::Internal, error.what());
-}
-
 } // namespace
 
-ProjectService::ProjectService(ports::ProjectStore& store)
-    : store_(store) {}
+ProjectService::ProjectService(ports::ProjectStore& store, const domain::geo::GeoTransformService& transforms)
+    : store_(store),
+      transforms_(transforms) {}
 
 ProjectCommandResult ProjectService::create(const domain::project::CreateProjectSpec& spec) {
     if (store_.isOpen()) {
@@ -33,15 +24,23 @@ ProjectCommandResult ProjectService::create(const domain::project::CreateProject
     if (const auto nameError = domain::project::validateDisplayName(spec.displayName); nameError.has_value()) {
         fail(CommandFailureCode::InvalidArgument, nameError->field + ": " + nameError->message);
     }
-    if (const auto geoError = domain::project::validateGeoreference(spec.georeference); geoError.has_value()) {
-        fail(CommandFailureCode::InvalidArgument, geoError->field + ": " + geoError->message);
+
+    domain::project::CreateProjectSpec canonical = spec;
+    try {
+        // The persisted georeference is the canonical form: CRS definitions
+        // are resolved and validated (projected/engineering horizontal CRS,
+        // resolvable linear unit, vertical CRS when present) and
+        // authority-resolvable definitions are stored as "AUTH:CODE".
+        canonical.georeference = transforms_.canonicalizeConfig(spec.georeference);
+    } catch (const domain::geo::GeoError& error) {
+        translateGeoError(error);
     }
 
     ProjectCommandResult result;
     try {
-        result.record = store_.create(spec);
+        result.record = store_.create(canonical);
     } catch (const ports::StoreError& error) {
-        translate(error);
+        translateStoreError(error);
     }
     result.events.push_back({ProjectEventKind::Opened, result.record});
     return result;
@@ -59,7 +58,25 @@ ProjectCommandResult ProjectService::open(const std::filesystem::path& projectDi
     try {
         result.record = store_.open(projectDirectory);
     } catch (const ports::StoreError& error) {
-        translate(error);
+        translateStoreError(error);
+    }
+
+    // The persisted canonical georeference must resolve in this engine's
+    // geospatial runtime. A structurally valid project whose CRS cannot be
+    // resolved or is unsupported (for example a geographic-only horizontal
+    // CRS written by another tool) must not become an active session —
+    // every spatial domain would transform against a broken frame.
+    try {
+        (void)transforms_.resolveProjectGeoreference(result.record.georeference);
+    } catch (const domain::geo::GeoError& error) {
+        // Leave the store/session in a clean closed state so a subsequent
+        // open/create is not blocked by a half-open project.
+        try {
+            store_.close();
+        } catch (...) {
+            // Best-effort cleanup only; the session must not outlive the failure.
+        }
+        translateGeoError(error);
     }
     result.events.push_back({ProjectEventKind::Opened, result.record});
     return result;
@@ -75,7 +92,7 @@ ProjectCommandResult ProjectService::save() {
     try {
         result.record = store_.save();
     } catch (const ports::StoreError& error) {
-        translate(error);
+        translateStoreError(error);
     }
     if (wasDirty) {
         result.events.push_back({ProjectEventKind::DirtyStateChanged, result.record});
@@ -96,7 +113,7 @@ ProjectCommandResult ProjectService::saveAs(const domain::project::SaveAsSpec& s
     try {
         result.record = store_.saveAs(spec);
     } catch (const ports::StoreError& error) {
-        translate(error);
+        translateStoreError(error);
     }
     result.events.push_back({ProjectEventKind::Closed, previousRecord});
     result.events.push_back({ProjectEventKind::Opened, result.record});

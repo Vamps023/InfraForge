@@ -1,6 +1,8 @@
 #include "infraforge/application/CommandProcessor.hpp"
 
 #include "infraforge/application/ProjectService.hpp"
+#include "infraforge/application/validation/ProjectFoundationValidator.hpp"
+#include "infraforge/application/validation/ValidationService.hpp"
 #include "infraforge/runtime/FileSystemUtf8.hpp"
 #include "infraforge/runtime/Logging.hpp"
 #include "infraforge/runtime/Uuid.hpp"
@@ -102,10 +104,42 @@ std::string_view commandName(const ProtocolFrame& frame) {
         return "project.close";
     case protocol::v1::CommandEnvelope::kGetProjectSummary:
         return "project.get_summary";
+    case protocol::v1::CommandEnvelope::kWorldCheck:
+        return "world.check";
     case protocol::v1::CommandEnvelope::COMMAND_NOT_SET:
         break;
     }
     return "unknown";
+}
+
+protocol::v1::DiagnosticSeverity mapSeverity(domain::validation::Severity severity) {
+    switch (severity) {
+    case domain::validation::Severity::Info:
+        return protocol::v1::DIAGNOSTIC_SEVERITY_INFO;
+    case domain::validation::Severity::Warning:
+        return protocol::v1::DIAGNOSTIC_SEVERITY_WARNING;
+    case domain::validation::Severity::Error:
+        return protocol::v1::DIAGNOSTIC_SEVERITY_ERROR;
+    }
+    return protocol::v1::DIAGNOSTIC_SEVERITY_UNSPECIFIED;
+}
+
+void fillDiagnostic(protocol::v1::Diagnostic* out, const domain::validation::Diagnostic& in) {
+    out->set_code(in.code);
+    out->set_severity(mapSeverity(in.severity));
+    out->set_source(in.source);
+    out->set_message(in.message);
+    out->set_revision(in.revision);
+    for (const auto& entity : in.entities) {
+        auto* ref = out->add_entities();
+        ref->set_kind(entity.kind);
+        ref->set_id(entity.id);
+    }
+    if (in.suggestedAction.has_value()) {
+        auto* action = out->mutable_suggested_action();
+        action->set_kind(in.suggestedAction->kind);
+        action->set_label(in.suggestedAction->label);
+    }
 }
 
 } // namespace
@@ -113,7 +147,10 @@ std::string_view commandName(const ProtocolFrame& frame) {
 CommandProcessor::CommandProcessor(ports::ProjectStore& store, CommandSink& sink)
     : store_(store),
       service_(store),
-      sink_(sink) {}
+      validationService_(store, validatorRegistry_),
+      sink_(sink) {
+    validatorRegistry_.registerValidator(std::make_unique<validation::ProjectFoundationValidator>());
+}
 
 CommandProcessor::~CommandProcessor() {
     shutdown();
@@ -208,6 +245,9 @@ void CommandProcessor::processCommand(const std::string& connectionId, const Pro
     case protocol::v1::CommandEnvelope::kGetProjectSummary:
         runServiceCommand(connectionId, frame, [this] { return service_.getSummary(); });
         break;
+    case protocol::v1::CommandEnvelope::kWorldCheck:
+        handleWorldCheck(connectionId, frame);
+        break;
     case protocol::v1::CommandEnvelope::COMMAND_NOT_SET:
         sendFailureResult(connectionId, frame.request_id(),
             CommandFailure{CommandFailureCode::InvalidArgument, "command envelope is empty"});
@@ -255,6 +295,43 @@ void CommandProcessor::handleSaveProjectAs(const std::string& connectionId, cons
     spec.displayName = command.display_name();
     spec.parentDirectory = runtime::pathFromUtf8(command.parent_directory());
     runServiceCommand(connectionId, frame, [this, spec = std::move(spec)] { return service_.saveAs(spec); });
+}
+
+void CommandProcessor::handleWorldCheck(const std::string& connectionId, const ProtocolFrame& frame) {
+    const std::string requestId = frame.request_id();
+    const auto startedAt = std::chrono::steady_clock::now();
+
+    try {
+        validation::CancellationToken cancellation;
+        const validation::ValidationResult result = validationService_.check(cancellation);
+
+        ProtocolFrame response;
+        response.set_request_id(requestId);
+        auto* worldCheck = response.mutable_result()->mutable_world_check();
+        worldCheck->set_revision(result.revision);
+        worldCheck->set_cancelled(result.cancelled);
+        for (const auto& diagnostic : result.diagnostics) {
+            fillDiagnostic(worldCheck->add_diagnostics(), diagnostic);
+        }
+        sink_.sendToConnection(connectionId, response);
+
+        const auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - startedAt);
+        runtime::logInfo("application", "world.check_handled",
+            {{"requestId", requestId},
+                {"outcome", result.cancelled ? "cancelled" : "ok"},
+                {"diagnostics", std::to_string(result.diagnostics.size())},
+                {"revision", std::to_string(result.revision)},
+                {"durationMs", std::to_string(duration.count())}});
+    } catch (const CommandFailure& failure) {
+        sendFailureResult(connectionId, requestId, failure);
+        runtime::logInfo("application", "world.check_failed",
+            {{"requestId", requestId},
+                {"outcome", std::to_string(static_cast<int>(failure.code()))}});
+    } catch (const std::exception& error) {
+        runtime::logError("application", "world.check_internal_error", {{"detail", error.what()}});
+        sendInternalErrorResult(connectionId, requestId, "world.check");
+    }
 }
 
 template <typename UseCase>

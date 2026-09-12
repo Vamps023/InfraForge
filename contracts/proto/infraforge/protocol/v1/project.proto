@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package infraforge.protocol.v1;
 
+import "infraforge/protocol/v1/validation.proto";
+
 // Project lifecycle contract: canonical create/open/save-as/save/close queries
 // executed by the native engine against the project database.
 
@@ -126,6 +128,7 @@ message CommandEnvelope {
     SaveProjectAsCommand save_project_as = 4;
     CloseProjectCommand close_project = 5;
     GetProjectSummaryCommand get_project_summary = 6;
+    WorldCheckCommand world_check = 7;
   }
 }
 
@@ -134,6 +137,7 @@ message ResultEnvelope {
     ProjectStateResult project_state = 1;
     ProjectClosedResult project_closed = 2;
     CommandError error = 3;
+    WorldCheckResult world_check = 4;
   }
 }
 
@@ -144,5 +148,8 @@ message EventEnvelope {
     ProjectClosedEvent project_closed = 3;
     ProjectRevisionChangedEvent project_revision_changed = 4;
     ProjectDirtyStateChangedEvent project_dirty_state_changed = 5;
+    DiagnosticAddedEvent diagnostic_added = 6;
+    DiagnosticRemovedEvent diagnostic_removed = 7;
+    DiagnosticClearedEvent diagnostic_cleared = 8;
   }
 }

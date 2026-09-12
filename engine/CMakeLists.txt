@@ -6,6 +6,7 @@ find_package(nlohmann_json CONFIG REQUIRED)
 set(INFRAFORGE_PROTOCOL_PROTOS
     ${PROJECT_SOURCE_DIR}/contracts/proto/infraforge/protocol/v1/foundation.proto
     ${PROJECT_SOURCE_DIR}/contracts/proto/infraforge/protocol/v1/project.proto
+    ${PROJECT_SOURCE_DIR}/contracts/proto/infraforge/protocol/v1/validation.proto
 )
 
 set(INFRAFORGE_PROTO_BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated)
@@ -15,7 +16,11 @@ file(MAKE_DIRECTORY ${INFRAFORGE_PROTO_BINARY_DIR})
 add_library(infraforge_core STATIC
     src/application/CommandProcessor.cpp
     src/application/ProjectService.cpp
+    src/application/validation/ValidationService.cpp
+    src/application/validation/ValidatorRegistry.cpp
+    src/application/validation/ProjectFoundationValidator.cpp
     src/domain/project/ProjectModel.cpp
+    src/domain/validation/Diagnostic.cpp
     src/persistence/ProjectManifest.cpp
     src/persistence/SchemaMigrations.cpp
     src/persistence/SqliteConnection.cpp
@@ -90,6 +95,7 @@ add_executable(infraforge-engine-tests
     tests/ProjectServiceTests.cpp
     tests/SqliteProjectStoreTests.cpp
     tests/WebSocketServerTests.cpp
+    tests/ValidationTests.cpp
     src/network/CommandRouter.cpp
     src/network/WebSocketServer.cpp
 )

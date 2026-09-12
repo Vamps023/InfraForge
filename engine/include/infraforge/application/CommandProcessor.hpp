@@ -1,6 +1,8 @@
 #pragma once
 
 #include "infraforge/application/ProjectService.hpp"
+#include "infraforge/application/validation/ValidationService.hpp"
+#include "infraforge/application/validation/ValidatorRegistry.hpp"
 #include "infraforge/ports/ProjectStore.hpp"
 
 #include <condition_variable>
@@ -59,6 +61,7 @@ private:
     void handleCreateProject(const std::string& connectionId, const protocol::v1::Frame& frame);
     void handleOpenProject(const std::string& connectionId, const protocol::v1::Frame& frame);
     void handleSaveProjectAs(const std::string& connectionId, const protocol::v1::Frame& frame);
+    void handleWorldCheck(const std::string& connectionId, const protocol::v1::Frame& frame);
 
     // Executes one service use case, then emits the correlated result frame
     // (state or closed) and the derived event frames. Argument-validation
@@ -75,6 +78,8 @@ private:
 
     ports::ProjectStore& store_;
     ProjectService service_;
+    validation::ValidatorRegistry validatorRegistry_;
+    validation::ValidationService validationService_;
     CommandSink& sink_;
 
     std::thread executor_;

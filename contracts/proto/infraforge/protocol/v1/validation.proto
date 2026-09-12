@@ -1,0 +1,81 @@
+syntax = "proto3";
+
+package infraforge.protocol.v1;
+
+// World validation contract: the typed `world.check` command/query and its
+// structured diagnostic results/events. Diagnostics are structured protobuf
+// messages, never console strings; the frontend projects them directly.
+
+// Diagnostic severity, ordered from least to most severe.
+enum DiagnosticSeverity {
+  DIAGNOSTIC_SEVERITY_UNSPECIFIED = 0;
+  DIAGNOSTIC_SEVERITY_INFO = 1;
+  DIAGNOSTIC_SEVERITY_WARNING = 2;
+  DIAGNOSTIC_SEVERITY_ERROR = 3;
+}
+
+// A stable reference to a canonical entity that a diagnostic concerns.
+message DiagnosticEntityRef {
+  // Entity domain/kind, e.g. "project", "road", "terrain".
+  string kind = 1;
+  // Canonical 128-bit UUID-compatible identifier.
+  string id = 2;
+}
+
+// Optional remediation hint for the user.
+message DiagnosticSuggestedAction {
+  // Stable machine-readable action tag, e.g. "set_georeference".
+  string kind = 1;
+  // Human-readable action label.
+  string label = 2;
+}
+
+// A single canonical diagnostic produced by a validator.
+message Diagnostic {
+  // Stable diagnostic code, e.g. "project.foundation.georeference.horizontal_crs_empty".
+  string code = 1;
+  DiagnosticSeverity severity = 2;
+  // Validator/domain that produced this diagnostic, e.g. "project.foundation".
+  string source = 3;
+  // Human-readable message; may change between versions and is never parsed.
+  string message = 4;
+  // Zero or more stable canonical entity references.
+  repeated DiagnosticEntityRef entities = 5;
+  // Project revision the diagnostic was computed against.
+  uint64 revision = 6;
+  // Optional suggested remediation action.
+  DiagnosticSuggestedAction suggested_action = 7;
+}
+
+// Command: request a world validation run against the current canonical state.
+message WorldCheckCommand {}
+
+// Result: the complete set of diagnostics for the revision that was validated.
+message WorldCheckResult {
+  // Diagnostics ordered by validator execution order.
+  repeated Diagnostic diagnostics = 1;
+  // Project revision the diagnostics were computed against.
+  uint64 revision = 2;
+  // True when the run was cancelled before all validators completed.
+  bool cancelled = 3;
+}
+
+// Event: a diagnostic was added to the current set. Emitted when a validation
+// run produces a diagnostic that was not present in the previous run.
+message DiagnosticAddedEvent {
+  Diagnostic diagnostic = 1;
+}
+
+// Event: a diagnostic was removed from the current set. Emitted when a
+// validation run no longer produces a diagnostic that was present before.
+message DiagnosticRemovedEvent {
+  // Stable code of the removed diagnostic.
+  string code = 1;
+  // Project revision the removal was computed against.
+  uint64 revision = 2;
+}
+
+// Event: all diagnostics were cleared (e.g. project closed).
+message DiagnosticClearedEvent {
+  uint64 revision = 1;
+}

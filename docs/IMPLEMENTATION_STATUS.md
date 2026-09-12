@@ -42,7 +42,7 @@ This file is the authoritative high-level implementation ledger. Design document
 | Traffic infrastructure | Not implemented | GitHub issue #11; design only |
 | Traffic simulation | Not implemented | GitHub issue #12; design only |
 | Rail | Not implemented | GitHub issue #13; design only |
-| World validation | Not implemented | GitHub issue #14; design only |
+| World validation | Implemented; verified | GitHub issue #14; `engine/src/application/validation/` — canonical diagnostic model (`Diagnostic.hpp`), validator interface/registry (`Validator.hpp`, `ValidatorRegistry.hpp`), `ValidationService` use case with revision snapshot and cooperative cancellation, `ProjectFoundationValidator` checking real canonical state (georeference, revision counters); typed `world.check` protocol in `contracts/proto/infraforge/protocol/v1/validation.proto` wired into command/result/event envelopes; frontend projection in `apps/frontend/src/features/validation/` with Problems panel integration; native doctest suite `infraforge-engine-tests` covers deterministic diagnostic output, stable codes, severity/source/revision fields, project-not-open behavior, validator failure reporting, cancellation architecture, and zero-diagnostic result from genuinely valid canonical state; native build, tests, proto lint, TypeScript typecheck, and frontend build all pass |
 | Export/interoperability | Not implemented | GitHub issue #15; design only |
 | Packaging/security/recovery | Not implemented | GitHub issue #16; design only |
 

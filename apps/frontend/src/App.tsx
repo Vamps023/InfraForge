@@ -5,6 +5,9 @@ import { NewProjectDialog } from './features/project/NewProjectDialog'
 import { closeProject, openProject, refreshProjectSummary, saveProject } from './features/project/projectApi'
 import { subscribeProjectEvents } from './features/project/projectEvents'
 import { useProjectStore } from './features/project/projectStore'
+import { subscribeValidationEvents } from './features/validation/validationEvents'
+import { checkWorld } from './features/validation/validationApi'
+import { useValidationStore } from './features/validation/validationStore'
 import { useUiStore } from './state/uiStore'
 
 const bottomTabs = ['Problems', 'Operations'] as const
@@ -97,13 +100,18 @@ function AppHeader({
   )
 }
 
-function Toolbar() {
+function Toolbar({ projectOpen, engineReady, busy, onCheckWorld }: { projectOpen: boolean; engineReady: boolean; busy: boolean; onCheckWorld: () => void }) {
   return (
     <div className="toolbar" aria-label="Editor toolbar">
       <button className="tool-button active" type="button" aria-pressed="true">
         Select
       </button>
       <div className="toolbar-separator" />
+      {projectOpen ? (
+        <button className="tool-button" type="button" disabled={!engineReady || busy} onClick={onCheckWorld}>
+          Check World
+        </button>
+      ) : null}
       <span className="toolbar-hint">Authoring tools appear only when their production domain is available.</span>
     </div>
   )
@@ -139,6 +147,11 @@ function Inspector() {
 
 function BottomPanel({ activeTab, setActiveTab }: { activeTab: BottomTab; setActiveTab: (tab: BottomTab) => void }) {
   const lastError = useProjectStore((state) => state.lastError)
+  const diagnostics = useValidationStore((state) => state.diagnostics)
+  const checking = useValidationStore((state) => state.checking)
+  const validationRevision = useValidationStore((state) => state.revision)
+  const projectSummary = useProjectStore((state) => state.summary)
+  const projectOpen = projectSummary !== null
   return (
     <section className="bottom-panel">
       <div className="bottom-tabs">
@@ -157,8 +170,19 @@ function BottomPanel({ activeTab, setActiveTab }: { activeTab: BottomTab; setAct
       </div>
       <div className="bottom-content">
         {activeTab === 'Problems' ? (
-          lastError ? (
+          checking ? (
+            <span className="problem-row">Checking world…</span>
+          ) : lastError && !projectOpen ? (
             <span className="problem-row">{lastError.message}</span>
+          ) : diagnostics.length > 0 ? (
+            diagnostics.map((d, i) => (
+              <span key={`${d.code}-${i}`} className="problem-row">
+                <strong>[{d.severity}]</strong> {d.code}: {d.message}
+                {d.source ? ` (${d.source})` : ''}
+              </span>
+            ))
+          ) : validationRevision !== null && projectOpen ? (
+            <span className="problem-row">No diagnostics (revision {validationRevision}).</span>
           ) : (
             'No diagnostics.'
           )
@@ -230,7 +254,9 @@ export function App() {
       }
 
       const unsubscribe = subscribeProjectEvents(result.session.client)
+      const unsubscribeValidation = subscribeValidationEvents(result.session.client)
       const disposeSession = () => {
+        unsubscribeValidation()
         unsubscribe()
         result.session.dispose()
       }
@@ -296,6 +322,14 @@ export function App() {
       return
     }
     await closeProject(engineSession.client).catch(() => undefined)
+    useValidationStore.getState().clear()
+  }
+
+  const handleCheckWorld = async () => {
+    if (!engineSession) {
+      return
+    }
+    await checkWorld(engineSession.client).catch(() => undefined)
   }
 
   return (
@@ -307,7 +341,12 @@ export function App() {
         onSave={() => void handleSave()}
         onClose={() => void handleClose()}
       />
-      <Toolbar />
+      <Toolbar
+        projectOpen={projectOpen}
+        engineReady={engineReady}
+        busy={busy}
+        onCheckWorld={() => void handleCheckWorld()}
+      />
       <div className="workspace">
         <Outliner />
         <EmptyViewport

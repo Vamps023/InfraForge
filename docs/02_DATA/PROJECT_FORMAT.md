@@ -37,8 +37,23 @@ Contains small, immutable project-level metadata needed before opening the datab
 It does not duplicate mutable canonical state. Revision, saved-revision,
 modified time, and the schema version are owned by `project.db` alone, so
 migrations and saves never have to synchronize two files. The manifest is
-rewritten only when project identity or discovery metadata changes
-(creation, save-as), never by an ordinary save.
+rewritten only when project identity or discovery metadata changes —
+creation, save-as, or a canonical georeference update (the georeference is
+discovery metadata for safe project display) — never by an ordinary save.
+The georeference block includes `horizontalCrs`, `linearUnit`,
+`axisConvention`, `originEasting`, `originNorthing`, `originHeight`, and
+`verticalCrs`; the manifest copy is verified against the `project.db` row on
+open, so the two files can never disagree silently.
+
+A georeference update writes the manifest first and commits the database
+row in a transaction second. If the process is interrupted in between, the
+manifest is ahead of the canonical database. On open the engine applies a
+deterministic repair: `project.db` is the authority, the manifest's
+georeference is rewritten from the database row, and the divergence is
+logged (`project.manifest_georeference_repaired`). All other manifest/DB
+identity divergences (UUID, display name, creation timestamp) still fail
+the open as corruption — they have no in-flight update pattern that could
+explain them.
 
 ## `project.db`
 

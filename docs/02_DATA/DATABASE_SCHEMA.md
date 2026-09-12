@@ -9,6 +9,13 @@ SQLite is the canonical structured-data store for a project.
 - Opening a newer unsupported schema fails without modifying the project.
 - Migrations run inside transactions when SQLite operations permit.
 
+### Migration record
+
+| ID | Name | Content |
+|---|---|---|
+| 1 | `core project foundation` | `project_state` + `georeference` singleton rows (schema v1). |
+| 2 | `georeference origin height` | `ALTER TABLE georeference ADD COLUMN origin_height REAL NOT NULL DEFAULT 0` — extends the canonical georeference with the vertical origin component; v1 databases read 0. |
+
 ## Core tables
 
 The initial schema is organized by domain, not by UI screens.
@@ -22,7 +29,10 @@ The initial schema is organized by domain, not by UI screens.
 
 ### Geospatial
 
-- `georeference` — canonical project CRS/origin/axis/unit configuration.
+- `georeference` — canonical project CRS/origin/axis/unit configuration
+  (singleton row `id = 1`): `horizontal_crs`, `linear_unit`,
+  `axis_convention`, `origin_easting`, `origin_northing`, `origin_height`
+  (migration 2), `vertical_crs`.
 - `spatial_bounds` — derived/query-oriented bounds keyed by stable entity IDs where persisted indexing is beneficial.
 
 ### Roads

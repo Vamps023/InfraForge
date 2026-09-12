@@ -36,16 +36,19 @@ Project names become directory names and are therefore restricted to a
 portable charset (letters, digits, space, `-`, `_`); Windows reserved device
 names are rejected.
 
-## Schema v1
+## Schema
 
-`schema_migrations` records forward-only migration ids. Migration 1
-("core project foundation") creates:
+`schema_migrations` records forward-only migration ids.
 
-- `project_state` — singleton row with project UUID, display name, traffic
-  side (`left`/`right`), canonical `revision`, `saved_revision`, and
-  created/modified timestamps.
-- `georeference` — singleton row with the canonical horizontal CRS, linear
-  unit, axis convention, project origin in the CRS, and optional vertical CRS.
+- Migration 1 ("core project foundation") creates:
+  - `project_state` — singleton row with project UUID, display name, traffic
+    side (`left`/`right`), canonical `revision`, `saved_revision`, and
+    created/modified timestamps.
+  - `georeference` — singleton row with the canonical horizontal CRS, linear
+    unit, axis convention, project origin in the CRS, and optional vertical CRS.
+- Migration 2 ("georeference origin height") adds `georeference.origin_height`
+  (REAL, default 0) — the vertical origin component of the canonical
+  georeference. v1 databases migrate forward transparently on open.
 
 Opening a database whose applied schema version is newer than the supported
 version fails on a read-only probe; the project is not modified.
@@ -53,8 +56,8 @@ version fails on a read-only probe; the project is not modified.
 ## Revision and dirty state
 
 - `revision` is the canonical mutation counter. It is 1 at creation and
-  increases with every accepted mutation (mutation commands arrive with later
-  domains).
+  increases with every accepted mutation (currently `geo.set_georeference`;
+  further mutation commands arrive with later domains).
 - `saved_revision` marks the revision last covered by an explicit save.
 - A session is dirty while `revision != saved_revision`; dirty state is
   derived from persisted counters, so it survives reopen honestly.
@@ -74,9 +77,21 @@ new project identity; treat save-as as forking, not renaming.
 ## Integrity policy
 
 On open, manifest and database must agree on project UUID, display name,
-georeference, and `createdAt`. A mismatch is reported as corruption and
-fails the open; the engine never silently repairs project files. The
-schema-version probe runs on a read-only connection (`query_only`, no
+and `createdAt`; a mismatch is reported as corruption and fails the open.
+The georeference is the exception with a deterministic recovery rule: a
+`geo.set_georeference` update writes the manifest before committing the
+database transaction, so a crash in between leaves the manifest ahead of
+the canonical row. On open the database row wins — the manifest is
+rewritten from it and the repair is logged
+(`project.manifest_georeference_repaired`); the open then proceeds with
+canonical state.
+
+The persisted georeference is also revalidated through the geospatial
+runtime on open: an unresolvable or unsupported canonical CRS fails the
+open and leaves no active session, rather than activating a project whose
+spatial frame is broken.
+
+The schema-version probe runs on a read-only connection (`query_only`, no
 journal-mode reconfiguration), so rejecting a newer project never modifies
 the file — including its journal mode.
 
@@ -84,8 +99,11 @@ the file — including its journal mode.
 
 - `project.opened` — after create/open/save-as; carries the full summary.
 - `project.closed` — after close or save-as switch; carries the project UUID.
-- `project.revision_changed` — reserved for mutation commands.
+- `project.revision_changed` — on canonical mutations (currently the
+  georeference update; further mutation commands arrive with later domains).
 - `project.dirty_state_changed` — when dirty state transitions.
+- `georeference.changed` — after `geo.set_georeference`; carries the resolved
+  canonical georeference and the new revision (see `docs/05_DOMAINS/GEO.md`).
 
 Events carry an `event_id` and are broadcast to authenticated connections.
 They are projections of engine-side facts, never instructions or state

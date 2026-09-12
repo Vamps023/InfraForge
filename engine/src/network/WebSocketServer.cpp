@@ -28,10 +28,14 @@ namespace {
 using ProtocolFrame = infraforge::protocol::v1::Frame;
 using ProtocolErrorCode = infraforge::protocol::v1::ErrorCode;
 
-std::atomic_bool g_stop_requested{false};
+// The signal handler cannot capture state, so the active server publishes
+// its stop flag here for the lifetime of run().
+std::atomic_bool* g_active_stop_flag = nullptr;
 
 void handle_termination_signal(int) {
-    g_stop_requested.store(true, std::memory_order_relaxed);
+    if (g_active_stop_flag != nullptr) {
+        g_active_stop_flag->store(true, std::memory_order_relaxed);
+    }
 }
 
 class SessionConnectionState final : public ix::ConnectionState {
@@ -80,7 +84,9 @@ bool protocol_is_compatible(const infraforge::protocol::v1::ProtocolVersion& ver
     return version.major() == infraforge::kProtocolMajor && version.minor() <= infraforge::kProtocolMinor;
 }
 
-void authenticate_connection(
+// Returns true when the connection completed authentication and the
+// ServerHello was delivered; only then may the connection receive events.
+bool authenticate_connection(
     SessionConnectionState& state,
     ix::WebSocket& socket,
     const ProtocolFrame& frame,
@@ -88,21 +94,19 @@ void authenticate_connection(
     std::string_view session_id) {
     if (!frame.has_client_hello()) {
         socket.close(1008, "authentication required");
-        return;
+        return false;
     }
 
     const auto& hello = frame.client_hello();
     if (!hello.has_protocol() || !protocol_is_compatible(hello.protocol())) {
         socket.close(1002, "protocol mismatch");
-        return;
+        return false;
     }
 
     if (!constant_time_equal(hello.session_token(), expected_token)) {
         socket.close(1008, "authentication failed");
-        return;
+        return false;
     }
-
-    state.authenticated.store(true, std::memory_order_release);
 
     ProtocolFrame response;
     response.set_request_id(frame.request_id());
@@ -116,7 +120,11 @@ void authenticate_connection(
     std::string bytes;
     if (!response.SerializeToString(&bytes) || !socket.sendBinary(bytes).success) {
         socket.close(1011, "failed to send server hello");
+        return false;
     }
+
+    state.authenticated.store(true, std::memory_order_release);
+    return true;
 }
 
 void handle_authenticated_frame(
@@ -158,7 +166,8 @@ WebSocketServer::WebSocketServer(ServerConfig config, application::CommandProces
 
 int WebSocketServer::run() {
     NetworkSystemGuard network_system;
-    g_stop_requested.store(false, std::memory_order_relaxed);
+    stopRequested_.store(false, std::memory_order_relaxed);
+    g_active_stop_flag = &stopRequested_;
 
     std::signal(SIGINT, handle_termination_signal);
 #ifdef SIGTERM
@@ -176,7 +185,9 @@ int WebSocketServer::run() {
 
     // With a connection callback, ixwebsocket requires the per-connection
     // message callback to be wired here; the server-wide client callback is
-    // not invoked in that mode.
+    // not invoked in that mode. The router learns about a connection only
+    // after authentication succeeds, so unauthenticated peers never receive
+    // project events.
     server.setOnConnectionCallback(
         [&router, &processor = processor_, expected_token](
             std::weak_ptr<ix::WebSocket> socket_weak,
@@ -186,13 +197,12 @@ int WebSocketServer::run() {
             if (!state || !socket) {
                 return;
             }
-            router.registerConnection(state->getId(), socket_weak);
 
             // The socket owns this callback; referencing the socket itself is
             // safe for the duration of each callback invocation.
             ix::WebSocket& socket_reference = *socket;
             socket->setOnMessageCallback(
-                [&router, &processor, expected_token, state, &socket_reference](
+                [&router, &processor, expected_token, state, &socket_reference, socket_weak](
                     const ix::WebSocketMessagePtr& message) {
                     if (message->type == ix::WebSocketMessageType::Close) {
                         router.unregisterConnection(state->getId());
@@ -214,7 +224,9 @@ int WebSocketServer::run() {
                     }
 
                     if (!state->authenticated.load(std::memory_order_acquire)) {
-                        authenticate_connection(*state, socket_reference, frame, expected_token, state->getId());
+                        if (authenticate_connection(*state, socket_reference, frame, expected_token, state->getId())) {
+                            router.registerConnection(state->getId(), socket_weak);
+                        }
                         return;
                     }
 
@@ -238,13 +250,18 @@ int WebSocketServer::run() {
 
     server.start();
 
-    while (!g_stop_requested.load(std::memory_order_relaxed)) {
+    while (!stopRequested_.load(std::memory_order_relaxed)) {
         std::this_thread::sleep_for(std::chrono::milliseconds{100});
     }
 
     server.stop();
+    g_active_stop_flag = nullptr;
     runtime::logInfo("network", "server.stopped");
     return 0;
+}
+
+void WebSocketServer::requestStop() {
+    stopRequested_.store(true, std::memory_order_relaxed);
 }
 
 } // namespace infraforge::network

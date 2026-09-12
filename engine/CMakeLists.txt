@@ -89,6 +89,9 @@ add_executable(infraforge-engine-tests
     tests/ProjectModelTests.cpp
     tests/ProjectServiceTests.cpp
     tests/SqliteProjectStoreTests.cpp
+    tests/WebSocketServerTests.cpp
+    src/network/CommandRouter.cpp
+    src/network/WebSocketServer.cpp
 )
 
 target_compile_features(infraforge-engine-tests PRIVATE cxx_std_23)
@@ -96,7 +99,12 @@ target_compile_features(infraforge-engine-tests PRIVATE cxx_std_23)
 target_link_libraries(infraforge-engine-tests PRIVATE
     infraforge_core
     doctest::doctest
+    ixwebsocket::ixwebsocket
 )
+
+if(WIN32)
+    target_link_libraries(infraforge-engine-tests PRIVATE bcrypt)
+endif()
 
 if(MSVC)
     target_compile_options(infraforge-engine-tests PRIVATE /W4 /permissive- /Zc:preprocessor)

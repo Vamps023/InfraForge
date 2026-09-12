@@ -54,3 +54,16 @@ export function planViewportVisibility(inputs: ViewportVisibilityInputs): Viewpo
     actions: inputs.hasCachedBounds ? ['place', 'show'] : ['show'],
   }
 }
+
+// The startup visibility decision: the native child window is created
+// visible or hidden with exactly this value, so a viewport process started
+// while a blocking overlay is open or the host window is minimized can
+// never flash before the first runtime visibility command. Same conditions
+// as the runtime policy's `visible`, deliberately not a second state
+// machine — runtime visibility stays on planViewportVisibility +
+// viewport:set-visible.
+export function desiredStartupVisibility(
+  inputs: Pick<ViewportVisibilityInputs, 'pageDesiresViewport' | 'windowDisplayable'>,
+): boolean {
+  return planViewportVisibility({ ...inputs, currentlyAppliedVisible: false, hasCachedBounds: false }).visible
+}

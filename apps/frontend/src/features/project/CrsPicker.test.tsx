@@ -122,6 +122,90 @@ describe('CrsPicker', () => {
     expect(screen.queryByRole('listbox', { name: 'Common CRS presets' })).toBeNull()
   })
 
+  it('closes the list when focus Tabs away', async () => {
+    const user = userEvent.setup()
+    render(<Harness />)
+    await openPicker(user)
+
+    await user.tab()
+    expect(screen.queryByRole('listbox', { name: 'Common CRS presets' })).toBeNull()
+  })
+
+  it('closes the list when focus Shift-Tabs away', async () => {
+    const user = userEvent.setup()
+    render(<Harness />)
+    await openPicker(user)
+
+    await user.keyboard('{Shift>}{Tab}{/Shift}')
+    expect(screen.queryByRole('listbox', { name: 'Common CRS presets' })).toBeNull()
+  })
+
+  it('closes the list when clicking outside the picker', async () => {
+    const user = userEvent.setup()
+    render(
+      <div>
+        <button type="button">elsewhere</button>
+        <Harness />
+      </div>,
+    )
+    await openPicker(user)
+
+    await user.click(screen.getByRole('button', { name: 'elsewhere' }))
+    expect(screen.queryByRole('listbox', { name: 'Common CRS presets' })).toBeNull()
+  })
+
+  it('clicking an option still selects it (dismissal does not eat the click)', async () => {
+    const user = userEvent.setup()
+    render(<Harness />)
+    const input = await openPicker(user)
+
+    await user.click(screen.getByRole('option', { name: /EPSG:32645/ }))
+    expect(input).toHaveValue('EPSG:32645')
+    expect(screen.queryByRole('listbox', { name: 'Common CRS presets' })).toBeNull()
+  })
+
+  it('reopening after outside dismissal works and keeps manual free text', async () => {
+    const user = userEvent.setup()
+    render(
+      <div>
+        <button type="button">elsewhere</button>
+        <Harness />
+      </div>,
+    )
+    const input = await openPicker(user)
+
+    await user.type(input, 'EPSG:25832')
+    await user.click(screen.getByRole('button', { name: 'elsewhere' }))
+    expect(screen.queryByRole('listbox', { name: 'Common CRS presets' })).toBeNull()
+    expect(input).toHaveValue('EPSG:25832')
+
+    await user.click(input)
+    expect(screen.getByRole('listbox', { name: 'Common CRS presets' })).toBeTruthy()
+    expect(input).toHaveValue('EPSG:25832')
+
+    await user.click(screen.getByRole('option', { name: /Enter CRS manually/ }))
+    expect(input).toHaveValue('EPSG:25832')
+  })
+
+  it('keeps the exactly selected EPSG identifier across dismissal and reopen', async () => {
+    const user = userEvent.setup()
+    render(
+      <div>
+        <button type="button">elsewhere</button>
+        <Harness />
+      </div>,
+    )
+    const input = await openPicker(user)
+
+    await user.click(screen.getByRole('option', { name: /EPSG:32647/ }))
+    expect(input).toHaveValue('EPSG:32647')
+
+    await user.click(input)
+    await user.click(screen.getByRole('button', { name: 'elsewhere' }))
+    await user.click(input)
+    expect(input).toHaveValue('EPSG:32647')
+  })
+
   it('supports keyboard navigation: arrows move, Enter selects, Escape closes', async () => {
     const user = userEvent.setup()
     render(<Harness />)

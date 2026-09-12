@@ -16,7 +16,10 @@ import { ViewportSupervisor, type ViewportPlacement, type ViewportStatus } from 
 
 const VIEWPORT_FIXTURE = `
 const fs = require('node:fs')
-const [, , modeFile, hangPidFile] = process.argv
+const [, , modeFile, hangPidFile, argvFile] = process.argv
+if (argvFile) {
+  fs.writeFileSync(argvFile, JSON.stringify(process.argv.slice(2)))
+}
 const mode = fs.readFileSync(modeFile, 'utf8').trim()
 const status = (state) => process.stdout.write(
   'INFRAFORGE_VIEWPORT_STATUS ' + JSON.stringify({ state, detail: 'fixture' }) + '\\n')
@@ -89,10 +92,13 @@ async function processAlive(pid: number): Promise<boolean> {
 }
 
 function createSupervisor(hangPidFile?: string): ViewportSupervisor {
+  // All four fixture argument slots (script, modeFile, hangPidFile, argvFile)
+  // are reserved with placeholders so the supervisor's control arguments can
+  // never slide into a slot and become a stray output filename.
   return new ViewportSupervisor({
     commandOverride: {
       executable: process.execPath,
-      leadingArgs: hangPidFile ? [fixturePath, modeFile, hangPidFile] : [fixturePath, modeFile],
+      leadingArgs: [fixturePath, modeFile, hangPidFile ?? '', ''],
     },
     startupTimeoutMs: 3_000,
   })
@@ -141,6 +147,56 @@ describe('ViewportSupervisor lifecycle', () => {
 
     // Regression: the failed start must not leave `starting` stuck.
     await assertStartableAndStoppable(supervisor)
+  })
+
+  it('passes --initial-visible 1 to the viewport process by default', async () => {
+    await prepareFixture()
+    const argvFile = path.join(workDir, 'argv.json')
+    const supervisor = new ViewportSupervisor({
+      commandOverride: {
+        executable: process.execPath,
+        leadingArgs: [fixturePath, modeFile, '', argvFile],
+      },
+      startupTimeoutMs: 3_000,
+    })
+
+    await setMode('ready')
+    await supervisor.start(parentWindowHandle, placement)
+    expect(supervisor.snapshot().state).toBe('ready')
+
+    const argv = JSON.parse(await readFile(argvFile, 'utf8')) as string[]
+    expect(argv).toContain('--initial-visible')
+    expect(argv[argv.indexOf('--initial-visible') + 1]).toBe('1')
+
+    supervisor.stop()
+    await vi.waitUntil(() => supervisor.snapshot().state === 'stopped', { timeout: 5_000 })
+  })
+
+  it('passes --initial-visible 0 when startup visibility is hidden', async () => {
+    await prepareFixture()
+    const argvFile = path.join(workDir, 'argv.json')
+    const supervisor = new ViewportSupervisor({
+      commandOverride: {
+        executable: process.execPath,
+        leadingArgs: [fixturePath, modeFile, '', argvFile],
+      },
+      startupTimeoutMs: 3_000,
+    })
+
+    await setMode('ready')
+    await supervisor.start(parentWindowHandle, placement, { initialVisible: false })
+    expect(supervisor.snapshot().state).toBe('ready')
+
+    const argv = JSON.parse(await readFile(argvFile, 'utf8')) as string[]
+    expect(argv).toContain('--initial-visible')
+    expect(argv[argv.indexOf('--initial-visible') + 1]).toBe('0')
+
+    // The control path still works after a hidden startup: visibility=true
+    // flows through the normal set-visible channel (fixture exits on stdin
+    // close, proving the channel is alive).
+    supervisor.setVisible(true)
+    supervisor.stop()
+    await vi.waitUntil(() => supervisor.snapshot().state === 'stopped', { timeout: 5_000 })
   })
 
   it('reports an explicit failure when the viewport exits before readiness', async () => {

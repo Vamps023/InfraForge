@@ -18,6 +18,8 @@ namespace {
 constexpr UINT kAppShutdownMessage = WM_APP + 0x1F0;
 // Wakes the blocking GetMessage loop after a control command was queued.
 constexpr UINT kAppWakeMessage = WM_APP + 0x1F1;
+// Child window class; shared by every surface this process ever creates.
+constexpr wchar_t kClassName[] = L"InfraForgeViewportChild";
 
 LRESULT CALLBACK viewportWndProc(const HWND window, const UINT message, const WPARAM wParam, const LPARAM lParam) {
     switch (message) {
@@ -38,6 +40,18 @@ Win32Surface::~Win32Surface() {
         DestroyWindow(static_cast<HWND>(handle_));
         handle_ = nullptr;
     }
+    // The last surface of the child class unregisters it and releases the
+    // class background brush created in create(). UnregisterClassW fails
+    // while other windows of the class are alive, leaving the brush with
+    // the class until that surface performs the same teardown.
+    const HINSTANCE instance = GetModuleHandleW(nullptr);
+    WNDCLASSEXW windowClass{};
+    windowClass.cbSize = sizeof(windowClass);
+    if (GetClassInfoExW(instance, kClassName, &windowClass)
+        && UnregisterClassW(kClassName, instance) != 0
+        && windowClass.hbrBackground != nullptr) {
+        DeleteObject(windowClass.hbrBackground);
+    }
 }
 
 void Win32Surface::create(const std::uint64_t parentWindowHandle, const SurfacePlacement& placement) {
@@ -49,17 +63,24 @@ void Win32Surface::create(const std::uint64_t parentWindowHandle, const SurfaceP
         throw NativeSurfaceError("parent window handle is not a valid window");
     }
 
-    static constexpr wchar_t kClassName[] = L"InfraForgeViewportChild";
     WNDCLASSEXW windowClass{};
     windowClass.cbSize = sizeof(windowClass);
     windowClass.style = CS_HREDRAW | CS_VREDRAW;
     windowClass.lpfnWndProc = viewportWndProc;
     windowClass.hInstance = GetModuleHandleW(nullptr);
     windowClass.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-    windowClass.hbrBackground = CreateSolidBrush(RGB(13, 16, 20));
+    // The class owns this brush for its lifetime; it is released when the
+    // last surface unregisters the class. When the class already exists the
+    // fresh brush is discarded immediately instead of leaking.
+    HBRUSH classBrush = CreateSolidBrush(RGB(13, 16, 20));
+    windowClass.hbrBackground = classBrush;
     windowClass.lpszClassName = kClassName;
-    if (RegisterClassExW(&windowClass) == 0 && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
-        throw NativeSurfaceError("failed to register the viewport child window class");
+    if (RegisterClassExW(&windowClass) == 0) {
+        const DWORD registerError = GetLastError();
+        DeleteObject(classBrush);
+        if (registerError != ERROR_CLASS_ALREADY_EXISTS) {
+            throw NativeSurfaceError("failed to register the viewport child window class");
+        }
     }
 
     // Initial size is 1x1; the first place() call sets the real geometry
@@ -147,6 +168,25 @@ SurfacePlacement Win32Surface::placement() const {
 
 std::string_view surfacePlatformName() {
     return "win32";
+}
+
+bool enablePlatformDpiAwareness() {
+    // The child surface must track the host monitor's scale in physical
+    // pixels: a process left at the default DPI awareness is DPI-virtualized
+    // by the system, which breaks mixed-DPI parent/child placement. Try
+    // Per-Monitor V2 first; SetProcessDpiAware is the floor for systems
+    // without the context API.
+    if (SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) != 0) {
+        return true;
+    }
+    if (GetLastError() == ERROR_ACCESS_DENIED) {
+        // The awareness is already fixed (embedded manifest or an earlier
+        // call); report the active mode instead of overriding it.
+        return AreDpiAwarenessContextsEqual(
+            GetThreadDpiAwarenessContext(),
+            DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) != 0;
+    }
+    return SetProcessDPIAware() != 0;
 }
 
 std::unique_ptr<NativeSurface> createPlatformSurface() {

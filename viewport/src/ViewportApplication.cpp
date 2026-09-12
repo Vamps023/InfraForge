@@ -87,6 +87,17 @@ void readControlLines(std::istream& stream, ControlQueue& queue, const std::atom
 
 } // namespace
 
+std::optional<RendererStatus> visibilityStatusReport(
+    const bool rendererRunning,
+    const RendererStatus& lastRendererStatus) {
+    if (rendererRunning) {
+        return std::nullopt;
+    }
+    // Visibility cannot revive a dead renderer: re-assert the last explicit
+    // record ("failed" / "device_lost") instead of ever implying readiness.
+    return lastRendererStatus;
+}
+
 bool parseApplicationArguments(
     const int argc,
     char** argv,
@@ -225,18 +236,24 @@ int runViewportApplication(const ApplicationArguments& arguments) {
             {"dpiScale", std::to_string(surface->placement().dpiScale)}});
 
     std::atomic_bool stdinStopped{false};
-    std::atomic_bool renderFailed{false};
+    RendererStatus lastRendererStatus;
+    std::mutex statusMutex;
 
     VulkanRenderer renderer(
         surface->nativeHandle(),
-        [](const RendererStatus& status) {
-            reportStatus(status.state, status.detail, status.gpuName, status.vulkanVersion, status.validationEnabled);
+        [&lastRendererStatus, &statusMutex](const RendererStatus& status) {
+            {
+                std::lock_guard lock{statusMutex};
+                lastRendererStatus = status;
+            }
+            reportStatus(status.state, status.detail, status.gpuName, status.vulkanVersion,
+                status.validationEnabled);
         },
         arguments.validationEnabled);
     if (!renderer.start(surface->placement().width, surface->placement().height)) {
-        // The renderer published its failure diagnostics; keep serving the
-        // control protocol so the shell can shut the process down cleanly.
-        renderFailed.store(true, std::memory_order_relaxed);
+        // The renderer published its failure diagnostics (captured in
+        // lastRendererStatus); keep serving the control protocol so the
+        // shell can shut the process down cleanly.
     }
 
     std::thread stdinThread([&queue, &stdinStopped] {
@@ -279,9 +296,14 @@ int runViewportApplication(const ApplicationArguments& arguments) {
             } else if (auto* visibility = std::get_if<VisibilityCommand>(&command)) {
                 surface->setVisible(visibility->visible);
                 renderer.setVisible(visibility->visible);
-                if (renderFailed.load(std::memory_order_relaxed)) {
-                    reportStatus(visibility->visible ? "ready" : "suspended",
-                        visibility->visible ? "surface visible" : "surface hidden by shell");
+                RendererStatus lastStatus;
+                {
+                    std::lock_guard lock{statusMutex};
+                    lastStatus = lastRendererStatus;
+                }
+                if (auto report = visibilityStatusReport(renderer.running(), lastStatus)) {
+                    reportStatus(report->state, report->detail, report->gpuName,
+                        report->vulkanVersion, report->validationEnabled);
                 }
             }
         }

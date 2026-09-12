@@ -37,6 +37,12 @@ std::unique_ptr<NativeSurface> createPlatformSurface() {
     return std::make_unique<UnsupportedSurface>();
 }
 
+bool enablePlatformDpiAwareness() {
+    // Non-Windows platforms have no process DPI-awareness mode to request;
+    // the compositor owns scaling.
+    return true;
+}
+
 std::string_view surfacePlatformName() {
     return "unsupported";
 }

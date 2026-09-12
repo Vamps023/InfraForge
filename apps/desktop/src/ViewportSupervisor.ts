@@ -22,10 +22,19 @@ export interface ViewportStatus {
 
 const READY_PREFIX = 'INFRAFORGE_VIEWPORT_READY '
 const STATUS_PREFIX = 'INFRAFORGE_VIEWPORT_STATUS '
-const STARTUP_TIMEOUT_MS = 10_000
+const DEFAULT_STARTUP_TIMEOUT_MS = 10_000
 const SHUTDOWN_GRACE_MS = 2_000
 
 type ViewportChild = ChildProcessByStdio<Writable, Readable, Readable>
+
+export interface ViewportSupervisorOptions {
+  // Lifecycle-test seam: spawns this real command prefix (e.g. node with a
+  // fixture script) in place of the configured viewport executable.
+  // Production leaves it unset.
+  commandOverride?: { executable: string; leadingArgs?: string[] }
+  // Lifecycle-test seam: readiness timeout. Production uses 10 seconds.
+  startupTimeoutMs?: number
+}
 
 function isStatusState(value: unknown): value is ViewportStatus['state'] {
   return (
@@ -48,9 +57,16 @@ export class ViewportSupervisor {
   private child: ViewportChild | null = null
   private starting = false
   private statusListener: ((status: ViewportStatus) => void) | null = null
+  private readonly options: ViewportSupervisorOptions
+  private readonly startupTimeoutMs: number
   private status: ViewportStatus = {
     state: 'unavailable',
     detail: 'Native viewport has not been started.',
+  }
+
+  constructor(options: ViewportSupervisorOptions = {}) {
+    this.options = options
+    this.startupTimeoutMs = options.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS
   }
 
   setStatusListener(listener: (status: ViewportStatus) => void): void {
@@ -66,18 +82,74 @@ export class ViewportSupervisor {
       return
     }
     this.starting = true
+    try {
+      const viewportPath = await resolveConfiguredViewportPath()
+      if (!viewportPath) {
+        this.publish({
+          state: 'unavailable',
+          detail: 'Set INFRAFORGE_VIEWPORT_PATH to the built infraforge-viewport executable for desktop development.',
+        })
+        return
+      }
 
-    const viewportPath = await resolveConfiguredViewportPath()
-    if (!viewportPath) {
+      this.publish({ state: 'starting', detail: 'Starting native viewport surface…' })
+      this.child = this.spawnChild(viewportPath, parentWindowHandle, initialPlacement)
+      await this.awaitReadiness(this.child)
+    } catch (error) {
+      // Every failure path — unresolvable path, spawn error, readiness
+      // timeout, exit before readiness — lands here: publish the explicit
+      // failure, kill any child we spawned, and reset `starting` in the
+      // finally below so the supervisor stays startable.
       this.publish({
-        state: 'unavailable',
-        detail: 'Set INFRAFORGE_VIEWPORT_PATH to the built infraforge-viewport executable for desktop development.',
+        state: 'failed',
+        detail: error instanceof Error ? error.message : String(error),
       })
+      this.killChild()
+    } finally {
+      this.starting = false
+    }
+  }
+
+  place(placement: ViewportPlacement): void {
+    this.sendControl({
+      type: 'place',
+      screenX: placement.screenX,
+      screenY: placement.screenY,
+      width: placement.width,
+      height: placement.height,
+      dpiScale: placement.dpiScale,
+    })
+  }
+
+  setVisible(visible: boolean): void {
+    this.sendControl({ type: 'visibility', visible })
+  }
+
+  stop(): void {
+    const child = this.child
+    if (!child) {
       return
     }
+    this.child = null
+    try {
+      child.stdin.write(`${JSON.stringify({ type: 'shutdown' })}\n`)
+      child.stdin.end()
+    } catch {
+      // stdin may already be gone; the kill path below still applies.
+    }
+    const killTimer = setTimeout(() => {
+      if (!child.killed) {
+        child.kill()
+      }
+    }, SHUTDOWN_GRACE_MS)
+    child.once('exit', () => clearTimeout(killTimer))
+  }
 
-    this.publish({ state: 'starting', detail: 'Starting native viewport surface…' })
-
+  private spawnChild(
+    viewportPath: string,
+    parentWindowHandle: Buffer,
+    initialPlacement: ViewportPlacement,
+  ): ViewportChild {
     const args = [
         '--parent-window', readWindowHandleHex(parentWindowHandle),
         '--screen-x', String(initialPlacement.screenX),
@@ -91,15 +163,17 @@ export class ViewportSupervisor {
       // and treated as failures by the lifecycle verification process.
       args.push('--validate')
     }
-
-    const child = spawn(
-      viewportPath,
-      args,
+    const executable = this.options.commandOverride?.executable ?? viewportPath
+    const leadingArgs = this.options.commandOverride?.leadingArgs ?? []
+    return spawn(
+      executable,
+      [...leadingArgs, ...args],
       { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true },
     )
-    this.child = child
+  }
 
-    const ready = new Promise<void>((resolve, reject) => {
+  private awaitReadiness(child: ViewportChild): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
       const lines = readline.createInterface({ input: child.stdout })
       let settled = false
       const timer = setTimeout(() => {
@@ -107,7 +181,7 @@ export class ViewportSupervisor {
           settled = true
           reject(new Error('Native viewport did not report readiness before the startup timeout.'))
         }
-      }, STARTUP_TIMEOUT_MS)
+      }, this.startupTimeoutMs)
 
       lines.on('line', (line) => {
         if (line.startsWith(READY_PREFIX)) {
@@ -151,55 +225,6 @@ export class ViewportSupervisor {
         }
       })
     })
-
-    try {
-      await ready
-    } catch (error) {
-      this.child = null
-      this.publish({
-        state: 'failed',
-        detail: error instanceof Error ? error.message : String(error),
-      })
-      this.killChild()
-      return
-    } finally {
-      this.starting = false
-    }
-  }
-
-  place(placement: ViewportPlacement): void {
-    this.sendControl({
-      type: 'place',
-      screenX: placement.screenX,
-      screenY: placement.screenY,
-      width: placement.width,
-      height: placement.height,
-      dpiScale: placement.dpiScale,
-    })
-  }
-
-  setVisible(visible: boolean): void {
-    this.sendControl({ type: 'visibility', visible })
-  }
-
-  stop(): void {
-    const child = this.child
-    if (!child) {
-      return
-    }
-    this.child = null
-    try {
-      child.stdin.write(`${JSON.stringify({ type: 'shutdown' })}\n`)
-      child.stdin.end()
-    } catch {
-      // stdin may already be gone; the kill path below still applies.
-    }
-    const killTimer = setTimeout(() => {
-      if (!child.killed) {
-        child.kill()
-      }
-    }, SHUTDOWN_GRACE_MS)
-    child.once('exit', () => clearTimeout(killTimer))
   }
 
   private sendControl(command: Record<string, unknown>): void {

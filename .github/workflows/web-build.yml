@@ -23,6 +23,8 @@ jobs:
         run: |
           set -o pipefail
           npm run typecheck 2>&1 | tee typecheck.log
+      - name: Desktop supervisor lifecycle tests
+        run: npm --workspace @infraforge/desktop run test
       - name: Upload TypeScript diagnostics
         if: failure()
         uses: actions/upload-artifact@v7

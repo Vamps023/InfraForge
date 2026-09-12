@@ -19,6 +19,10 @@ export function NewProjectDialog({ client, busy, onClose }: NewProjectDialogProp
   const [parentDirectory, setParentDirectory] = useState('')
   const [horizontalCrs, setHorizontalCrs] = useState('')
   const [linearUnit, setLinearUnit] = useState('metre')
+  const [originEasting, setOriginEasting] = useState('0')
+  const [originNorthing, setOriginNorthing] = useState('0')
+  const [originHeight, setOriginHeight] = useState('0')
+  const [verticalCrs, setVerticalCrs] = useState('')
   const [trafficSide, setTrafficSide] = useState<'LEFT' | 'RIGHT'>('RIGHT')
   const [formError, setFormError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
@@ -55,6 +59,13 @@ export function NewProjectDialog({ client, busy, onClose }: NewProjectDialogProp
       setFormError('Project name, location, and horizontal CRS are required.')
       return
     }
+    const easting = Number(originEasting)
+    const northing = Number(originNorthing)
+    const height = Number(originHeight)
+    if (!Number.isFinite(easting) || !Number.isFinite(northing) || !Number.isFinite(height)) {
+      setFormError('Origin coordinates must be finite numbers.')
+      return
+    }
     setSubmitting(true)
     setFormError(null)
     try {
@@ -63,6 +74,10 @@ export function NewProjectDialog({ client, busy, onClose }: NewProjectDialogProp
         parentDirectory: parentDirectory.trim(),
         horizontalCrs: horizontalCrs.trim(),
         linearUnit,
+        originEasting: easting,
+        originNorthing: northing,
+        originHeight: height,
+        verticalCrs: verticalCrs.trim(),
         trafficSide: trafficSide === 'LEFT' ? TrafficSide.LEFT : TrafficSide.RIGHT,
       })
       onClose()
@@ -126,6 +141,45 @@ export function NewProjectDialog({ client, busy, onClose }: NewProjectDialogProp
               <option value="metre">metre</option>
               <option value="us_survey_foot">US survey foot</option>
             </select>
+          </label>
+        </div>
+
+        <div className="form-row-pair">
+          <label className="form-row">
+            <span className="form-label">Origin easting</span>
+            <input
+              className="form-input"
+              value={originEasting}
+              onChange={(event) => setOriginEasting(event.target.value)}
+            />
+          </label>
+          <label className="form-row">
+            <span className="form-label">Origin northing</span>
+            <input
+              className="form-input"
+              value={originNorthing}
+              onChange={(event) => setOriginNorthing(event.target.value)}
+            />
+          </label>
+        </div>
+
+        <div className="form-row-pair">
+          <label className="form-row">
+            <span className="form-label">Origin height</span>
+            <input
+              className="form-input"
+              value={originHeight}
+              onChange={(event) => setOriginHeight(event.target.value)}
+            />
+          </label>
+          <label className="form-row">
+            <span className="form-label">Vertical CRS (optional)</span>
+            <input
+              className="form-input"
+              value={verticalCrs}
+              onChange={(event) => setVerticalCrs(event.target.value)}
+              placeholder="EPSG:3855"
+            />
           </label>
         </div>
 

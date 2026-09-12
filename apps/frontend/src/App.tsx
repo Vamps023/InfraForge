@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Box, ChevronDown, CircleDot, PanelBottom, PanelLeft, PanelRight, Search } from 'lucide-react'
 import { connectEngineSession, type EngineSession, type EngineSessionStatus } from './lib/engineSession'
+import { GeoreferencePanel } from './features/geo/GeoreferencePanel'
 import { NewProjectDialog } from './features/project/NewProjectDialog'
 import { closeProject, openProject, refreshProjectSummary, saveProject } from './features/project/projectApi'
 import { subscribeProjectEvents } from './features/project/projectEvents'
@@ -63,12 +64,14 @@ function AppHeader({
   busy,
   engineReady,
   onSave,
+  onGeoreference,
   onClose,
 }: {
   projectOpen: boolean
   busy: boolean
   engineReady: boolean
   onSave: () => void
+  onGeoreference: () => void
   onClose: () => void
 }) {
   const summary = useProjectStore((state) => state.summary)
@@ -86,6 +89,9 @@ function AppHeader({
         <div className="header-actions">
           <button className="button secondary" type="button" disabled={!engineReady || busy} onClick={onSave}>
             Save
+          </button>
+          <button className="button secondary" type="button" disabled={!engineReady || busy} onClick={onGeoreference}>
+            Georeference…
           </button>
           <button className="button secondary" type="button" disabled={!engineReady || busy} onClick={onClose}>
             Close
@@ -207,6 +213,7 @@ export function App() {
   const setEngineStatus = useUiStore((state) => state.setEngineStatus)
   const [engineSession, setEngineSession] = useState<EngineSession | null>(null)
   const [showNewProjectDialog, setShowNewProjectDialog] = useState(false)
+  const [showGeoreferencePanel, setShowGeoreferencePanel] = useState(false)
   const disposersRef = useRef<(() => void) | null>(null)
 
   const summary = useProjectStore((state) => state.summary)
@@ -305,6 +312,7 @@ export function App() {
         busy={busy}
         engineReady={engineReady}
         onSave={() => void handleSave()}
+        onGeoreference={() => setShowGeoreferencePanel(true)}
         onClose={() => void handleClose()}
       />
       <Toolbar />
@@ -326,6 +334,12 @@ export function App() {
           client={engineSession.client}
           busy={busy}
           onClose={() => setShowNewProjectDialog(false)}
+        />
+      ) : null}
+      {showGeoreferencePanel && engineSession && projectOpen ? (
+        <GeoreferencePanel
+          client={engineSession.client}
+          onClose={() => setShowGeoreferencePanel(false)}
         />
       ) : null}
     </div>

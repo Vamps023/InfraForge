@@ -14,7 +14,6 @@
     "shaderc",
     "sqlite3",
     "vulkan-headers",
-    "vulkan-loader",
-    "vulkan-validationlayers"
+    "vulkan-loader"
   ]
 }

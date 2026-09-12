@@ -1,6 +1,8 @@
 #pragma once
 
 #include "infraforge/viewport/renderer/GridCamera.hpp"
+
+#include <cstdint>
 #include "infraforge/viewport/renderer/Vulkan.hpp"
 
 namespace infraforge::viewport {

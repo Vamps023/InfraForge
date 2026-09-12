@@ -1,5 +1,7 @@
 #include <doctest/doctest.h>
 
+#include <cstdint>
+
 #include "infraforge/viewport/renderer/SelectionId.hpp"
 
 namespace {

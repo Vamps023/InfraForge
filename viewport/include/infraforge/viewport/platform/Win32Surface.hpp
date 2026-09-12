@@ -2,6 +2,8 @@
 
 #include "infraforge/viewport/platform/NativeSurface.hpp"
 
+#include <cstdint>
+
 namespace infraforge::viewport {
 
 // Win32 child window surface. Created on the application loop thread; the

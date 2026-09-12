@@ -1,5 +1,7 @@
 #include "infraforge/viewport/control/ControlProtocol.hpp"
 
+#include <cstdint>
+
 #include <nlohmann/json.hpp>
 
 #include <array>

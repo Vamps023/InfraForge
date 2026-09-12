@@ -1,5 +1,7 @@
 #include "infraforge/viewport/renderer/VulkanSwapchain.hpp"
 
+#include <cstdint>
+
 #include <algorithm>
 
 namespace infraforge::viewport {

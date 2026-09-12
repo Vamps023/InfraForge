@@ -45,6 +45,13 @@ const CLIENT_VERSION = '0.2.0'
 const HELLO_TIMEOUT_MS = 5_000
 const COMMAND_TIMEOUT_MS = 30_000
 
+// The protocol version this frontend was generated against. The frontend
+// declares its own version instead of echoing the engine's advertised one;
+// the engine decides compatibility (major must match, minor must not exceed
+// the engine's).
+const FRONTEND_PROTOCOL_MAJOR = 1
+const FRONTEND_PROTOCOL_MINOR = 1
+
 interface PendingCommand {
   resolve: (outcome: ResultEnvelope['outcome']) => void
   reject: (error: Error) => void
@@ -99,8 +106,8 @@ export async function connectEngineSession(
 
   socket.addEventListener('open', () => {
     const protocol = create(ProtocolVersionSchema, {
-      major: connection.protocolMajor,
-      minor: connection.protocolMinor,
+      major: FRONTEND_PROTOCOL_MAJOR,
+      minor: FRONTEND_PROTOCOL_MINOR,
     })
     const hello = create(ClientHelloSchema, {
       protocol,
@@ -146,8 +153,8 @@ export async function connectEngineSession(
       const hello = frame.payload.value
       if (
         !hello.protocol ||
-        hello.protocol.major !== connection.protocolMajor ||
-        hello.protocol.minor > connection.protocolMinor
+        hello.protocol.major !== FRONTEND_PROTOCOL_MAJOR ||
+        hello.protocol.minor < FRONTEND_PROTOCOL_MINOR
       ) {
         socket.close(1002, 'protocol mismatch')
         const message = 'Native engine protocol version is incompatible with the frontend.'

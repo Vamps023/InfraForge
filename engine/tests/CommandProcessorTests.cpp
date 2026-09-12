@@ -10,6 +10,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <deque>
+#include <fstream>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -243,6 +244,42 @@ TEST_SUITE("command processor") {
         REQUIRE(results[0].result().has_error());
         CHECK_EQ(results[0].result().error().code(),
             infraforge::protocol::v1::COMMAND_ERROR_CODE_INVALID_ARGUMENT);
+
+        processor.shutdown();
+    }
+    TEST_CASE("a corrupt project database surfaces as COMMAND_ERROR_CODE_PERSISTENCE_FAILURE") {
+        infraforge::testhelpers::ScratchDirectory scratch;
+        infraforge::persistence::SqliteProjectStore store;
+        RecordingSink sink;
+        infraforge::application::CommandProcessor processor(store, sink);
+        processor.start();
+
+        processor.post("conn-1", createCommandFrame("req-create", scratch.path()));
+        REQUIRE(sink.waitForTotal(2, kWaitTimeout));
+
+        processor.post("conn-1", simpleCommandFrame(
+            "req-close", [](auto* envelope) { envelope->mutable_close_project(); }));
+        REQUIRE(sink.waitForTotal(4, kWaitTimeout));
+
+        const auto results = sink.results();
+        REQUIRE(results.size() == 2);
+        REQUIRE(results[0].result().has_project_state());
+        const std::filesystem::path projectDirectory =
+            infraforge::runtime::pathFromUtf8(results[0].result().project_state().summary().directory());
+
+        {
+            std::ofstream database(projectDirectory / "project.db", std::ios::binary | std::ios::trunc);
+            database << "this file is definitely not a SQLite database";
+        }
+
+        processor.post("conn-1", openCommandFrame("req-open-corrupt", projectDirectory));
+        REQUIRE(sink.waitForTotal(5, kWaitTimeout));
+
+        const auto after = sink.results();
+        REQUIRE(after.size() == 3);
+        REQUIRE(after[2].result().has_error());
+        CHECK_EQ(after[2].result().error().code(),
+            infraforge::protocol::v1::COMMAND_ERROR_CODE_PERSISTENCE_FAILURE);
 
         processor.shutdown();
     }

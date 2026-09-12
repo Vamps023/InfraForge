@@ -1,22 +1,19 @@
 #include "infraforge/persistence/ProjectManifest.hpp"
 
 #include "infraforge/ports/ProjectStore.hpp"
-#include "infraforge/runtime/Timestamp.hpp"
-#include "infraforge/version.hpp"
 
 #include <nlohmann/json.hpp>
 
 #include <array>
 #include <compare>
-#include <cstdio>
 #include <fstream>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
-#include <vector>
 
 #include "infraforge/runtime/Uuid.hpp"
+#include "infraforge/version.hpp"
 
 namespace infraforge::persistence {
 namespace {
@@ -110,9 +107,9 @@ void validateTimestampField(const ordered_json& json, std::string_view key) {
 }
 
 ProjectManifest manifestFromJson(const ordered_json& json) {
-    static constexpr std::array<std::string_view, 9> kKnownKeys{
-        "format", "formatVersion", "projectUuid", "displayName", "createdAt", "modifiedAt",
-        "database", "compatibility", "georeference",
+    static constexpr std::array<std::string_view, 8> kKnownKeys{
+        "format", "formatVersion", "projectUuid", "displayName", "createdAt", "database", "compatibility",
+        "georeference",
     };
     for (auto iterator = json.begin(); iterator != json.end(); ++iterator) {
         bool known = false;
@@ -152,9 +149,7 @@ ProjectManifest manifestFromJson(const ordered_json& json) {
     }
 
     validateTimestampField(json, "createdAt");
-    validateTimestampField(json, "modifiedAt");
     manifest.createdAt = json.at("createdAt").get<std::string>();
-    manifest.modifiedAt = json.at("modifiedAt").get<std::string>();
 
     const auto& database = json.at("database");
     if (!database.is_object() || database.size() != 1 || !database.at("path").is_string()) {
@@ -165,17 +160,14 @@ ProjectManifest manifestFromJson(const ordered_json& json) {
         failFormat("manifest database path must be '" + std::string{kDatabaseFileName} + "'");
     }
 
+    // The database owns the schema version; the manifest only records the
+    // minimum application version so future engines can migrate on open.
     const auto& compatibility = json.at("compatibility");
-    if (!compatibility.is_object() || compatibility.size() != 2
-        || !compatibility.at("minimumApplicationVersion").is_string()
-        || !compatibility.at("projectSchemaVersion").is_number_integer()) {
+    if (!compatibility.is_object() || compatibility.size() != 1
+        || !compatibility.at("minimumApplicationVersion").is_string()) {
         failFormat("manifest compatibility section is malformed");
     }
     manifest.minimumApplicationVersion = compatibility.at("minimumApplicationVersion").get<std::string>();
-    manifest.projectSchemaVersion = compatibility.at("projectSchemaVersion").get<int>();
-    if (manifest.projectSchemaVersion < 1) {
-        failFormat("manifest projectSchemaVersion must be positive");
-    }
     if (!isSupportedApplicationVersion(manifest.minimumApplicationVersion)) {
         failFormat("project requires application version " + manifest.minimumApplicationVersion
             + " or newer; this engine is " + std::string{infraforge::kEngineVersion});
@@ -268,7 +260,6 @@ void writeProjectManifest(const std::filesystem::path& projectDirectory, const P
 
     ordered_json compatibility;
     compatibility["minimumApplicationVersion"] = manifest.minimumApplicationVersion;
-    compatibility["projectSchemaVersion"] = manifest.projectSchemaVersion;
 
     ordered_json json;
     json["format"] = kProjectFormatId;
@@ -276,7 +267,6 @@ void writeProjectManifest(const std::filesystem::path& projectDirectory, const P
     json["projectUuid"] = manifest.projectUuid;
     json["displayName"] = manifest.displayName;
     json["createdAt"] = manifest.createdAt;
-    json["modifiedAt"] = manifest.modifiedAt;
     json["database"] = std::move(database);
     json["compatibility"] = std::move(compatibility);
     json["georeference"] = std::move(georeference);
@@ -309,11 +299,6 @@ void writeProjectManifest(const std::filesystem::path& projectDirectory, const P
         fail(ports::StoreErrorCategory::PersistenceFailure,
             "cannot finalize project manifest: " + manifestFile.string());
     }
-}
-
-void removeManifestFile(const std::filesystem::path& projectDirectory) {
-    std::error_code ioError;
-    (void)std::filesystem::remove(projectDirectory / kManifestFileName, ioError);
 }
 
 } // namespace infraforge::persistence

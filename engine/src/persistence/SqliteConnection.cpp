@@ -56,9 +56,18 @@ SqliteConnection SqliteConnection::open(const std::filesystem::path& databaseFil
     }
 
     connection.exec("PRAGMA busy_timeout = 5000");
-    connection.exec("PRAGMA journal_mode = DELETE");
-    connection.exec("PRAGMA synchronous = FULL");
     connection.exec("PRAGMA foreign_keys = ON");
+    if (mode == SqliteOpenMode::ReadOnly) {
+        // A read-only connection must never attempt to reconfigure the
+        // database file: the schema-version probe relies on this to reject
+        // unsupported projects without modifying them. journal_mode in
+        // particular is persistent and is therefore only set on writable
+        // connections. query_only is defense in depth against accidents.
+        connection.exec("PRAGMA query_only = ON");
+    } else {
+        connection.exec("PRAGMA journal_mode = DELETE");
+        connection.exec("PRAGMA synchronous = FULL");
+    }
 
     return connection;
 }

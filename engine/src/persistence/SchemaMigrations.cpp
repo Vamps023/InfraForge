@@ -11,13 +11,7 @@
 namespace infraforge::persistence {
 namespace {
 
-struct MigrationDefinition {
-    std::int64_t id;
-    std::string_view name;
-    std::string_view sql;
-};
-
-constexpr std::array<MigrationDefinition, 1> kMigrations{{
+constexpr std::array<MigrationDefinition, 1> kCanonicalMigrations{{
     {
         .id = 1,
         .name = "core project foundation",
@@ -48,6 +42,14 @@ CREATE TABLE georeference (
 
 } // namespace
 
+std::span<const MigrationDefinition> canonicalMigrations() {
+    return kCanonicalMigrations;
+}
+
+std::int64_t latestSupportedSchemaVersion(const std::span<const MigrationDefinition> migrations) {
+    return migrations.empty() ? 0 : migrations.back().id;
+}
+
 void createSchemaMigrationsTable(SqliteConnection& connection) {
     connection.exec(R"sql(
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -75,7 +77,7 @@ std::int64_t readAppliedSchemaVersion(const SqliteConnection& connection) {
     return versionStatement.columnInt64(0);
 }
 
-void applyPendingMigrations(SqliteConnection& connection) {
+void applyPendingMigrations(SqliteConnection& connection, const std::span<const MigrationDefinition> migrations) {
     createSchemaMigrationsTable(connection);
 
     SqliteStatement versionStatement{connection, "SELECT COALESCE(MAX(id), 0) FROM schema_migrations"};
@@ -84,14 +86,15 @@ void applyPendingMigrations(SqliteConnection& connection) {
     }
     const std::int64_t appliedVersion = versionStatement.columnInt64(0);
 
-    if (appliedVersion > kLatestSchemaVersion) {
+    const std::int64_t latestSupported = latestSupportedSchemaVersion(migrations);
+    if (appliedVersion > latestSupported) {
         throw SqliteError(
             "project database schema version " + std::to_string(appliedVersion)
-                + " is newer than the supported version " + std::to_string(kLatestSchemaVersion),
+                + " is newer than the supported version " + std::to_string(latestSupported),
             SQLITE_CANTOPEN);
     }
 
-    for (const auto& migration : kMigrations) {
+    for (const MigrationDefinition& migration : migrations) {
         if (migration.id <= appliedVersion) {
             continue;
         }

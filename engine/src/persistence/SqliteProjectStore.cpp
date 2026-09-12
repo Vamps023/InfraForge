@@ -1,7 +1,6 @@
 #include "infraforge/persistence/SqliteProjectStore.hpp"
 
 #include "infraforge/persistence/ProjectManifest.hpp"
-#include "infraforge/persistence/SchemaMigrations.hpp"
 #include "infraforge/runtime/FileSystemUtf8.hpp"
 #include "infraforge/runtime/Logging.hpp"
 #include "infraforge/runtime/Timestamp.hpp"
@@ -12,6 +11,7 @@
 #include <cstdint>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -36,18 +36,12 @@ constexpr std::array<std::string_view, 9> kProjectSubdirectories{
     "logs",
 };
 
-ProjectManifest manifestFromRecord(
-    const ProjectRecord& record,
-    const std::int64_t schemaVersion,
-    const std::string& createdAt,
-    const std::string& modifiedAt) {
+ProjectManifest manifestFromRecord(const ProjectRecord& record, const std::string& createdAt) {
     ProjectManifest manifest;
     manifest.projectUuid = record.uuid;
     manifest.displayName = record.displayName;
     manifest.createdAt = createdAt;
-    manifest.modifiedAt = modifiedAt;
     manifest.databasePath = std::string{kDatabaseFileName};
-    manifest.projectSchemaVersion = static_cast<int>(schemaVersion);
     manifest.minimumApplicationVersion = std::string{infraforge::kEngineVersion};
     manifest.georeference = record.georeference;
     return manifest;
@@ -98,6 +92,13 @@ void insertProjectRows(SqliteConnection& connection, const ProjectRecord& record
 
 } // namespace
 
+SqliteProjectStore::SqliteProjectStore(const std::span<const MigrationDefinition> migrations)
+    : migrations_(migrations) {}
+
+std::int64_t SqliteProjectStore::latestSupportedSchemaVersion() const {
+    return persistence::latestSupportedSchemaVersion(migrations_);
+}
+
 bool SqliteProjectStore::isOpen() const {
     return connection_.has_value();
 }
@@ -110,6 +111,26 @@ const ProjectRecord& SqliteProjectStore::current() const {
 }
 
 ProjectRecord SqliteProjectStore::create(const domain::project::CreateProjectSpec& spec) {
+    return withinStoreBoundary([&] { return createImpl(spec); });
+}
+
+ProjectRecord SqliteProjectStore::open(const std::filesystem::path& projectDirectory) {
+    return withinStoreBoundary([&] { return openImpl(projectDirectory); });
+}
+
+ProjectRecord SqliteProjectStore::save() {
+    return withinStoreBoundary([&] { return saveImpl(); });
+}
+
+ProjectRecord SqliteProjectStore::saveAs(const domain::project::SaveAsSpec& spec) {
+    return withinStoreBoundary([&] { return saveAsImpl(spec); });
+}
+
+void SqliteProjectStore::close() {
+    withinStoreBoundary([&] { closeImpl(); });
+}
+
+ProjectRecord SqliteProjectStore::createImpl(const domain::project::CreateProjectSpec& spec) {
     if (connection_.has_value()) {
         throw std::logic_error("cannot create a project while another session is open");
     }
@@ -146,10 +167,10 @@ ProjectRecord SqliteProjectStore::create(const domain::project::CreateProjectSpe
         record.createdAt = runtime::utcTimestampNow();
         record.modifiedAt = record.createdAt;
 
-        writeProjectManifest(directory, manifestFromRecord(record, kLatestSchemaVersion, record.createdAt, record.modifiedAt));
+        writeProjectManifest(directory, manifestFromRecord(record, record.createdAt));
 
         auto connection = SqliteConnection::open(directory / kDatabaseFileName, SqliteOpenMode::ReadWriteCreate);
-        applyPendingMigrations(connection);
+        applyPendingMigrations(connection, migrations_);
         insertProjectRows(connection, record);
 
         connection_ = std::move(connection);
@@ -166,7 +187,7 @@ ProjectRecord SqliteProjectStore::create(const domain::project::CreateProjectSpe
     }
 }
 
-ProjectRecord SqliteProjectStore::open(const std::filesystem::path& projectDirectory) {
+ProjectRecord SqliteProjectStore::openImpl(const std::filesystem::path& projectDirectory) {
     if (connection_.has_value()) {
         throw std::logic_error("cannot open a project while another session is open");
     }
@@ -180,25 +201,22 @@ ProjectRecord SqliteProjectStore::open(const std::filesystem::path& projectDirec
     }
 
     // Version probe happens on a read-only connection so an unsupported
-    // newer schema is rejected without modifying the project.
+    // newer schema is rejected without modifying the project. The database
+    // is the single authority for the schema version; the manifest carries
+    // no copy that migrations would have to keep in sync.
     {
         auto probe = SqliteConnection::open(databaseFile, SqliteOpenMode::ReadOnly);
         const std::int64_t appliedVersion = readAppliedSchemaVersion(probe);
-        if (appliedVersion > kLatestSchemaVersion) {
+        if (appliedVersion > latestSupportedSchemaVersion()) {
             fail(ports::StoreErrorCategory::SchemaUnsupported,
                 "project database schema version " + std::to_string(appliedVersion)
-                    + " is newer than the supported version " + std::to_string(kLatestSchemaVersion)
+                    + " is newer than the supported version " + std::to_string(latestSupportedSchemaVersion())
                     + "; the project was left unmodified");
-        }
-        if (appliedVersion != manifest.projectSchemaVersion) {
-            fail(ports::StoreErrorCategory::PersistenceFailure,
-                "project manifest schema version (" + std::to_string(manifest.projectSchemaVersion)
-                    + ") does not match the database schema version (" + std::to_string(appliedVersion) + ")");
         }
     }
 
     auto connection = SqliteConnection::open(databaseFile, SqliteOpenMode::ReadWrite);
-    applyPendingMigrations(connection);
+    applyPendingMigrations(connection, migrations_);
 
     ProjectRecord record = readRecord(connection);
     if (record.uuid != manifest.projectUuid) {
@@ -225,7 +243,7 @@ ProjectRecord SqliteProjectStore::open(const std::filesystem::path& projectDirec
     return record_;
 }
 
-ProjectRecord SqliteProjectStore::save() {
+ProjectRecord SqliteProjectStore::saveImpl() {
     if (!connection_.has_value()) {
         throw std::logic_error("cannot save without an open project session");
     }
@@ -233,6 +251,10 @@ ProjectRecord SqliteProjectStore::save() {
         return record_;
     }
 
+    // One transactional resource: the database owns revision, saved_revision
+    // and modified_at, so a save either fully lands or fails without any
+    // half-persisted state. project.json is immutable discovery metadata and
+    // is deliberately not rewritten here (docs/02_DATA/PROJECT_FORMAT.md).
     const std::string modifiedAt = runtime::utcTimestampNow();
     {
         SqliteTransaction transaction{*connection_};
@@ -247,14 +269,12 @@ ProjectRecord SqliteProjectStore::save() {
         transaction.commit();
     }
 
-    writeProjectManifest(directory_, manifestFromRecord(record_, kLatestSchemaVersion, record_.createdAt, modifiedAt));
-
     record_.savedRevision = record_.revision;
     record_.modifiedAt = modifiedAt;
     return record_;
 }
 
-ProjectRecord SqliteProjectStore::saveAs(const domain::project::SaveAsSpec& spec) {
+ProjectRecord SqliteProjectStore::saveAsImpl(const domain::project::SaveAsSpec& spec) {
     if (!connection_.has_value()) {
         throw std::logic_error("cannot save-as without an open project session");
     }
@@ -296,7 +316,7 @@ ProjectRecord SqliteProjectStore::saveAs(const domain::project::SaveAsSpec& spec
         targetRecord.savedRevision = targetRecord.revision;
         targetRecord.createdAt = now;
 
-        writeProjectManifest(targetDirectory, manifestFromRecord(targetRecord, kLatestSchemaVersion, now, now));
+        writeProjectManifest(targetDirectory, manifestFromRecord(targetRecord, now));
 
         auto targetConnection = SqliteConnection::open(targetDirectory / kDatabaseFileName, SqliteOpenMode::ReadWrite);
         {
@@ -337,7 +357,7 @@ ProjectRecord SqliteProjectStore::saveAs(const domain::project::SaveAsSpec& spec
     }
 }
 
-void SqliteProjectStore::close() {
+void SqliteProjectStore::closeImpl() {
     if (!connection_.has_value()) {
         return;
     }

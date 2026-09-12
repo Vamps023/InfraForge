@@ -6,9 +6,11 @@
 #include "infraforge/persistence/SqliteConnection.hpp"
 #include "infraforge/persistence/SqliteProjectStore.hpp"
 
+#include <array>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <span>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -188,10 +190,15 @@ TEST_SUITE("sqlite project store") {
         CHECK_EQ(dirtyState.revision, 2);
         CHECK_EQ(dirtyState.savedRevision, 1);
 
+        // project.json is immutable discovery metadata: a save persists the
+        // save marker in the database only (single transactional resource).
+        const auto manifestBeforeSave = readFileToString(projectDirectory / "project.json");
+
         const auto saved = reopenedStore.save();
         CHECK_FALSE(saved.isDirty());
         CHECK_EQ(saved.revision, 2);
         CHECK_EQ(saved.savedRevision, 2);
+        CHECK(manifestBeforeSave == readFileToString(projectDirectory / "project.json"));
         reopenedStore.close();
 
         auto finalStore = infraforge::persistence::SqliteProjectStore();
@@ -233,6 +240,88 @@ TEST_SUITE("sqlite project store") {
         CHECK_EQ(reopenedFork.uuid, forked.uuid);
         CHECK_EQ(reopenedFork.displayName, "Forked Project");
         forkStore.close();
+    }
+
+    TEST_CASE("a rejected open leaves foreign journal modes untouched") {
+        infraforge::testhelpers::ScratchDirectory scratch;
+        infraforge::persistence::SqliteProjectStore store;
+        const auto created = createSampleProject(store, scratch.path());
+        const auto projectDirectory = fs::path(created.directory);
+        store.close();
+
+        // A foreign tool switched the database to WAL and injected a future
+        // migration; the engine must reject the project without converting
+        // or reconfiguring anything.
+        {
+            auto connection = infraforge::persistence::SqliteConnection::open(
+                projectDirectory / "project.db", infraforge::persistence::SqliteOpenMode::ReadWrite);
+            connection.exec("PRAGMA journal_mode = WAL");
+            connection.exec("INSERT INTO schema_migrations (id, name, applied_at) VALUES (99, 'future', 'now')");
+        }
+
+        infraforge::persistence::SqliteProjectStore rejectingStore;
+        const auto error = captureException<infraforge::ports::StoreError>(
+            [&] { (void)rejectingStore.open(projectDirectory); });
+        REQUIRE(error.has_value());
+        CHECK(error->category() == infraforge::ports::StoreErrorCategory::SchemaUnsupported);
+
+        auto connection = infraforge::persistence::SqliteConnection::open(
+            projectDirectory / "project.db", infraforge::persistence::SqliteOpenMode::ReadOnly);
+        infraforge::persistence::SqliteStatement journal{connection, "PRAGMA journal_mode"};
+        REQUIRE(journal.step());
+        CHECK(journal.columnText(0) == "wal");
+    }
+
+    TEST_CASE("applying a new migration leaves the manifest untouched and the project reopenable") {
+        infraforge::testhelpers::ScratchDirectory scratch;
+
+        // Simulate an older engine that only knows schema v1.
+        const auto canonical = infraforge::persistence::canonicalMigrations();
+        const std::span<const infraforge::persistence::MigrationDefinition> v1Only(canonical.data(), 1);
+        infraforge::persistence::SqliteProjectStore v1Store(v1Only);
+        const auto created = createSampleProject(v1Store, scratch.path());
+        const auto projectDirectory = fs::path(created.directory);
+        v1Store.close();
+
+        // A future engine ships migration 2. The manifest records no schema
+        // version, so the database stays the single migration authority.
+        static constexpr infraforge::persistence::MigrationDefinition kTestMigrationV2{
+            2, "test marker",
+            "CREATE TABLE migration_marker (id INTEGER PRIMARY KEY, note TEXT NOT NULL);"
+            "INSERT INTO migration_marker (id, note) VALUES (1, 'v2');"};
+        const std::array<infraforge::persistence::MigrationDefinition, 2> v1PlusV2{canonical[0], kTestMigrationV2};
+        const auto manifestBeforeMigration = readFileToString(projectDirectory / "project.json");
+
+        infraforge::persistence::SqliteProjectStore v2Store(v1PlusV2);
+        (void)v2Store.open(projectDirectory);
+        v2Store.close();
+
+        CHECK(manifestBeforeMigration == readFileToString(projectDirectory / "project.json"));
+        {
+            auto connection = infraforge::persistence::SqliteConnection::open(
+                projectDirectory / "project.db", infraforge::persistence::SqliteOpenMode::ReadOnly);
+            infraforge::persistence::SqliteStatement marker{connection,
+                "SELECT note FROM migration_marker WHERE id = 1"};
+            REQUIRE(marker.step());
+            CHECK(marker.columnText(0) == "v2");
+            infraforge::persistence::SqliteStatement version{connection,
+                "SELECT MAX(id) FROM schema_migrations"};
+            REQUIRE(version.step());
+            CHECK_EQ(version.columnInt64(0), 2);
+        }
+
+        // Regression: the second open after a migration must succeed.
+        infraforge::persistence::SqliteProjectStore v2StoreAgain(v1PlusV2);
+        const auto reopened = v2StoreAgain.open(projectDirectory);
+        CHECK_EQ(reopened.uuid, created.uuid);
+        v2StoreAgain.close();
+
+        // The older engine now rejects the migrated project without
+        // modifying it.
+        const auto downgradeError = captureException<infraforge::ports::StoreError>(
+            [&] { (void)v1Store.open(projectDirectory); });
+        REQUIRE(downgradeError.has_value());
+        CHECK(downgradeError->category() == infraforge::ports::StoreErrorCategory::SchemaUnsupported);
     }
 
     TEST_CASE("save-as refuses an existing target and leaves the source session untouched") {

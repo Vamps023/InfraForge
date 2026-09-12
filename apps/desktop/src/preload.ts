@@ -5,6 +5,14 @@ export interface PickDirectoryOptions {
   buttonLabel?: string
 }
 
+export interface ViewportStatusPayload {
+  state: 'unavailable' | 'starting' | 'ready' | 'suspended' | 'recreating' | 'failed' | 'stopped'
+  detail: string
+  validation?: boolean
+  gpu?: string
+  vulkan?: string
+}
+
 const desktopApi = Object.freeze({
   platform: process.platform,
   versions: Object.freeze({
@@ -17,6 +25,19 @@ const desktopApi = Object.freeze({
       title: String(options.title),
       buttonLabel: options.buttonLabel === undefined ? undefined : String(options.buttonLabel),
     }) as Promise<string | null>,
+  setViewportBounds: (rect: { x: number; y: number; width: number; height: number }, dpiScale: number) => {
+    ipcRenderer.send('viewport:set-bounds', { rect, dpiScale })
+  },
+  setViewportVisible: (visible: boolean) => {
+    ipcRenderer.send('viewport:set-visible', visible)
+  },
+  onViewportStatus: (listener: (status: ViewportStatusPayload) => void) => {
+    const channelListener = (_event: unknown, status: ViewportStatusPayload) => listener(status)
+    ipcRenderer.on('viewport:status', channelListener)
+    return () => {
+      ipcRenderer.removeListener('viewport:status', channelListener)
+    }
+  },
 })
 
 contextBridge.exposeInMainWorld('infraforgeDesktop', desktopApi)

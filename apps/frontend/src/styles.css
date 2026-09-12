@@ -50,8 +50,16 @@ button { color: inherit; }
 .search-box { display: flex; gap: 7px; margin: 8px; padding: 6px 7px; align-items: center; border: 1px solid var(--border); border-radius: 3px; color: var(--disabled); background: var(--bg-1); }
 .search-box input { width: 100%; border: 0; outline: 0; background: transparent; color: var(--text); font-size: 12px; }
 .panel-empty { padding: 16px 12px; color: var(--disabled); font-size: 12px; line-height: 1.5; }
-.viewport-empty { position: relative; overflow: hidden; display: grid; place-items: center; background: #11151a; }
+.viewport-area { position: relative; min-width: 0; background: #11151a; }
+.viewport-host { position: absolute; inset: 0; }
+.viewport-overlay { position: absolute; inset: 0; overflow: hidden; display: grid; place-items: center; }
 .viewport-grid { position: absolute; inset: 0; opacity: .22; background-image: linear-gradient(#2a323c 1px, transparent 1px), linear-gradient(90deg, #2a323c 1px, transparent 1px); background-size: 32px 32px; mask-image: radial-gradient(circle at center, black, transparent 78%); }
+.toolbar-spacer { flex: 1; }
+.empty-state-error { color: var(--error); }
+.renderer-ready { color: var(--success); }
+.renderer-starting, .renderer-recreating { color: var(--muted); }
+.renderer-unavailable, .renderer-suspended { color: var(--warning); }
+.renderer-failed, .renderer-stopped { color: var(--error); }
 .empty-state { position: relative; max-width: 460px; padding: 28px; text-align: center; color: var(--muted); }
 .empty-state-icon { width: 42px; height: 42px; margin: 0 auto 13px; display: grid; place-items: center; border-radius: 6px; background: var(--raised); border: 1px solid var(--border-strong); color: #91a6bf; }
 .empty-state h1 { margin: 0 0 7px; color: var(--text); font-size: 17px; font-weight: 600; }

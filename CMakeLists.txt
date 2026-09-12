@@ -7,3 +7,4 @@ option(INFRAFORGE_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 enable_testing()
 
 add_subdirectory(engine)
+add_subdirectory(viewport)

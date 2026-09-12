@@ -14,6 +14,19 @@ set(INFRAFORGE_PROTO_BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated)
 # CMake >= 4 no longer creates the protobuf generation output directory.
 file(MAKE_DIRECTORY ${INFRAFORGE_PROTO_BINARY_DIR})
 
+add_library(infraforge_runtime STATIC
+    src/runtime/FileSystemUtf8.cpp
+    src/runtime/Logging.cpp
+    src/runtime/Timestamp.cpp
+    src/runtime/Uuid.cpp
+)
+
+target_compile_features(infraforge_runtime PUBLIC cxx_std_23)
+
+target_include_directories(infraforge_runtime PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
 add_library(infraforge_core STATIC
     src/application/CommandProcessor.cpp
     src/application/GeoService.cpp
@@ -26,10 +39,6 @@ add_library(infraforge_core STATIC
     src/persistence/SchemaMigrations.cpp
     src/persistence/SqliteConnection.cpp
     src/persistence/SqliteProjectStore.cpp
-    src/runtime/FileSystemUtf8.cpp
-    src/runtime/Logging.cpp
-    src/runtime/Timestamp.cpp
-    src/runtime/Uuid.cpp
     ${INFRAFORGE_PROTOCOL_PROTOS}
 )
 
@@ -41,6 +50,7 @@ target_include_directories(infraforge_core PUBLIC
 )
 
 target_link_libraries(infraforge_core PUBLIC
+    infraforge_runtime
     protobuf::libprotobuf
     unofficial::sqlite3::sqlite3
     nlohmann_json::nlohmann_json
@@ -91,22 +101,6 @@ if(DEFINED INFRAFORGE_PROJ_SHARE_DIR AND EXISTS "${INFRAFORGE_PROJ_SHARE_DIR}/pr
     install(DIRECTORY "${INFRAFORGE_PROJ_SHARE_DIR}" DESTINATION share)
 endif()
 
-if(MSVC)
-    target_compile_options(infraforge_core PRIVATE /W4 /permissive- /Zc:preprocessor)
-    target_compile_options(infraforge-engine PRIVATE /W4 /permissive- /Zc:preprocessor)
-    if(INFRAFORGE_WARNINGS_AS_ERRORS)
-        target_compile_options(infraforge_core PRIVATE /WX)
-        target_compile_options(infraforge-engine PRIVATE /WX)
-    endif()
-else()
-    target_compile_options(infraforge_core PRIVATE -Wall -Wextra -Wpedantic)
-    target_compile_options(infraforge-engine PRIVATE -Wall -Wextra -Wpedantic)
-    if(INFRAFORGE_WARNINGS_AS_ERRORS)
-        target_compile_options(infraforge_core PRIVATE -Werror)
-        target_compile_options(infraforge-engine PRIVATE -Werror)
-    endif()
-endif()
-
 find_package(doctest CONFIG REQUIRED)
 
 add_executable(infraforge-engine-tests
@@ -137,15 +131,19 @@ if(WIN32)
 endif()
 
 if(MSVC)
-    target_compile_options(infraforge-engine-tests PRIVATE /W4 /permissive- /Zc:preprocessor)
-    if(INFRAFORGE_WARNINGS_AS_ERRORS)
-        target_compile_options(infraforge-engine-tests PRIVATE /WX)
-    endif()
+    foreach(target IN ITEMS infraforge_runtime infraforge_core infraforge-engine infraforge-engine-tests)
+        target_compile_options(${target} PRIVATE /W4 /permissive- /Zc:preprocessor)
+        if(INFRAFORGE_WARNINGS_AS_ERRORS)
+            target_compile_options(${target} PRIVATE /WX)
+        endif()
+    endforeach()
 else()
-    target_compile_options(infraforge-engine-tests PRIVATE -Wall -Wextra -Wpedantic)
-    if(INFRAFORGE_WARNINGS_AS_ERRORS)
-        target_compile_options(infraforge-engine-tests PRIVATE -Werror)
-    endif()
+    foreach(target IN ITEMS infraforge_runtime infraforge_core infraforge-engine infraforge-engine-tests)
+        target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
+        if(INFRAFORGE_WARNINGS_AS_ERRORS)
+            target_compile_options(${target} PRIVATE -Werror)
+        endif()
+    endforeach()
 endif()
 
 add_test(NAME infraforge-engine-tests COMMAND infraforge-engine-tests)

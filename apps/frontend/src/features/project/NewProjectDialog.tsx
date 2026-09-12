@@ -4,12 +4,19 @@ import { TrafficSide } from '@infraforge/protocol'
 import type { EngineClient } from '../../lib/engineSession'
 import { createProject } from './projectApi'
 import { useProjectStore } from './projectStore'
+import { CrsPicker } from './CrsPicker'
 
 interface NewProjectDialogProps {
   client: EngineClient
   busy: boolean
   onClose: () => void
 }
+
+// The engine rejects latitude/longitude project CRS with this technical
+// pattern; the dialog adds a plain-language explanation on top and keeps the
+// engine detail visible for diagnostics. The engine remains the authority —
+// nothing here intercepts or rewrites the value.
+const GEOGRAPHIC_CRS_ERROR_PATTERN = /resolves to GEOGRAPHIC_CRS/
 
 // New-project flow: the OS directory dialog stays in the desktop shell; the
 // engine owns project creation, naming rules, and canonical metadata. The
@@ -126,15 +133,10 @@ export function NewProjectDialog({ client, busy, onClose }: NewProjectDialogProp
         </div>
 
         <div className="form-row-pair">
-          <label className="form-row">
+          <div className="form-row">
             <span className="form-label">Horizontal CRS</span>
-            <input
-              className="form-input"
-              value={horizontalCrs}
-              onChange={(event) => setHorizontalCrs(event.target.value)}
-              placeholder="EPSG:32633"
-            />
-          </label>
+            <CrsPicker value={horizontalCrs} onChange={setHorizontalCrs} />
+          </div>
           <label className="form-row">
             <span className="form-label">Linear unit</span>
             <select className="form-input" value={linearUnit} onChange={(event) => setLinearUnit(event.target.value)}>
@@ -202,9 +204,20 @@ export function NewProjectDialog({ client, busy, onClose }: NewProjectDialogProp
         </div>
 
         {error ? (
-          <p className="form-error" role="alert">
-            {error}
-          </p>
+          <div className="form-error" role="alert">
+            {error && GEOGRAPHIC_CRS_ERROR_PATTERN.test(error) ? (
+              <>
+                <p>
+                  Project CRS must use linear coordinates such as metres or feet.{' '}
+                  {horizontalCrs.trim() ? `${horizontalCrs.trim()} uses` : 'The entered CRS uses'} latitude/longitude
+                  degrees.
+                </p>
+                <p className="form-error-detail">{error}</p>
+              </>
+            ) : (
+              <p>{error}</p>
+            )}
+          </div>
         ) : null}
 
         <div className="dialog-actions">

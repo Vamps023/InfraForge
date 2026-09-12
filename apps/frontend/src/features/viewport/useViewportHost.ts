@@ -33,12 +33,14 @@ export function useViewportHost(hostRef: RefObject<HTMLDivElement | null>): void
 
     const unsubscribeStatus = desktop.onViewportStatus?.((status) => setStatus(status))
 
+    // ResizeObserver delivers an initial entry after layout, so bounds are
+    // only ever sent with settled geometry (an immediate send here would
+    // race the first paint with a stale rect).
     const element = hostRef.current
     let observer: ResizeObserver | null = null
     if (element) {
       observer = new ResizeObserver(() => sendBounds())
       observer.observe(element)
-      sendBounds()
     }
 
     let dprQuery: MediaQueryList | null = null

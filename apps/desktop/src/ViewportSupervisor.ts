@@ -45,6 +45,7 @@ function isStatusState(value: unknown): value is ViewportStatus['state'] {
 // OS/process integration the desktop shell is responsible for.
 export class ViewportSupervisor {
   private child: ViewportChild | null = null
+  private starting = false
   private statusListener: ((status: ViewportStatus) => void) | null = null
   private status: ViewportStatus = {
     state: 'unavailable',
@@ -60,9 +61,10 @@ export class ViewportSupervisor {
   }
 
   async start(parentWindowHandle: Buffer, initialPlacement: ViewportPlacement): Promise<void> {
-    if (this.child) {
+    if (this.child || this.starting) {
       return
     }
+    this.starting = true
 
     const viewportPath = await resolveConfiguredViewportPath()
     if (!viewportPath) {
@@ -151,6 +153,9 @@ export class ViewportSupervisor {
         detail: error instanceof Error ? error.message : String(error),
       })
       this.killChild()
+      return
+    } finally {
+      this.starting = false
     }
   }
 

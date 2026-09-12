@@ -1,5 +1,7 @@
 #include "infraforge/viewport/renderer/VulkanSwapchain.hpp"
 
+#include "infraforge/viewport/renderer/SwapchainState.hpp"
+
 #include <cstdint>
 
 #include <algorithm>
@@ -41,21 +43,17 @@ void VulkanSwapchain::create(
     extent_.height = std::clamp(
         height, capabilities.minImageExtent.height, capabilities.maxImageExtent.height);
 
-    // Format preference: 8-bit UNORM BGRA; fall back to the first supported.
+    // Format preference: 8-bit UNORM BGRA with sRGB nonlinear; any other
+    // supported pair is taken verbatim (format and colorspace together).
     std::uint32_t formatCount = 0;
     VK_CHECK(vkGetPhysicalDeviceSurfaceFormatsKHR(physical, surface, &formatCount, nullptr),
         "surface format probe");
     std::vector<VkSurfaceFormatKHR> formats(formatCount);
     VK_CHECK(vkGetPhysicalDeviceSurfaceFormatsKHR(physical, surface, &formatCount, formats.data()),
         "surface format enumeration");
-    format_ = formats.front().format;
-    for (const VkSurfaceFormatKHR& format : formats) {
-        if (format.format == VK_FORMAT_B8G8R8A8_UNORM
-            && format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
-            format_ = VK_FORMAT_B8G8R8A8_UNORM;
-            break;
-        }
-    }
+    const VkSurfaceFormatKHR chosenFormat = selectSurfaceFormat(formats);
+    format_ = chosenFormat.format;
+    colorSpace_ = chosenFormat.colorSpace;
 
     // FIFO is always supported and vsync-appropriate for an editor viewport.
     const VkPresentModeKHR presentMode = VK_PRESENT_MODE_FIFO_KHR;
@@ -70,7 +68,7 @@ void VulkanSwapchain::create(
     createInfo.surface = surface;
     createInfo.minImageCount = imageCount;
     createInfo.imageFormat = format_;
-    createInfo.imageColorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+    createInfo.imageColorSpace = colorSpace_;
     createInfo.imageExtent = extent_;
     createInfo.imageArrayLayers = 1;
     createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;

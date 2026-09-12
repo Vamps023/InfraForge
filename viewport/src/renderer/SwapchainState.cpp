@@ -1,5 +1,7 @@
 #include "infraforge/viewport/renderer/SwapchainState.hpp"
 
+#include "infraforge/viewport/renderer/Vulkan.hpp"
+
 #include <vulkan/vulkan.h>
 
 namespace infraforge::viewport {
@@ -68,6 +70,24 @@ SwapchainDecision evaluateSwapchainFrame(const SwapchainInputs& inputs) {
     }
 
     return evaluatePresentedFrame(inputs, SwapchainHealth::Healthy);
+}
+
+VkSurfaceFormatKHR selectSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& formats) {
+    if (formats.empty()) {
+        throw RendererError(
+            "surface reports no supported (format, colorspace) pairs",
+            VK_ERROR_INITIALIZATION_FAILED);
+    }
+    for (const VkSurfaceFormatKHR& candidate : formats) {
+        if (candidate.format == VK_FORMAT_B8G8R8A8_UNORM
+            && candidate.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
+            return candidate;
+        }
+    }
+    // Take the first supported pair whole: falling back to the first format
+    // while keeping a different colorspace would combine halves the surface
+    // never offered together.
+    return formats.front();
 }
 
 } // namespace infraforge::viewport

@@ -56,7 +56,10 @@ private:
     std::vector<VkImage> images_;
     std::vector<UniqueVulkan<VkImageView>> imageViews_;
     std::vector<VkFramebuffer> framebuffers_;
+    // The (format, colorspace) pair the surface actually reported; halves
+    // must never be combined across supported pairs.
     VkFormat format_{VK_FORMAT_B8G8R8A8_UNORM};
+    VkColorSpaceKHR colorSpace_{VK_COLOR_SPACE_SRGB_NONLINEAR_KHR};
     VkExtent2D extent_{};
 };
 

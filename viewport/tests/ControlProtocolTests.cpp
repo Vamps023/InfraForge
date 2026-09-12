@@ -44,7 +44,6 @@ TEST_SUITE("viewport control protocol") {
     }
 
     TEST_CASE("malformed commands are rejected explicitly") {
-        using ParseCheck = std::function<void()>;
         const auto rejects = [](const std::string& line) {
             return captureException<CommandParseError>([&] { (void)parseControlCommand(line); });
         };

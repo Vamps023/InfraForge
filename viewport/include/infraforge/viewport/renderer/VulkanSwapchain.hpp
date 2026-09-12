@@ -2,6 +2,7 @@
 
 #include "infraforge/viewport/renderer/Vulkan.hpp"
 
+#include <cstddef>
 #include <vector>
 
 namespace infraforge::viewport {

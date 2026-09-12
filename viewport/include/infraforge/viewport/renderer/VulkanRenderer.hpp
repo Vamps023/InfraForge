@@ -15,6 +15,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace infraforge::viewport {
 

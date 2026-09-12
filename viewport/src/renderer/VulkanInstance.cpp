@@ -10,7 +10,9 @@
 #include <vulkan/vulkan.h>
 
 #include <array>
+#include <cstdint>
 #include <cstring>
+#include <vector>
 
 namespace infraforge::viewport {
 namespace {

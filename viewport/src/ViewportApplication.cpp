@@ -85,10 +85,6 @@ void readControlLines(std::istream& stream, ControlQueue& queue, const std::atom
     queue.push(ShutdownCommand{});
 }
 
-void applyPlacement(NativeSurface& surface, const SurfacePlacement& placement) {
-    surface.place(placement);
-}
-
 } // namespace
 
 bool parseApplicationArguments(
@@ -271,7 +267,7 @@ int runViewportApplication(const ApplicationArguments& arguments) {
             }
             if (auto* place = std::get_if<PlaceCommand>(&command)) {
                 try {
-                    applyPlacement(*surface, place->placement);
+                    surface->place(place->placement);
                     renderer.resize(place->placement.width, place->placement.height);
                 } catch (const NativeSurfaceError& error) {
                     reportStatus("failed", error.what());

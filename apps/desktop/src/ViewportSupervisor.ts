@@ -13,7 +13,7 @@ export interface ViewportPlacement {
 }
 
 export interface ViewportStatus {
-  state: 'unavailable' | 'starting' | 'ready' | 'suspended' | 'recreating' | 'failed' | 'stopped'
+  state: 'unavailable' | 'starting' | 'ready' | 'suspended' | 'recreating' | 'device_lost' | 'failed' | 'stopped'
   detail: string
   validation?: boolean
   gpu?: string
@@ -34,6 +34,7 @@ function isStatusState(value: unknown): value is ViewportStatus['state'] {
     value === 'ready' ||
     value === 'suspended' ||
     value === 'recreating' ||
+    value === 'device_lost' ||
     value === 'failed' ||
     value === 'stopped'
   )
@@ -77,16 +78,23 @@ export class ViewportSupervisor {
 
     this.publish({ state: 'starting', detail: 'Starting native viewport surface…' })
 
-    const child = spawn(
-      viewportPath,
-      [
+    const args = [
         '--parent-window', readWindowHandleHex(parentWindowHandle),
         '--screen-x', String(initialPlacement.screenX),
         '--screen-y', String(initialPlacement.screenY),
         '--width', String(initialPlacement.width),
         '--height', String(initialPlacement.height),
         '--dpi-scale', String(Math.round(initialPlacement.dpiScale * 100)),
-      ],
+    ]
+    if (process.env.INFRAFORGE_VIEWPORT_VALIDATE === '1') {
+      // Development validation mode: KHONOS validation findings are logged
+      // and treated as failures by the lifecycle verification process.
+      args.push('--validate')
+    }
+
+    const child = spawn(
+      viewportPath,
+      args,
       { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true },
     )
     this.child = child

@@ -1,6 +1,7 @@
 #include "infraforge/viewport/ViewportApplication.hpp"
 
 #include "infraforge/viewport/platform/SurfaceFactory.hpp"
+#include "infraforge/viewport/renderer/VulkanRenderer.hpp"
 #include "infraforge/runtime/Logging.hpp"
 
 #include <charconv>
@@ -102,13 +103,21 @@ bool parseApplicationArguments(
     bool haveHeight = false;
     bool haveDpi = false;
 
-    for (int index = 1; index < argc; index += 2) {
+    for (int index = 1; index < argc;) {
+        const std::string_view key{argv[index]};
+
+        if (key == "--validate") {
+            arguments.validationEnabled = true;
+            ++index;
+            continue;
+        }
+
         if (index + 1 >= argc) {
             errorMessage = "missing value for argument";
             return false;
         }
-        const std::string_view key{argv[index]};
         const std::string_view value{argv[index + 1]};
+        index += 2;
 
         const auto parseHex = [&](std::uint64_t& target, const std::uint64_t maximum) {
             const auto result = std::from_chars(value.data(), value.data() + value.size(), target, 16);
@@ -211,7 +220,6 @@ int runViewportApplication(const ApplicationArguments& arguments) {
     ControlQueue queue([&surface] { surface->requestWake(); });
 
     std::cout << formatReadyRecord(surface->placement(), surfacePlatformName()) << std::endl;
-    reportStatus("ready", "native surface embedded; renderer integration pending");
     runtime::logInfo("viewport", "surface.created",
         {{"parent", std::to_string(arguments.parentWindowHandle)},
             {"screenX", std::to_string(surface->placement().screenX)},
@@ -221,6 +229,20 @@ int runViewportApplication(const ApplicationArguments& arguments) {
             {"dpiScale", std::to_string(surface->placement().dpiScale)}});
 
     std::atomic_bool stdinStopped{false};
+    std::atomic_bool renderFailed{false};
+
+    VulkanRenderer renderer(
+        surface->nativeHandle(),
+        [](const RendererStatus& status) {
+            reportStatus(status.state, status.detail, status.gpuName, status.vulkanVersion, status.validationEnabled);
+        },
+        arguments.validationEnabled);
+    if (!renderer.start(surface->placement().width, surface->placement().height)) {
+        // The renderer published its failure diagnostics; keep serving the
+        // control protocol so the shell can shut the process down cleanly.
+        renderFailed.store(true, std::memory_order_relaxed);
+    }
+
     std::thread stdinThread([&queue, &stdinStopped] {
         readControlLines(std::cin, queue, stdinStopped);
     });
@@ -250,6 +272,7 @@ int runViewportApplication(const ApplicationArguments& arguments) {
             if (auto* place = std::get_if<PlaceCommand>(&command)) {
                 try {
                     applyPlacement(*surface, place->placement);
+                    renderer.resize(place->placement.width, place->placement.height);
                 } catch (const NativeSurfaceError& error) {
                     reportStatus("failed", error.what());
                     runtime::logError("viewport", "surface.place_failed", {{"detail", error.what()}});
@@ -259,8 +282,11 @@ int runViewportApplication(const ApplicationArguments& arguments) {
                 }
             } else if (auto* visibility = std::get_if<VisibilityCommand>(&command)) {
                 surface->setVisible(visibility->visible);
-                reportStatus(visibility->visible ? "ready" : "suspended",
-                    visibility->visible ? "surface visible" : "surface hidden by shell");
+                renderer.setVisible(visibility->visible);
+                if (renderFailed.load(std::memory_order_relaxed)) {
+                    reportStatus(visibility->visible ? "ready" : "suspended",
+                        visibility->visible ? "surface visible" : "surface hidden by shell");
+                }
             }
         }
     }
@@ -280,6 +306,7 @@ int runViewportApplication(const ApplicationArguments& arguments) {
 #endif
 
     stdinStopped.store(true, std::memory_order_relaxed);
+    renderer.stop();
     surface->requestClose();
     if (stdinThread.joinable()) {
         stdinThread.join();

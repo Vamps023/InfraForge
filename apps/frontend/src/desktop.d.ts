@@ -14,7 +14,7 @@ type EngineBootstrap =
   | Readonly<{ state: 'unavailable' | 'failed'; message: string }>
 
 type ViewportStatusPayload = Readonly<{
-  state: 'unavailable' | 'starting' | 'ready' | 'suspended' | 'recreating' | 'failed' | 'stopped'
+  state: 'unavailable' | 'starting' | 'ready' | 'suspended' | 'recreating' | 'device_lost' | 'failed' | 'stopped'
   detail: string
   validation?: boolean
   gpu?: string

@@ -11,6 +11,10 @@
       "default-features": false
     },
     "protobuf",
-    "sqlite3"
+    "shaderc",
+    "sqlite3",
+    "vulkan-headers",
+    "vulkan-loader",
+    "vulkan-validationlayers"
   ]
 }

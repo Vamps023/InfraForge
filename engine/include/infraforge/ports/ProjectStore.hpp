@@ -58,6 +58,12 @@ public:
     // when the copy fails.
     [[nodiscard]] virtual domain::project::ProjectRecord saveAs(const domain::project::SaveAsSpec& spec) = 0;
 
+    // Replaces the canonical georeference of the open project: rewrites the
+    // persisted configuration and the manifest discovery copy, advances the
+    // revision, and marks the session dirty until the next save.
+    [[nodiscard]] virtual domain::project::ProjectRecord updateGeoreference(
+        const domain::geo::GeoreferenceConfig& georeference) = 0;
+
     // Flushes and closes the active project session.
     virtual void close() = 0;
 };

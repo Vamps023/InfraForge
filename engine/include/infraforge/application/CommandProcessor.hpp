@@ -1,5 +1,6 @@
 #pragma once
 
+#include "infraforge/application/GeoService.hpp"
 #include "infraforge/application/ProjectService.hpp"
 #include "infraforge/ports/ProjectStore.hpp"
 
@@ -7,12 +8,17 @@
 #include <deque>
 #include <memory>
 #include <mutex>
+#include <span>
 #include <string>
 #include <string_view>
 #include <thread>
 
 namespace infraforge::protocol::v1 {
 class Frame;
+}
+
+namespace infraforge::domain::geo {
+class GeoTransformService;
 }
 
 namespace infraforge::application {
@@ -34,7 +40,10 @@ public:
 // time, emitting result frames and event frames through the sink.
 class CommandProcessor final {
 public:
-    CommandProcessor(ports::ProjectStore& store, CommandSink& sink);
+    CommandProcessor(
+        ports::ProjectStore& store,
+        const domain::geo::GeoTransformService& transforms,
+        CommandSink& sink);
     ~CommandProcessor();
 
     CommandProcessor(const CommandProcessor&) = delete;
@@ -59,13 +68,23 @@ private:
     void handleCreateProject(const std::string& connectionId, const protocol::v1::Frame& frame);
     void handleOpenProject(const std::string& connectionId, const protocol::v1::Frame& frame);
     void handleSaveProjectAs(const std::string& connectionId, const protocol::v1::Frame& frame);
+    void handleGetGeoreference(const std::string& connectionId, const protocol::v1::Frame& frame);
+    void handleSetGeoreference(const std::string& connectionId, const protocol::v1::Frame& frame);
+    void handleTransformToProjectGlobal(const std::string& connectionId, const protocol::v1::Frame& frame);
 
     // Executes one service use case, then emits the correlated result frame
     // (state or closed) and the derived event frames. Argument-validation
     // failures are handled by the handle* methods before reaching this.
     template <typename UseCase>
     void runServiceCommand(const std::string& connectionId, const protocol::v1::Frame& frame, UseCase&& useCase);
-    void publishEvents(const ProjectCommandResult& result);
+
+    // Shared command envelope: timing, CommandFailure/error translation,
+    // and structured logging. `emit` sends the result frame and publishes
+    // any events.
+    template <typename Emit>
+    void executeCommand(const std::string& connectionId, const protocol::v1::Frame& frame, Emit&& emit);
+
+    void publishEvents(std::span<const ProjectEvent> events);
 
     void sendFailureResult(const std::string& connectionId, const std::string& requestId, const CommandFailure& failure);
     void sendInternalErrorResult(
@@ -75,6 +94,7 @@ private:
 
     ports::ProjectStore& store_;
     ProjectService service_;
+    GeoService geoService_;
     CommandSink& sink_;
 
     std::thread executor_;

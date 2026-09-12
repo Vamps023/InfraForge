@@ -24,7 +24,7 @@ struct ProjectManifest {
     std::string createdAt;
     std::string databasePath{kDatabaseFileName};
     std::string minimumApplicationVersion;
-    domain::project::GeoreferenceConfig georeference;
+    domain::geo::GeoreferenceConfig georeference;
 };
 
 // Parses and validates project.json inside the given project directory.

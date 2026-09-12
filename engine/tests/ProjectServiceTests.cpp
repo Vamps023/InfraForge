@@ -11,7 +11,8 @@ TEST_SUITE("project service") {
     TEST_CASE("create opens the session and emits an opened event") {
         infraforge::testhelpers::ScratchDirectory scratch;
         infraforge::persistence::SqliteProjectStore store;
-        infraforge::application::ProjectService service(store);
+        infraforge::domain::geo::GeoTransformService transforms;
+        infraforge::application::ProjectService service(store, transforms);
 
         const auto result = service.create(infraforge::testhelpers::sampleCreateSpec(scratch.path()));
         REQUIRE(result.events.size() == 1);
@@ -24,7 +25,8 @@ TEST_SUITE("project service") {
     TEST_CASE("commands reject operation without an open project") {
         infraforge::testhelpers::ScratchDirectory scratch;
         infraforge::persistence::SqliteProjectStore store;
-        infraforge::application::ProjectService service(store);
+        infraforge::domain::geo::GeoTransformService transforms;
+        infraforge::application::ProjectService service(store, transforms);
 
         using infraforge::application::CommandFailure;
         using infraforge::application::CommandFailureCode;
@@ -41,7 +43,8 @@ TEST_SUITE("project service") {
     TEST_CASE("create and open reject a second concurrent session") {
         infraforge::testhelpers::ScratchDirectory scratch;
         infraforge::persistence::SqliteProjectStore store;
-        infraforge::application::ProjectService service(store);
+        infraforge::domain::geo::GeoTransformService transforms;
+        infraforge::application::ProjectService service(store, transforms);
 
         (void)service.create(infraforge::testhelpers::sampleCreateSpec(scratch.path()));
 
@@ -70,7 +73,8 @@ TEST_SUITE("project service") {
     TEST_CASE("close ends the session and emits a closed event; reopen works") {
         infraforge::testhelpers::ScratchDirectory scratch;
         infraforge::persistence::SqliteProjectStore store;
-        infraforge::application::ProjectService service(store);
+        infraforge::domain::geo::GeoTransformService transforms;
+        infraforge::application::ProjectService service(store, transforms);
 
         const auto created = service.create(infraforge::testhelpers::sampleCreateSpec(scratch.path()));
         const auto closed = service.close();
@@ -97,7 +101,8 @@ TEST_SUITE("project service") {
     TEST_CASE("save on a clean session is a no-op without events") {
         infraforge::testhelpers::ScratchDirectory scratch;
         infraforge::persistence::SqliteProjectStore store;
-        infraforge::application::ProjectService service(store);
+        infraforge::domain::geo::GeoTransformService transforms;
+        infraforge::application::ProjectService service(store, transforms);
         (void)service.create(infraforge::testhelpers::sampleCreateSpec(scratch.path()));
 
         // No mutation commands exist yet, so a fresh session is never dirty.
@@ -111,10 +116,87 @@ TEST_SUITE("project service") {
         store.close();
     }
 
+    TEST_CASE("open rejects a project whose persisted CRS cannot be resolved") {
+        infraforge::testhelpers::ScratchDirectory scratch;
+        infraforge::persistence::SqliteProjectStore store;
+        infraforge::domain::geo::GeoTransformService transforms;
+        infraforge::application::ProjectService service(store, transforms);
+
+        // Persist an invalid CRS directly through the store (the store does
+        // not validate georeferences; the service boundary does).
+        auto spec = infraforge::testhelpers::sampleCreateSpec(scratch.path());
+        spec.georeference.horizontalCrs = "not-a-crs";
+        const auto created = store.create(spec);
+        store.close();
+
+        using infraforge::application::CommandFailure;
+        using infraforge::application::CommandFailureCode;
+        bool rejected = false;
+        try {
+            (void)service.open(std::filesystem::path(created.directory));
+        } catch (const CommandFailure& failure) {
+            rejected = failure.code() == CommandFailureCode::InvalidArgument;
+        }
+        CHECK(rejected);
+        CHECK_FALSE(store.isOpen());
+
+        // The failed open leaves no half-open session: a valid project
+        // creates/opens normally afterwards.
+        auto validSpec = infraforge::testhelpers::sampleCreateSpec(scratch.path());
+        validSpec.displayName = "Valid Project";
+        (void)service.create(validSpec);
+        CHECK(store.isOpen());
+        store.close();
+    }
+
+    TEST_CASE("open rejects a project whose persisted CRS resolves but is unsupported") {
+        infraforge::testhelpers::ScratchDirectory scratch;
+        infraforge::persistence::SqliteProjectStore store;
+        infraforge::domain::geo::GeoTransformService transforms;
+        infraforge::application::ProjectService service(store, transforms);
+
+        // A geographic-only horizontal CRS is well-formed but unsupported
+        // as a project frame.
+        auto spec = infraforge::testhelpers::sampleCreateSpec(scratch.path());
+        spec.georeference.horizontalCrs = "EPSG:4326";
+        const auto created = store.create(spec);
+        store.close();
+
+        using infraforge::application::CommandFailure;
+        using infraforge::application::CommandFailureCode;
+        bool rejected = false;
+        try {
+            (void)service.open(std::filesystem::path(created.directory));
+        } catch (const CommandFailure& failure) {
+            rejected = failure.code() == CommandFailureCode::GeoUnsupported;
+        }
+        CHECK(rejected);
+        CHECK_FALSE(store.isOpen());
+    }
+
+    TEST_CASE("open rejects a project whose persisted vertical CRS is invalid") {
+        infraforge::testhelpers::ScratchDirectory scratch;
+        infraforge::persistence::SqliteProjectStore store;
+        infraforge::domain::geo::GeoTransformService transforms;
+        infraforge::application::ProjectService service(store, transforms);
+
+        auto spec = infraforge::testhelpers::sampleCreateSpec(scratch.path());
+        spec.georeference.verticalCrs = "not-a-vertical-crs";
+        const auto created = store.create(spec);
+        store.close();
+
+        using infraforge::application::CommandFailure;
+        CHECK_THROWS_AS(
+            (void)service.open(std::filesystem::path(created.directory)),
+            const CommandFailure&);
+        CHECK_FALSE(store.isOpen());
+    }
+
     TEST_CASE("save-as emits closed and opened events") {
         infraforge::testhelpers::ScratchDirectory scratch;
         infraforge::persistence::SqliteProjectStore store;
-        infraforge::application::ProjectService service(store);
+        infraforge::domain::geo::GeoTransformService transforms;
+        infraforge::application::ProjectService service(store, transforms);
         const auto created = service.create(infraforge::testhelpers::sampleCreateSpec(scratch.path()));
 
         infraforge::domain::project::SaveAsSpec saveAsSpec;

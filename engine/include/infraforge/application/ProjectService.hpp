@@ -1,12 +1,19 @@
 #pragma once
 
+#include "infraforge/domain/geo/ProjectGeoreference.hpp"
 #include "infraforge/domain/project/ProjectModel.hpp"
 #include "infraforge/ports/ProjectStore.hpp"
 
+#include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
+
+namespace infraforge::domain::geo {
+class GeoTransformService;
+}
 
 namespace infraforge::application {
 
@@ -21,6 +28,10 @@ enum class CommandFailureCode : std::uint8_t {
     SchemaVersionUnsupported,
     PersistenceFailure,
     Internal,
+    // Well-formed georeference/transform request that the canonical
+    // geospatial engine cannot satisfy (unsupported CRS kind, unavailable
+    // vertical transform, unsupported unit).
+    GeoUnsupported,
 };
 
 class CommandFailure : public std::runtime_error {
@@ -40,12 +51,15 @@ enum class ProjectEventKind : std::uint8_t {
     Closed,
     RevisionChanged,
     DirtyStateChanged,
+    GeoreferenceChanged,
 };
 
 struct ProjectEvent {
     ProjectEventKind kind;
     // State snapshot after the change. For Closed only `uuid` is meaningful.
     domain::project::ProjectRecord record;
+    // Resolved georeference snapshot carried by GeoreferenceChanged events.
+    std::optional<domain::geo::ProjectGeoreference> georeference = std::nullopt;
 };
 
 struct ProjectCommandResult {
@@ -61,7 +75,7 @@ struct ProjectCommandResult {
 // transport layer broadcasts. Runs on the single application executor.
 class ProjectService final {
 public:
-    explicit ProjectService(ports::ProjectStore& store);
+    ProjectService(ports::ProjectStore& store, const domain::geo::GeoTransformService& transforms);
 
     [[nodiscard]] ProjectCommandResult create(const domain::project::CreateProjectSpec& spec);
     [[nodiscard]] ProjectCommandResult open(const std::filesystem::path& projectDirectory);
@@ -72,6 +86,7 @@ public:
 
 private:
     ports::ProjectStore& store_;
+    const domain::geo::GeoTransformService& transforms_;
 };
 
 } // namespace infraforge::application

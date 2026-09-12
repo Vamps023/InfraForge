@@ -99,7 +99,8 @@ TEST_SUITE("command processor") {
         infraforge::testhelpers::ScratchDirectory scratch;
         infraforge::persistence::SqliteProjectStore store;
         RecordingSink sink;
-        infraforge::application::CommandProcessor processor(store, sink);
+        infraforge::domain::geo::GeoTransformService transforms;
+        infraforge::application::CommandProcessor processor(store, transforms, sink);
         processor.start();
 
         processor.post("conn-1", createCommandFrame("req-create", scratch.path()));
@@ -134,7 +135,8 @@ TEST_SUITE("command processor") {
         infraforge::testhelpers::ScratchDirectory scratch;
         infraforge::persistence::SqliteProjectStore store;
         RecordingSink sink;
-        infraforge::application::CommandProcessor processor(store, sink);
+        infraforge::domain::geo::GeoTransformService transforms;
+        infraforge::application::CommandProcessor processor(store, transforms, sink);
         processor.start();
 
         processor.post("conn-1", createCommandFrame("req-first", scratch.path()));
@@ -159,7 +161,8 @@ TEST_SUITE("command processor") {
         infraforge::testhelpers::ScratchDirectory scratch;
         infraforge::persistence::SqliteProjectStore store;
         RecordingSink sink;
-        infraforge::application::CommandProcessor processor(store, sink);
+        infraforge::domain::geo::GeoTransformService transforms;
+        infraforge::application::CommandProcessor processor(store, transforms, sink);
         processor.start();
 
         processor.post("conn-1", openCommandFrame("req-open", scratch.path() / "missing"));
@@ -180,7 +183,8 @@ TEST_SUITE("command processor") {
         infraforge::testhelpers::ScratchDirectory scratch;
         infraforge::persistence::SqliteProjectStore store;
         RecordingSink sink;
-        infraforge::application::CommandProcessor processor(store, sink);
+        infraforge::domain::geo::GeoTransformService transforms;
+        infraforge::application::CommandProcessor processor(store, transforms, sink);
         processor.start();
 
         processor.post("conn-1", createCommandFrame("req-create", scratch.path()));
@@ -230,7 +234,8 @@ TEST_SUITE("command processor") {
     TEST_CASE("an empty command envelope yields an invalid-argument error result") {
         infraforge::persistence::SqliteProjectStore store;
         RecordingSink sink;
-        infraforge::application::CommandProcessor processor(store, sink);
+        infraforge::domain::geo::GeoTransformService transforms;
+        infraforge::application::CommandProcessor processor(store, transforms, sink);
         processor.start();
 
         ProtocolFrame frame;
@@ -251,7 +256,8 @@ TEST_SUITE("command processor") {
         infraforge::testhelpers::ScratchDirectory scratch;
         infraforge::persistence::SqliteProjectStore store;
         RecordingSink sink;
-        infraforge::application::CommandProcessor processor(store, sink);
+        infraforge::domain::geo::GeoTransformService transforms;
+        infraforge::application::CommandProcessor processor(store, transforms, sink);
         processor.start();
 
         processor.post("conn-1", createCommandFrame("req-create", scratch.path()));
@@ -282,5 +288,148 @@ TEST_SUITE("command processor") {
             infraforge::protocol::v1::COMMAND_ERROR_CODE_PERSISTENCE_FAILURE);
 
         processor.shutdown();
+    }
+
+    TEST_CASE("geo commands query, mutate, and transform through the canonical path") {
+        infraforge::testhelpers::ScratchDirectory scratch;
+        infraforge::persistence::SqliteProjectStore store;
+        RecordingSink sink;
+        infraforge::domain::geo::GeoTransformService transforms;
+        infraforge::application::CommandProcessor processor(store, transforms, sink);
+        processor.start();
+
+        processor.post("conn-1", createCommandFrame("req-geo-create", scratch.path()));
+        REQUIRE(sink.waitForTotal(2, kWaitTimeout));
+
+        processor.post("conn-1", simpleCommandFrame(
+            "req-geo-get", [](auto* envelope) { envelope->mutable_get_georeference(); }));
+        REQUIRE(sink.waitForTotal(3, kWaitTimeout));
+
+        processor.post("conn-1", simpleCommandFrame(
+            "req-geo-transform",
+            [](auto* envelope) {
+                auto* command = envelope->mutable_transform_to_project_global();
+                command->set_source_crs("EPSG:4326");
+                auto* coordinate = command->add_coordinates();
+                coordinate->set_x(15.0);
+                coordinate->set_y(55.0);
+                coordinate->set_z(3.0);
+            }));
+        REQUIRE(sink.waitForTotal(4, kWaitTimeout));
+
+        processor.post("conn-1", simpleCommandFrame(
+            "req-geo-set",
+            [](auto* envelope) {
+                auto* command = envelope->mutable_set_georeference();
+                auto* georeference = command->mutable_georeference();
+                georeference->set_horizontal_crs("EPSG:32632");
+                georeference->set_linear_unit("metre");
+                georeference->set_axis_convention(
+                    infraforge::protocol::v1::AXIS_CONVENTION_EASTING_NORTHING_UP);
+                georeference->set_origin_easting(300000.0);
+                georeference->set_origin_northing(5500000.0);
+                georeference->set_origin_height(10.0);
+                command->set_expected_revision(1);
+            }));
+        // Four results (create, get, transform, set) plus four events
+        // (opened, georeference_changed, revision, dirty).
+        REQUIRE(sink.waitForTotal(8, kWaitTimeout));
+
+        const auto results = sink.results();
+        REQUIRE(results.size() == 4);
+
+        REQUIRE(results[1].result().has_georeference_state());
+        const auto& info = results[1].result().georeference_state().georeference();
+        CHECK_EQ(info.config().horizontal_crs(), "EPSG:32633");
+        CHECK_EQ(info.horizontal_crs().identifier(), "EPSG:32633");
+        CHECK_EQ(info.horizontal_crs().kind(), "PROJECTED_CRS");
+        CHECK(info.horizontal_crs().axis_unit_to_metre() == doctest::Approx(1.0));
+        CHECK_FALSE(info.vertical_reference().present());
+        CHECK_EQ(results[1].result().georeference_state().revision(), 1);
+
+        REQUIRE(results[2].result().has_transform_to_project_global());
+        const auto& positions = results[2].result().transform_to_project_global();
+        REQUIRE(positions.coordinates_size() == 1);
+        CHECK(std::abs(positions.coordinates(0).easting() - 500000.0) < 0.001);
+        CHECK(std::abs(positions.coordinates(0).northing() - 6094791.42) < 0.01);
+        CHECK(positions.coordinates(0).height() == doctest::Approx(3.0));
+
+        REQUIRE(results[3].result().has_georeference_state());
+        const auto& updated = results[3].result().georeference_state().georeference();
+        CHECK_EQ(updated.config().horizontal_crs(), "EPSG:32632");
+        CHECK_EQ(updated.config().origin_height(), doctest::Approx(10.0));
+        CHECK_EQ(results[3].result().georeference_state().revision(), 2);
+
+        const auto events = sink.events();
+        REQUIRE(events.size() == 4);
+        CHECK(events[0].event().has_project_opened());
+        REQUIRE(events[1].event().has_georeference_changed());
+        CHECK_EQ(events[1].event().georeference_changed().georeference().config().horizontal_crs(),
+            "EPSG:32632");
+        CHECK_EQ(events[1].event().georeference_changed().revision(), 2);
+        CHECK(events[2].event().has_project_revision_changed());
+        CHECK(events[3].event().has_project_dirty_state_changed());
+        CHECK(events[3].event().project_dirty_state_changed().dirty());
+
+        processor.shutdown();
+        store.close();
+    }
+
+    TEST_CASE("unsupported and invalid georeference input maps to typed error codes") {
+        infraforge::testhelpers::ScratchDirectory scratch;
+        infraforge::persistence::SqliteProjectStore store;
+        RecordingSink sink;
+        infraforge::domain::geo::GeoTransformService transforms;
+        infraforge::application::CommandProcessor processor(store, transforms, sink);
+        processor.start();
+
+        processor.post("conn-1", createCommandFrame("req-create", scratch.path()));
+        REQUIRE(sink.waitForTotal(2, kWaitTimeout));
+
+        const auto setGeoreferenceFrame = [](const std::string& requestId, const std::string& crs) {
+            return simpleCommandFrame(requestId,
+                [&crs](auto* envelope) {
+                    auto* command = envelope->mutable_set_georeference();
+                    auto* georeference = command->mutable_georeference();
+                    georeference->set_horizontal_crs(crs);
+                    georeference->set_linear_unit("metre");
+                    georeference->set_axis_convention(
+                        infraforge::protocol::v1::AXIS_CONVENTION_EASTING_NORTHING_UP);
+                });
+        };
+
+        processor.post("conn-1", setGeoreferenceFrame("req-geo-unsupported", "EPSG:4326"));
+        REQUIRE(sink.waitForTotal(3, kWaitTimeout));
+
+        processor.post("conn-1", setGeoreferenceFrame("req-geo-garbage", "junk"));
+        REQUIRE(sink.waitForTotal(4, kWaitTimeout));
+
+        processor.post("conn-1", simpleCommandFrame(
+            "req-geo-convention",
+            [](auto* envelope) {
+                auto* command = envelope->mutable_set_georeference();
+                command->mutable_georeference()->set_horizontal_crs("EPSG:32633");
+                command->mutable_georeference()->set_linear_unit("metre");
+                command->mutable_georeference()->set_axis_convention(
+                    infraforge::protocol::v1::AXIS_CONVENTION_UNSPECIFIED);
+            }));
+        REQUIRE(sink.waitForTotal(5, kWaitTimeout));
+
+        const auto results = sink.results();
+        REQUIRE(results.size() == 4);
+        REQUIRE(results[1].result().has_error());
+        CHECK_EQ(results[1].result().error().code(),
+            infraforge::protocol::v1::COMMAND_ERROR_CODE_GEO_UNSUPPORTED);
+        REQUIRE(results[2].result().has_error());
+        CHECK_EQ(results[2].result().error().code(),
+            infraforge::protocol::v1::COMMAND_ERROR_CODE_INVALID_ARGUMENT);
+        REQUIRE(results[3].result().has_error());
+        CHECK_EQ(results[3].result().error().code(),
+            infraforge::protocol::v1::COMMAND_ERROR_CODE_INVALID_ARGUMENT);
+
+        CHECK_EQ(sink.events().size(), 1);
+
+        processor.shutdown();
+        store.close();
     }
 }

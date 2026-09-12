@@ -30,7 +30,7 @@ TEST_SUITE("project domain model") {
     }
 
     TEST_CASE("georeference validation requires canonical configuration") {
-        using infraforge::domain::project::validateGeoreference;
+        using infraforge::domain::geo::validateGeoreference;
 
         auto valid = infraforge::testhelpers::sampleGeoreference();
         CHECK_FALSE(validateGeoreference(valid).has_value());
@@ -58,10 +58,11 @@ TEST_SUITE("project domain model") {
         }
         CHECK_FALSE(project::trafficSideFromName("middle").has_value());
 
-        const auto axis = project::AxisConvention::EastingNorthingUp;
-        const auto parsedAxis = project::axisConventionFromName(project::axisConventionName(axis));
+        namespace geo = infraforge::domain::geo;
+        const auto axis = geo::AxisConvention::EastingNorthingUp;
+        const auto parsedAxis = geo::axisConventionFromName(geo::axisConventionName(axis));
         REQUIRE(parsedAxis.has_value());
         CHECK(*parsedAxis == axis);
-        CHECK_FALSE(project::axisConventionFromName("northing_easting").has_value());
+        CHECK_FALSE(geo::axisConventionFromName("northing_easting").has_value());
     }
 }

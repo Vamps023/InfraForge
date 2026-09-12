@@ -2,7 +2,6 @@
 
 #include <array>
 #include <cctype>
-#include <cmath>
 
 namespace infraforge::domain::project {
 namespace {
@@ -43,21 +42,6 @@ std::optional<TrafficSide> trafficSideFromName(std::string_view name) noexcept {
     return std::nullopt;
 }
 
-std::string_view axisConventionName(AxisConvention convention) noexcept {
-    switch (convention) {
-    case AxisConvention::EastingNorthingUp:
-        return "easting_northing_up";
-    }
-    return "";
-}
-
-std::optional<AxisConvention> axisConventionFromName(std::string_view name) noexcept {
-    if (name == "easting_northing_up") {
-        return AxisConvention::EastingNorthingUp;
-    }
-    return std::nullopt;
-}
-
 std::optional<ValidationError> validateDisplayName(std::string_view name) {
     if (name.empty()) {
         return invalidName("project name must not be empty");
@@ -89,31 +73,6 @@ std::optional<ValidationError> validateDisplayName(std::string_view name) {
                 return invalidName("project name uses a reserved device name");
             }
         }
-    }
-    return std::nullopt;
-}
-
-std::optional<ValidationError> validateGeoreference(const GeoreferenceConfig& georeference) {
-    if (georeference.horizontalCrs.empty()) {
-        return ValidationError{.field = "georeference.horizontal_crs", .message = "horizontal CRS must not be empty"};
-    }
-    if (georeference.horizontalCrs.size() > 256) {
-        return ValidationError{.field = "georeference.horizontal_crs", .message = "horizontal CRS identifier is too long"};
-    }
-    if (georeference.linearUnit.empty()) {
-        return ValidationError{.field = "georeference.linear_unit", .message = "linear unit must not be empty"};
-    }
-    if (georeference.linearUnit.size() > 64) {
-        return ValidationError{.field = "georeference.linear_unit", .message = "linear unit identifier is too long"};
-    }
-    if (georeference.axisConvention != AxisConvention::EastingNorthingUp) {
-        return ValidationError{.field = "georeference.axis_convention", .message = "axis convention is unspecified"};
-    }
-    if (!std::isfinite(georeference.originEasting) || !std::isfinite(georeference.originNorthing)) {
-        return ValidationError{.field = "georeference.origin", .message = "project origin must be finite"};
-    }
-    if (georeference.verticalCrs.size() > 256) {
-        return ValidationError{.field = "georeference.vertical_crs", .message = "vertical CRS identifier is too long"};
     }
     return std::nullopt;
 }

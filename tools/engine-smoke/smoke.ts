@@ -19,11 +19,14 @@ import {
   CreateProjectCommandSchema,
   FrameSchema,
   GeoreferenceConfigSchema,
+  GetGeoreferenceCommandSchema,
   GetProjectSummaryCommandSchema,
   OpenProjectCommandSchema,
   ProtocolVersionSchema,
   SaveProjectCommandSchema,
+  SetGeoreferenceCommandSchema,
   TrafficSide,
+  TransformToProjectGlobalCommandSchema,
   type CommandEnvelope,
   type EventEnvelope,
   type ResultEnvelope,
@@ -274,9 +277,100 @@ async function main() {
     fail(`reopened project mismatch: uuid=${reopened.projectUuid} revision=${reopened.revision}`)
   }
 
-  // 6. Event stream sanity: opened events for create+reopen, closed for
-  // close. Events are broadcast after the correlated result, so allow the
-  // final event frames to arrive before judging the stream.
+  // 6. Canonical georeference query: resolved metadata + persisted config.
+  const geoOutcome = await sendCommand('smoke-geo-get', {
+    case: 'getGeoreference',
+    value: create(GetGeoreferenceCommandSchema, {}),
+  }).catch((error: unknown) => fail(`geo.get_georeference failed: ${String(error)}`))
+  if (geoOutcome.case !== 'georeferenceState' || !geoOutcome.value.georeference) {
+    fail(`geo.get_georeference returned ${geoOutcome.case ?? 'empty'} instead of georeferenceState`)
+  }
+  const geoInfo = geoOutcome.value.georeference
+  if (
+    geoInfo.config?.horizontalCrs !== 'EPSG:32633' ||
+    geoInfo.horizontalCrs?.identifier !== 'EPSG:32633' ||
+    geoInfo.horizontalCrs?.kind !== 'PROJECTED_CRS'
+  ) {
+    fail(`unexpected georeference info: ${JSON.stringify(geoInfo)}`)
+  }
+
+  // 7. Source->project transform through the Geo service. Control point:
+  // lon 15 is the UTM zone 33N central meridian (easting = 500000 m); the
+  // northing is k0 * meridional arc(55 deg) ~= 6094791.42 m.
+  const transformOutcome = await sendCommand('smoke-geo-transform', {
+    case: 'transformToProjectGlobal',
+    value: create(TransformToProjectGlobalCommandSchema, {
+      sourceCrs: 'EPSG:4326',
+      coordinates: [{ x: 15.0, y: 55.0, z: 0.0 }],
+    }),
+  }).catch((error: unknown) => fail(`geo.transform_to_project_global failed: ${String(error)}`))
+  if (transformOutcome.case !== 'transformToProjectGlobal') {
+    fail(`geo.transform returned ${transformOutcome.case ?? 'empty'} instead of transformToProjectGlobal`)
+  }
+  const transformed = transformOutcome.value.coordinates[0]
+  if (
+    !transformed ||
+    Math.abs(transformed.easting - 500000.0) > 0.001 ||
+    Math.abs(transformed.northing - 6094791.42) > 0.01
+  ) {
+    fail(`control-point transform mismatch: ${JSON.stringify(transformed)}`)
+  }
+  console.log(`smoke: transform verified E=${transformed.easting.toFixed(4)} N=${transformed.northing.toFixed(4)}`)
+
+  // 8. Canonical georeference update: persists, bumps revision, broadcasts.
+  const setOutcome = await sendCommand('smoke-geo-set', {
+    case: 'setGeoreference',
+    value: create(SetGeoreferenceCommandSchema, {
+      georeference: create(GeoreferenceConfigSchema, {
+        horizontalCrs: 'EPSG:32632',
+        linearUnit: 'metre',
+        axisConvention: AxisConvention.EASTING_NORTHING_UP,
+        originEasting: 300000.0,
+        originNorthing: 5500000.0,
+        originHeight: 12.5,
+        verticalCrs: 'EPSG:3855',
+      }),
+      expectedRevision: reopened.revision,
+    }),
+  }).catch((error: unknown) => fail(`geo.set_georeference failed: ${String(error)}`))
+  if (setOutcome.case !== 'georeferenceState' || setOutcome.value.georeference?.config?.horizontalCrs !== 'EPSG:32632') {
+    fail(`geo.set_georeference returned ${setOutcome.case ?? 'empty'} or the wrong CRS`)
+  }
+  if (setOutcome.value.revision !== reopened.revision + 1n) {
+    fail(`georeference update did not advance the revision (got ${setOutcome.value.revision})`)
+  }
+
+  // 9. save + close + reopen: the updated canonical georeference survives.
+  await sendCommand('smoke-save-2', {
+    case: 'saveProject',
+    value: create(SaveProjectCommandSchema, {}),
+  }).catch((error: unknown) => fail(`second save failed: ${String(error)}`))
+  await sendCommand('smoke-close-2', {
+    case: 'closeProject',
+    value: create(CloseProjectCommandSchema, {}),
+  }).catch((error: unknown) => fail(`second close failed: ${String(error)}`))
+  const reopen2Outcome = await sendCommand('smoke-reopen-2', {
+    case: 'openProject',
+    value: create(OpenProjectCommandSchema, { projectDirectory: created.directory }),
+  }).catch((error: unknown) => fail(`second reopen failed: ${String(error)}`))
+  const reopened2 = expectState(reopen2Outcome, 'project.open(2)')
+  const persistedGeo = reopened2.georeference
+  if (
+    persistedGeo?.horizontalCrs !== 'EPSG:32632' ||
+    persistedGeo.originHeight !== 12.5 ||
+    persistedGeo.verticalCrs !== 'EPSG:3855'
+  ) {
+    fail(`persisted georeference mismatch after reopen: ${JSON.stringify(persistedGeo)}`)
+  }
+  await sendCommand('smoke-close-3', {
+    case: 'closeProject',
+    value: create(CloseProjectCommandSchema, {}),
+  }).catch((error: unknown) => fail(`final close failed: ${String(error)}`))
+
+  // 10. Event stream sanity: opened events for create+reopens, closed for
+  // closes, georeference/revision/dirty events for the canonical update.
+  // Events are broadcast after the correlated result, so allow the final
+  // event frames to arrive before judging the stream.
   const waitForEventCount = async (count: number): Promise<void> => {
     const deadline = Date.now() + FRAME_TIMEOUT_MS
     while (receivedEvents.length < count) {
@@ -286,11 +380,12 @@ async function main() {
       await new Promise((resolveTimer) => setTimeout(resolveTimer, 25))
     }
   }
-  await waitForEventCount(3)
+  await waitForEventCount(9)
   const kinds = receivedEvents.map((event) => event.event.case)
   const openedCount = kinds.filter((kind) => kind === 'projectOpened').length
   const closedCount = kinds.filter((kind) => kind === 'projectClosed').length
-  if (openedCount < 2 || closedCount < 1) {
+  const geoChangedCount = kinds.filter((kind) => kind === 'georeferenceChanged').length
+  if (openedCount < 3 || closedCount < 2 || geoChangedCount < 1) {
     fail(`unexpected event stream: ${JSON.stringify(kinds)}`)
   }
 

@@ -6,6 +6,10 @@
     "doctest",
     "ixwebsocket",
     "nlohmann-json",
+    {
+      "name": "proj",
+      "default-features": false
+    },
     "protobuf",
     "sqlite3"
   ]

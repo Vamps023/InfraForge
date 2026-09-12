@@ -3,6 +3,7 @@
 #include <vulkan/vulkan.h>
 
 #include <cstdint>
+#include <vector>
 
 namespace infraforge::viewport {
 
@@ -42,5 +43,12 @@ struct SwapchainDecision {
 };
 
 [[nodiscard]] SwapchainDecision evaluateSwapchainFrame(const SwapchainInputs& inputs);
+
+// Selects the surface (format, colorspace) pair to create the swapchain
+// with: prefers VK_FORMAT_B8G8R8A8_UNORM with VK_COLOR_SPACE_SRGB_NONLINEAR_KHR
+// and otherwise falls back to the first supported pair verbatim. A surface
+// supports format/colorspace as pairs, so the halves must never be mixed.
+// Throws RendererError when the surface reports no supported pairs.
+[[nodiscard]] VkSurfaceFormatKHR selectSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& formats);
 
 } // namespace infraforge::viewport

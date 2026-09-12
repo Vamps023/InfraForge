@@ -1,8 +1,10 @@
 #include <doctest/doctest.h>
 
 #include "infraforge/viewport/renderer/SwapchainState.hpp"
+#include "infraforge/viewport/renderer/Vulkan.hpp"
 
 #include <array>
+#include <vector>
 
 namespace {
 
@@ -174,5 +176,39 @@ TEST_SUITE("swapchain lifecycle state machine") {
             .surfaceHeight = 720,
         });
         CHECK(decision.action == SwapchainAction::Fail);
+    }
+}
+
+TEST_SUITE("surface format selection") {
+    TEST_CASE("the preferred BGRA8 sRGB-nonlinear pair is selected when present") {
+        const std::vector<VkSurfaceFormatKHR> formats{
+            {VK_FORMAT_R8G8B8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR},
+            {VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR},
+            {VK_FORMAT_B8G8R8A8_SRGB, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR},
+        };
+        const auto chosen = infraforge::viewport::selectSurfaceFormat(formats);
+        CHECK(chosen.format == VK_FORMAT_B8G8R8A8_UNORM);
+        CHECK(chosen.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR);
+    }
+
+    TEST_CASE("the fallback preserves the entire supported format/colorspace pair") {
+        // Regression: the selector must never combine the first supported
+        // format with a colorspace the surface did not pair it with — not
+        // even when a later entry offers the preferred format with a
+        // mismatched colorspace.
+        const std::vector<VkSurfaceFormatKHR> formats{
+            {VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT},
+            {VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_HDR10_ST2084_EXT},
+        };
+        const auto chosen = infraforge::viewport::selectSurfaceFormat(formats);
+        CHECK(chosen.format == VK_FORMAT_R16G16B16A16_SFLOAT);
+        CHECK(chosen.colorSpace == VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT);
+    }
+
+    TEST_CASE("an empty format list fails explicitly") {
+        const std::vector<VkSurfaceFormatKHR> formats{};
+        CHECK_THROWS_AS(
+            static_cast<void>(infraforge::viewport::selectSurfaceFormat(formats)),
+            infraforge::viewport::RendererError);
     }
 }

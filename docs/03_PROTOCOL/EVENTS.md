@@ -22,11 +22,11 @@ These events are implemented in the C++ engine and verified by integration and s
 These event families are implemented and emitted by the canonical `CommandProcessor` execution path:
 
 ### Job lifecycle
-- `job.queued` (`job_queued`): Emitted when a command enters the processor queue. Carries job ID, operation name, label, target ID, and cancellable flag.
-- `job.started` (`job_started`): Emitted when command execution begins. Carries job ID.
+- `job.queued` (`job_queued`): Emitted by the application executor when an accepted command begins its observable job lifecycle, immediately before `job.started`. Commands discarded during shutdown before executor processing begins do not emit job lifecycle events. Carries job ID, operation name, label, target ID, and cancellable flag.
+- `job.started` (`job_started`): Emitted by the application executor immediately after `job.queued`, before command dispatch. Carries job ID.
 - `job.progress` (`job_progress`): Emitted only when a command produces real progress. Carries job ID, optional progress (0–1), optional processed/total (uint64 as bigint), and optional message. Absent fields are distinguishable from zero via protobuf `optional` semantics.
 - `job.completed` (`job_completed`): Emitted after successful command handling. Carries job ID.
-- `job.failed` (`job_failed`): Emitted on command failure. Carries job ID, stable error code, and error message.
+- `job.failed` (`job_failed`): Emitted on command failure, including pre-execution validation failures. Carries job ID, stable error code, and error message.
 - `job.cancelled` (`job_cancelled`): Defined in the protocol but not emitted by the current engine because no cancellation command exists.
 
 ### Diagnostics

@@ -5,6 +5,7 @@ import { GeoreferencePanel } from './features/geo/GeoreferencePanel'
 import { NewProjectDialog } from './features/project/NewProjectDialog'
 import { refreshProjectSummary } from './features/project/projectApi'
 import { subscribeProjectEvents } from './features/project/projectEvents'
+import { subscribeShellEvents } from './editor/shell/shellEventProjector'
 import { useProjectStore } from './features/project/projectStore'
 import { useViewportHost } from './features/viewport/useViewportHost'
 import { useViewportStore, viewportSurfaceActive } from './features/viewport/viewportStore'
@@ -17,7 +18,9 @@ import { EditorLayout } from './editor/layout/EditorLayout'
 import { Outliner } from './editor/outliner/Outliner'
 import { Inspector } from './editor/inspector/Inspector'
 import { registerBuiltinCommands, unregisterBuiltinCommands } from './editor/commands/builtinCommands'
+import { CommandPalette } from './editor/commands/CommandPalette'
 import { registerProjectOverviewSection, unregisterProjectOverviewSection } from './editor/inspector/projectOverviewSection'
+import { registerProjectRootProjection, unregisterProjectRootProjection } from './editor/outliner/projectRootProjection'
 import { useCommandContext, useCommandShortcuts } from './editor/commands/useCommands'
 import { useShellUiStore } from './editor/shell/shellUiStore'
 import { useProblemDiagnostics } from './editor/problems/useProblemDiagnostics'
@@ -129,9 +132,11 @@ export function App() {
   useEffect(() => {
     registerBuiltinCommands({ getEngineClient: () => engineSessionRef.current?.client ?? null })
     registerProjectOverviewSection()
+    registerProjectRootProjection()
     return () => {
       unregisterBuiltinCommands()
       unregisterProjectOverviewSection()
+      unregisterProjectRootProjection()
     }
   }, [])
 
@@ -174,8 +179,10 @@ export function App() {
       }
 
       const unsubscribe = subscribeProjectEvents(result.session.client)
+      const unsubscribeShell = subscribeShellEvents(result.session.client.onEvent)
       const disposeSession = () => {
         unsubscribe()
+        unsubscribeShell()
         result.session.dispose()
       }
 
@@ -227,6 +234,12 @@ export function App() {
       {openDialog === 'georeference' && engineSession && projectOpen ? (
         <GeoreferencePanel
           client={engineSession.client}
+          onClose={() => closeDialog()}
+        />
+      ) : null}
+      {openDialog === 'command-palette' ? (
+        <CommandPalette
+          context={commandContext}
           onClose={() => closeDialog()}
         />
       ) : null}

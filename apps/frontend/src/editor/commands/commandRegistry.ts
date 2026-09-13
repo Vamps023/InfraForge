@@ -46,7 +46,8 @@ export interface CommandDefinition {
   // UI surfaces where this command appears. Defaults to ['menu'].
   surfaces?: CommandSurface[]
   shortcut?: CommandShortcut
-  // Engine availability requirement. Defaults to true.
+  // Engine availability requirement. Defaults to false (command does not
+  // require the engine). Set to true for commands that issue engine commands.
   requiresEngine?: boolean
   // Project availability requirement. Defaults to false.
   requiresProject?: boolean
@@ -218,6 +219,18 @@ export function resolveCommandAvailability(
     return { enabled: false, disabledReason: 'Command is not available in this context.' }
   }
   return base
+}
+
+// Shared visibility helper. All UI surfaces (menu, toolbar, palette) and
+// shortcut dispatch use this so visibility behavior cannot drift. A command
+// with no `visible` predicate is always visible.
+export function isCommandVisible(command: CommandDefinition, context: CommandContext): boolean {
+  return command.visible ? command.visible(context) : true
+}
+
+// Returns the effective surfaces for a command, defaulting to ['menu'].
+export function commandSurfaces(command: CommandDefinition): CommandSurface[] {
+  return command.surfaces ?? ['menu']
 }
 
 // Executes a command by ID after gating. Returns false if the command was

@@ -6,7 +6,7 @@ import { create } from 'zustand'
 // local useState so the command registry remains the single entry point for
 // user actions.
 
-export type ShellDialog = 'new-project' | 'georeference' | null
+export type ShellDialog = 'new-project' | 'georeference' | 'command-palette' | null
 
 interface ShellUiState {
   openDialog: ShellDialog

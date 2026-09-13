@@ -25,8 +25,25 @@ function shortcut(key: string) {
   return { ...base, display: shortcutDisplayLabel(base) }
 }
 
+function shiftShortcut(key: string) {
+  const base = { key, ctrlOrCmd: true, shift: true }
+  return { ...base, display: shortcutDisplayLabel(base) }
+}
+
 export function registerBuiltinCommands(deps: BuiltinCommandDeps): void {
   const defs: CommandDefinition[] = [
+    {
+      id: 'command-palette.open',
+      label: 'Command Palette…',
+      description: 'Open the command palette to search and run any command.',
+      category: 'View',
+      group: 'palette',
+      surfaces: ['menu', 'shortcut'],
+      shortcut: shiftShortcut('p'),
+      execute: () => {
+        useShellUiStore.getState().openDialogCommand('command-palette')
+      },
+    },
     {
       id: 'project.new',
       label: 'New Project…',
@@ -170,6 +187,7 @@ export function registerBuiltinCommands(deps: BuiltinCommandDeps): void {
 
 export function unregisterBuiltinCommands(): void {
   const ids = [
+    'command-palette.open',
     'project.new',
     'project.open',
     'project.save',

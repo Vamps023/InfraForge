@@ -1,6 +1,8 @@
 import {
   executeCommand,
   resolveCommandAvailability,
+  isCommandVisible,
+  commandSurfaces,
   useCommandRegistrySnapshot,
   type CommandContext,
 } from '../commands/useCommands'
@@ -9,12 +11,12 @@ import {
 // central executeCommand path so gating is consistent with menu/shortcuts.
 // Only commands whose `surfaces` include 'toolbar' render here. `surfaces`
 // is the explicit placement concept; `category`/`group` remain for logical
-// organization and are never misused as UI placement.
+// organization and are never misused as UI placement. Invisible commands
+// are filtered out via the shared isCommandVisible helper.
 export function Toolbar({ context }: { context: CommandContext }) {
   const commands = useCommandRegistrySnapshot()
   const toolbarCommands = commands.filter((command) => {
-    const surfaces = command.surfaces ?? ['menu']
-    return surfaces.includes('toolbar')
+    return commandSurfaces(command).includes('toolbar') && isCommandVisible(command, context)
   })
 
   return (

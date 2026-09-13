@@ -11,6 +11,7 @@ import {
   probeTerrainSource,
 } from './terrainApi'
 import { useTerrainStore } from './terrainStore'
+import { DownloadAreaMap, type GeoBounds, type SelectionTileInfo } from './DownloadAreaMap'
 
 interface ImportTerrainDialogProps {
   client: EngineClient
@@ -424,27 +425,18 @@ function DownloadAreaImport({ client, onClose }: { client: EngineClient; onClose
     })()
   }, [client, area, tileSize, selectedIndices, selectedProvider])
 
-  const drawArea = () => {
-    // Simple coordinate input: user enters lat/lon bounds.
-    // In a production map UI, this would be a real map with drawing tools.
-    const westStr = prompt('West longitude (degrees):', '-105.5')
-    const southStr = prompt('South latitude (degrees):', '39.5')
-    const eastStr = prompt('East longitude (degrees):', '-105.0')
-    const northStr = prompt('North latitude (degrees):', '40.0')
-    if (!westStr || !southStr || !eastStr || !northStr) return
-    const west = parseFloat(westStr)
-    const south = parseFloat(southStr)
-    const east = parseFloat(eastStr)
-    const north = parseFloat(northStr)
-    if (!Number.isFinite(west) || !Number.isFinite(south) || !Number.isFinite(east) || !Number.isFinite(north)) {
-      setFormError('Invalid coordinates')
-      return
-    }
-    if (west >= east || south >= north) {
+  const handleAreaDraw = (drawnArea: GeoBounds) => {
+    // Validate the drawn area (BLOCKER 15: native validation also runs).
+    if (drawnArea.west >= drawnArea.east || drawnArea.south >= drawnArea.north) {
       setFormError('West must be less than east; south must be less than north')
       return
     }
-    setArea({ west, south, east, north })
+    if (drawnArea.west < -180 || drawnArea.east > 180 ||
+        drawnArea.south < -90 || drawnArea.north > 90) {
+      setFormError('Coordinates out of range (lon: [-180,180], lat: [-90,90])')
+      return
+    }
+    setArea(drawnArea)
     setSelectedIndices(new Set())
     setFormError(null)
   }
@@ -531,18 +523,32 @@ function DownloadAreaImport({ client, onClose }: { client: EngineClient; onClose
               <MapPin size={14} /> {area.west.toFixed(4)}, {area.south.toFixed(4)} → {area.east.toFixed(4)}, {area.north.toFixed(4)}
             </span>
           ) : (
-            <span className="form-static">No area drawn</span>
+            <span className="form-static">No area drawn — use the map below</span>
           )}
-          <button
-            className="button secondary"
-            type="button"
-            onClick={drawArea}
-            disabled={startedJobId !== null}
-          >
-            <Square size={14} /> Draw area
-          </button>
         </div>
       </div>
+
+      {/* BLOCKER 5: Real interactive map for Download Area UX */}
+      <DownloadAreaMap
+        area={area}
+        onAreaChange={handleAreaDraw}
+        selectionTiles={
+          plan
+            ? plan.selectionTiles.map((tile, i) => ({
+                index: i,
+                bounds: {
+                  west: tile.bounds?.west ?? 0,
+                  south: tile.bounds?.south ?? 0,
+                  east: tile.bounds?.east ?? 0,
+                  north: tile.bounds?.north ?? 0,
+                },
+                selected: selectedIndices.has(i),
+              }))
+            : []
+        }
+        onTileToggle={toggleTile}
+        tileSize={tileSize}
+      />
 
       <div className="form-row">
         <span className="form-label">Tile size</span>

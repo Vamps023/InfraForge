@@ -18,7 +18,7 @@ Entities retain canonical domain identity (`EntityId`, 128-bit UUID-compatible) 
 
 - Chunk *k* covers `[k*size, (k+1)*size)` for point mapping.
 - Bounds enumeration is conservative: a bounds ending exactly on a cell edge touches both adjacent cells, so invalidation never misses content that shares only an edge.
-- Chunk indices are supported in the symmetric range ±(2^53 − 1): doubles represent every integer up to 2^53, and at exactly 2^53 the cell footprint's `(k+1)` upper edge would round back onto `k` and collapse the cell. Beyond the range, mapping fails loudly instead of wrapping.
+- Two separate constraints bound the usable chunk range: (1) integer chunk indices have an absolute double-exactness ceiling at ±(2^53 − 1) (`maxExactChunkIndex`), beyond which indices cannot be converted to double coordinates exactly, and (2) actual usable cell extent depends on the configured chunk size — a cell exists only while its boundary products `k*size` and `(k+1)*size` remain finite, strictly increasing doubles. Once the products' floating-point spacing reaches the cell edge (for many valid sizes well below the ceiling), the cell collapses to zero width and mapping into or enumerating it fails loudly (`CoordinateOutOfRange`) instead of producing a degenerate footprint.
 
 ## Spatial index and chunk diffing
 

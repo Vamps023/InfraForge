@@ -45,11 +45,22 @@ part of chunk identity.
   bounds ending exactly on a cell edge dirties both adjacent cells. Empty
   bounds select no cells and an entity may temporarily have no spatial
   extent.
-- Chunk indices are supported in the symmetric range ±(2^53 − 1): at
-  exactly 2^53 the footprint's `(k+1)` upper edge would round back onto
-  `k` and collapse the cell. Mapping is rejected
-  (`CoordinateOutOfRange`) beyond that range, for non-finite input, and
-  when a bounds spans more than `ChunkGrid::maxEnumeratedChunks` cells.
+- Two separate constraints bound the usable chunk range:
+  1. **Integer exactness ceiling** — chunk indices have an absolute
+     double-exactness ceiling at ±(2^53 − 1) (`maxExactChunkIndex`), beyond
+     which indices cannot convert to double coordinates exactly. Mapping is
+     rejected (`CoordinateOutOfRange`) beyond that range, for non-finite
+     input, and when a bounds spans more than
+     `ChunkGrid::maxEnumeratedChunks` cells.
+  2. **Per-grid cell representability** — a cell is usable only while its
+     reconstructed boundaries `k*size` and `(k+1)*size` remain finite and
+     strictly increasing doubles. For ordinary chunk sizes the products'
+     floating-point spacing reaches the cell edge well below the integer
+     ceiling (where exactly depends on the configured size and unit), and
+     collapsed cells are rejected loudly by `chunkAt`, `chunkBounds`, and
+     `chunksIntersecting` instead of producing zero-width footprints.
+     There is therefore no single universal physical world extent — it
+     depends on the canonical unit and the configured chunk edge.
 
 ## Invalidation model
 

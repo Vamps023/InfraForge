@@ -79,16 +79,29 @@ struct ChunkGridConfig {
 //   chunksIntersecting enumerates every cell whose footprint intersects
 //   the closed bounds, so invalidation is conservative (never misses
 //   content) while a position maps to exactly one cell.
+// - A cell is usable only while its reconstructed boundaries k*size and
+//   (k+1)*size stay finite and strictly increasing; once they collapse
+//   (floating-point spacing reaches the cell edge), mapping into or
+//   enumerating that cell fails loudly instead of producing a zero-width
+//   footprint. The usable extent therefore depends on the configured
+//   chunk size, not on one universal world limit.
 //
 // Immutable value type; safe to share across threads by const-ness.
 class ChunkGrid {
 public:
-    // Largest chunk index the partition computes exactly and whose cell
-    // footprint stays representable: binary doubles represent every integer
-    // up to 2^53, and at exactly 2^53 the footprint's upper edge (k + 1)
-    // would round back down to k and collapse the cell to zero width — so
-    // the symmetric supported range is ±(2^53 - 1).
-    static constexpr double maxChunkIndex = 9007199254740991.0; // 2^53 - 1
+    // Absolute integer-exactness ceiling for chunk indices: binary doubles
+    // represent every integer up to 2^53, so indices beyond this cannot be
+    // converted to double coordinates exactly. This ceiling does NOT
+    // promise that every cell inside the range has a usable footprint —
+    // actual cell representability depends on the configured chunk size:
+    // the boundary products k*size and (k+1)*size must remain finite and
+    // strictly increasing doubles, and they collapse to zero width once
+    // the product's floating-point spacing reaches the cell edge (for a
+    // 1000-unit grid this happens a few quintillion units below the
+    // ceiling). Cells whose boundaries collapse are rejected loudly with
+    // WorldPartitionError (CoordinateOutOfRange) by chunkAt, chunkBounds,
+    // and chunksIntersecting — never clamped, wrapped, or snapped.
+    static constexpr double maxExactChunkIndex = 9007199254740991.0; // 2^53 - 1
 
     // Upper bound on cells enumerated for one bounds query; a bounds
     // spanning more cells than this is rejected instead of hanging the
@@ -127,17 +140,33 @@ public:
     // spanning more than maxEnumeratedChunks cells.
     [[nodiscard]] std::vector<ChunkCoord> chunksIntersecting(SpatialBounds bounds) const;
 
-    // Closed footprint of one cell: [x*size, (x+1)*size] x
-    // [y*size, (y+1)*size] — note the closed upper edge so that
-    // chunkBounds(cell).contains(...) matches chunkAt boundary semantics
-    // for the shared edge position. ChunkCoord is a public value type
-    // spanning all of int64, so coordinates outside the documented
-    // supported range (±maxChunkIndex) are rejected with
-    // WorldPartitionError (CoordinateOutOfRange) instead of producing a
-    // collapsed footprint.
+    // Closed footprint of one cell: [lower, upper] on each axis, where the
+    // edges are the grid's own reconstructed boundary products. ChunkCoord
+    // is a public value type spanning all of int64, so chunkBounds
+    // validates its input itself: coordinates outside the integer
+    // exactness ceiling, or cells whose boundary products collapse to a
+    // non-finite or zero-width interval for the configured chunk size, are
+    // rejected with WorldPartitionError (CoordinateOutOfRange) instead of
+    // producing a degenerate footprint.
     [[nodiscard]] SpatialBounds chunkBounds(ChunkCoord chunk) const;
 
 private:
+    // The two reconstructed boundaries of one axis cell. Valid cell
+    // boundaries are finite and strictly increasing.
+    struct AxisCellBounds {
+        double lower;
+        double upper;
+    };
+
+    // Single definition of cell representability, shared by axisIndex,
+    // chunkBounds, and chunksIntersecting (via axisIndex): validates the
+    // integer ceiling, reconstructs lower = k*size and upper =
+    // (k+1)*size, and throws WorldPartitionError (CoordinateOutOfRange)
+    // when the boundaries are non-finite or not strictly increasing. The
+    // ceiling check runs before index + 1 is formed, so the increment
+    // cannot overflow.
+    [[nodiscard]] AxisCellBounds checkedAxisCellBounds(std::int64_t index) const;
+
     [[nodiscard]] std::int64_t axisIndex(double value) const;
 
     ChunkGridConfig config_{};

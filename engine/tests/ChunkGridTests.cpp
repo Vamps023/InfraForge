@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -26,6 +27,47 @@ geo::ResolvedUnit usSurveyFootUnit() {
     // The exact US survey foot factor carried by the Geo domain's unit
     // database (1200/3937 metres per foot).
     return geo::ResolvedUnit{"foot_us", 1200.0 / 3937.0};
+}
+
+// Independent boundary classification used by the extreme-range tests: a
+// cell is collapsed when its configured-grid boundary products stop being
+// finite, strictly increasing doubles.
+bool cellIsCollapsed(const world::ChunkGrid& grid, const std::int64_t index) {
+    const auto lower = static_cast<double>(index) * grid.chunkSize();
+    const auto upper = static_cast<double>(index + 1) * grid.chunkSize();
+    return !std::isfinite(lower) || !std::isfinite(upper) || !(upper > lower);
+}
+
+struct ExtremeCells {
+    std::int64_t collapsed;
+    std::int64_t representable;
+};
+
+// Deterministic window search near the integer ceiling. Whether an
+// individual index collapses depends on where the rounding midpoints of
+// the product spacing fall, so the window is scanned for the first
+// collapsed cell and for the first cell whose successor is also
+// representable instead of hard-coding either. The scan runs on one side
+// of zero; the caller mirrors it for negative indices.
+ExtremeCells findExtremeCells(const world::ChunkGrid& grid, const bool positiveSide) {
+    const auto ceiling = static_cast<std::int64_t>(world::ChunkGrid::maxExactChunkIndex);
+    std::optional<std::int64_t> collapsed;
+    std::optional<std::int64_t> representablePair;
+    for (std::int64_t offset = 0; offset <= 1000000; ++offset) {
+        const auto index = positiveSide ? ceiling - offset : -ceiling + offset;
+        if (!collapsed.has_value() && cellIsCollapsed(grid, index)) {
+            collapsed = index;
+        }
+        if (!representablePair.has_value() && !cellIsCollapsed(grid, index)
+            && !cellIsCollapsed(grid, index + 1)) {
+            representablePair = index;
+        }
+        if (collapsed.has_value() && representablePair.has_value()) {
+            return ExtremeCells{*collapsed, *representablePair};
+        }
+    }
+    FAIL("no collapsed/representable cell pair found near the integer ceiling");
+    return ExtremeCells{0, 0};
 }
 
 } // namespace
@@ -329,6 +371,72 @@ TEST_SUITE("logical chunk grid") {
                 [&] { static_cast<void>(unit.chunkBounds(world::ChunkCoord{0, extreme})); });
             REQUIRE(yError.has_value());
             CHECK(yError->code() == world::WorldPartitionErrorCode::CoordinateOutOfRange);
+        }
+    }
+
+    TEST_CASE("cells whose boundary products collapse are rejected near the integer ceiling") {
+        // Integer exactness alone does not make a cell usable: for
+        // ordinary chunk sizes the reconstructed boundaries k*size and
+        // (k+1)*size collapse onto the same double well before the
+        // 2^53 - 1 ceiling, on the metre grid and on the US-survey-foot
+        // grid. Where exactly that happens depends on the rounding
+        // midpoints of the product spacing, so the window search pins the
+        // behavior without magic indices.
+        const world::ChunkGrid metreGrid{world::ChunkGridConfig{1000.0}};
+        const auto footGrid = world::ChunkGrid::fromMetreEdge(usSurveyFootUnit());
+
+        for (const auto* grid : {&metreGrid, &footGrid}) {
+            for (const auto positiveSide : {true, false}) {
+                CAPTURE(grid->chunkSize());
+                CAPTURE(positiveSide);
+                const auto extreme = findExtremeCells(*grid, positiveSide);
+
+                // The classification is independently reproducible.
+                CHECK(cellIsCollapsed(*grid, extreme.collapsed));
+                CHECK_FALSE(cellIsCollapsed(*grid, extreme.representable));
+                CHECK_FALSE(cellIsCollapsed(*grid, extreme.representable + 1));
+
+                // The collapsed cell is rejected as a footprint on both
+                // axes.
+                const auto xError = captureException<world::WorldPartitionError>([&] {
+                    static_cast<void>(grid->chunkBounds(world::ChunkCoord{extreme.collapsed, 0}));
+                });
+                REQUIRE(xError.has_value());
+                CHECK(xError->code() == world::WorldPartitionErrorCode::CoordinateOutOfRange);
+
+                const auto yError = captureException<world::WorldPartitionError>([&] {
+                    static_cast<void>(grid->chunkBounds(world::ChunkCoord{0, extreme.collapsed}));
+                });
+                REQUIRE(yError.has_value());
+                CHECK(yError->code() == world::WorldPartitionErrorCode::CoordinateOutOfRange);
+
+                // Point mapping must never return the collapsed cell: at
+                // the collapsed cell's own boundary coordinate it either
+                // fails loudly or resolves to the neighbouring higher
+                // representable cell sharing that zero-width edge.
+                const auto collapsedBoundary =
+                    static_cast<double>(extreme.collapsed) * grid->chunkSize();
+                const auto mappingError = captureException<world::WorldPartitionError>([&] {
+                    const auto mapped = grid->chunkAt(collapsedBoundary, 0.0);
+                    CHECK(mapped.x != extreme.collapsed);
+                    CHECK_FALSE(cellIsCollapsed(*grid, mapped.x));
+                });
+                if (mappingError.has_value()) {
+                    CHECK(mappingError->code()
+                        == world::WorldPartitionErrorCode::CoordinateOutOfRange);
+                }
+
+                // The representable cell keeps a full-width finite
+                // footprint whose closed edges classify exactly (its
+                // successor is representable too).
+                const auto bounds =
+                    grid->chunkBounds(world::ChunkCoord{extreme.representable, 0});
+                CHECK(bounds.maxEasting > bounds.minEasting);
+                CHECK(std::isfinite(bounds.minEasting));
+                CHECK(std::isfinite(bounds.maxEasting));
+                CHECK(grid->chunkAt(bounds.minEasting, 0.0).x == extreme.representable);
+                CHECK(grid->chunkAt(bounds.maxEasting, 0.0).x == extreme.representable + 1);
+            }
         }
     }
 

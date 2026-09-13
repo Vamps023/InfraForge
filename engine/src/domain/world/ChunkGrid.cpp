@@ -84,33 +84,42 @@ std::vector<ChunkCoord> ChunkGrid::chunksIntersecting(const SpatialBounds bounds
     return chunks;
 }
 
-SpatialBounds ChunkGrid::chunkBounds(const ChunkCoord chunk) const {
-    // ChunkCoord is a public value type, so its full int64 range can reach
-    // this call even though chunkAt never produces coordinates beyond
-    // maxChunkIndex. Enforce the documented supported range explicitly:
-    // beyond it the (k+1) footprint edge rounds back onto k and the cell
-    // would collapse to zero width instead of failing loudly.
-    const auto beyondRange = [](const std::int64_t axis) {
-        return std::abs(static_cast<double>(axis)) > maxChunkIndex;
-    };
-    if (beyondRange(chunk.x) || beyondRange(chunk.y)) {
+ChunkGrid::AxisCellBounds ChunkGrid::checkedAxisCellBounds(const std::int64_t index) const {
+    // Integer ceiling first: |index| <= 2^53 - 1, so forming index + 1
+    // below cannot overflow and converts to double exactly.
+    if (!(std::abs(static_cast<double>(index)) <= maxExactChunkIndex)) {
         throw WorldPartitionError{
             WorldPartitionErrorCode::CoordinateOutOfRange,
-            "chunk coordinate (" + std::to_string(chunk.x) + ", "
-                + std::to_string(chunk.y)
-                + ") is outside the supported chunk-index range"};
+            "chunk coordinate " + std::to_string(index)
+                + " is outside the exactly representable chunk-index range"};
     }
 
-    const auto x = static_cast<double>(chunk.x);
-    const auto y = static_cast<double>(chunk.y);
-    const auto size = config_.chunkSize;
-    const SpatialBounds footprint{x * size, y * size, (x + 1.0) * size, (y + 1.0) * size};
-    if (!footprint.isFinite()) {
+    const auto lower = static_cast<double>(index) * config_.chunkSize;
+    const auto upper = static_cast<double>(index + 1) * config_.chunkSize;
+
+    // A cell is usable only when its configured-grid boundaries survive
+    // reconstruction as a finite, strictly increasing interval. Near the
+    // ceiling the products' floating-point spacing reaches the cell edge
+    // for many valid chunk sizes and the two boundaries collapse onto the
+    // same double; such cells are rejected instead of silently returning a
+    // zero-width footprint.
+    if (!std::isfinite(lower) || !std::isfinite(upper) || !(upper > lower)) {
         throw WorldPartitionError{
             WorldPartitionErrorCode::CoordinateOutOfRange,
-            "chunk footprint is not representable in finite coordinates"};
+            "chunk cell " + std::to_string(index)
+                + " has no representable footprint for the configured chunk size "
+                + std::to_string(config_.chunkSize)};
     }
-    return footprint;
+    return AxisCellBounds{lower, upper};
+}
+
+SpatialBounds ChunkGrid::chunkBounds(const ChunkCoord chunk) const {
+    const auto x = checkedAxisCellBounds(chunk.x);
+    const auto y = checkedAxisCellBounds(chunk.y);
+    // Closed edges so that chunkBounds(cell).contains(...) matches chunkAt
+    // boundary semantics for the shared edge position. Finiteness and
+    // positive width are guaranteed by the checked boundaries.
+    return SpatialBounds::ofEdges(x.lower, y.lower, x.upper, y.upper);
 }
 
 std::int64_t ChunkGrid::axisIndex(const double value) const {
@@ -130,14 +139,19 @@ std::int64_t ChunkGrid::axisIndex(const double value) const {
         cell += 1.0;
     }
 
-    // The negated comparison also rejects NaN, and infinity on either side.
-    if (!(cell >= -maxChunkIndex && cell <= maxChunkIndex)) {
+    // The negated comparison also rejects NaN, and infinity on either
+    // side, before the double-to-int64 conversion.
+    if (!(cell >= -maxExactChunkIndex && cell <= maxExactChunkIndex)) {
         throw WorldPartitionError{
             WorldPartitionErrorCode::CoordinateOutOfRange,
             "coordinate " + std::to_string(value)
                 + " cannot be mapped to an exactly representable chunk index"};
     }
-    // cell is an integer with |cell| <= 2^53 - 1, so the cast is exact.
+    // The candidate cell itself must have a representable footprint:
+    // mapping a coordinate into a cell whose configured boundaries
+    // collapsed fails loudly instead of returning an unusable index. No
+    // scanning for a neighbouring cell, no clamping, no wrapping.
+    static_cast<void>(checkedAxisCellBounds(static_cast<std::int64_t>(cell)));
     return static_cast<std::int64_t>(cell);
 }
 

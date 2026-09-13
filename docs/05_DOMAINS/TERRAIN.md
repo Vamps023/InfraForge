@@ -1,6 +1,6 @@
 # Domain: Terrain
 
-**Status:** Issue #6 in progress. Both the local GeoTIFF import/sampling/tiling/renderer path and the `Download Area` draw/select/download-selected path are implemented on the issue branch. The Download Area path uses a mock terrain provider for deterministic testing; production providers will be added as verified adapters. Issue #6 remains open pending another full review of PR #28.
+**Status:** Issue #6 in progress. Both the local GeoTIFF import/sampling/tiling/renderer path and the `Download Area` draw/select/download-selected path are implemented on the issue branch. The Download Area path uses a real production terrain DEM provider (AWS Terrain Tiles / Terrarium) with proper HTTP fetch, GDAL-based PNG decoding, and canonical GeoTIFF assembly. A mock provider is retained for deterministic unit tests only. Issue #6 remains open pending manual runtime verification and final review of PR #28.
 
 The Terrain domain owns canonical elevation datasets imported from real georeferenced rasters or acquired from supported remote DEM providers. It is the first authoring-scale domain built on the World partition (issue #4) and the Geo service's single canonical georeference (ADR-0007).
 
@@ -48,13 +48,15 @@ Cancellation is cooperative at bounded checkpoints. A cancelled or pre-commit fa
 
 ### Map and selection UX
 
-The Terrain import surface provides `Local File` and `Download Area` modes. `Download Area` supports:
+The Terrain import surface provides `Local File` and `Download Area` modes. `Download Area` uses a real interactive Leaflet map (OpenStreetMap tiles with attribution) and supports:
 
-- geographic map navigation/search/go-to coordinates;
-- rectangular draw/resize of a working area;
+- geographic map pan/zoom with OpenStreetMap basemap;
+- click-and-drag rectangular drawing of a working area;
+- go-to latitude/longitude input;
+- visible selection grid overlay with selected/unselected styling;
 - deterministic application selection grid over the area;
 - 1 km, 2 km, 4 km, 8 km, and 16 km application selection tiles;
-- click-to-toggle individual tiles;
+- click-to-toggle individual tiles directly on the map;
 - Select All and Clear;
 - selected tile count / total tile count;
 - approximate selected area;
@@ -146,6 +148,24 @@ Retry is bounded. Typed remote failures distinguish at minimum authentication fa
 
 Unit/CI tests use deterministic mock/local provider responses and must not require public internet access.
 
+### Production terrain DEM provider
+
+The production terrain DEM provider is **AWS Terrain Tiles (Terrarium)**:
+
+- **Provider name:** `terrarium-aws`
+- **Endpoint:** `https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png`
+- **Elevation encoding:** Terrarium PNG — `height = (R * 256 + G + B/256) - 32768` (meters)
+- **CRS:** Web Mercator (EPSG:3857)
+- **Tile size:** 256×256 pixels
+- **Coverage:** Global
+- **Resolution:** ~76 m/pixel at zoom 11 (default)
+- **Authentication:** None required (AWS Open Data, S3 public bucket)
+- **Attribution:** Mapzen + USGS + NASA + other open data sources (see https://github.com/tilezen/joerd/blob/master/docs/attribution.md)
+- **License:** Various open data licenses (USGS public domain, NASA, etc.)
+- **Rate limits:** No published limits; bounded retry with exponential backoff handles transient failures
+
+The provider fetches PNG tiles via HTTP (ixwebsocket HttpClient), decodes Terrarium-encoded elevation values using GDAL, and writes temporary GeoTIFFs with proper CRS and geotransform for the canonical ingestion pipeline. The `MockTerrainProvider` is retained for deterministic unit tests only and is not exposed as a production user option.
+
 ## CRS flow
 
 All source↔canonical conversion goes through `GeoTransformService` (ADR-0007) — terrain never calls PROJ directly from domain/application code, never invents local coordinate math, and never reduces to float before the render boundary.
@@ -228,7 +248,7 @@ When a Vulkan-capable desktop and real provider access are available, validate r
 
 ## Limitations
 
-Until Issue #6 is complete, the `Download Area` selective remote acquisition path is a required missing capability even if local-file import is green.
+The `Download Area` selective remote acquisition path is implemented with a real production terrain DEM provider (AWS Terrain Tiles / Terrarium). Manual runtime verification (real HTTP download, real Vulkan rendering, real sampling) is pending. The automated test suite covers provider planning, dedup, error handling, and the full assembly pipeline using deterministic mock HTTP fixtures.
 
 Other known scope limits:
 

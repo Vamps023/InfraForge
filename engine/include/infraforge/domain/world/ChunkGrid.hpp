@@ -1,5 +1,6 @@
 #pragma once
 
+#include "infraforge/domain/geo/ProjectGeoreference.hpp"
 #include "infraforge/domain/world/SpatialBounds.hpp"
 
 #include <cstdint>
@@ -37,17 +38,23 @@ struct ChunkCoordHash {
     }
 };
 
-// Default logical chunk edge in the canonical project-global linear unit
-// (1 km for the canonical metre unit). The single definition point — call
-// sites reference this constant or a configured ChunkGridConfig value and
-// never hard-code the size.
-inline constexpr double defaultChunkSize = 1000.0;
+// Default logical chunk edge in **physical metres** (1 km, per
+// docs/02_DATA/WORLD_CHUNKS.md). This is the single definition point of the
+// physical default — call sites never hard-code the size. Project-global
+// coordinates are expressed in the project's canonical linear unit
+// (ADR-0007), so the metre edge must be converted through the resolved
+// linear unit (see ChunkGrid::fromMetreEdge); dividing canonical
+// coordinates by 1000 directly would silently produce ~305 m cells for a
+// US-survey-foot project.
+inline constexpr double defaultChunkEdgeMetres = 1000.0;
 
-// Validated-at-construction configuration of the logical chunk grid.
+// Edge length of one chunk cell expressed in the canonical linear unit of
+// project-global space. There is deliberately no default value: a grid edge
+// in project units is meaningless without knowing the project's unit, so
+// callers construct a grid through ChunkGrid::fromMetreEdge (the production
+// path) or state the project-unit edge explicitly.
 struct ChunkGridConfig {
-    // Positive finite cell edge length in the canonical linear unit of
-    // project-global space.
-    double chunkSize{defaultChunkSize};
+    double chunkSize;
 
     friend bool operator==(const ChunkGridConfig&, const ChunkGridConfig&) = default;
 };
@@ -68,10 +75,12 @@ struct ChunkGridConfig {
 // Immutable value type; safe to share across threads by const-ness.
 class ChunkGrid {
 public:
-    // Largest chunk index the partition computes exactly: binary doubles
-    // represent every integer up to 2^53, so beyond this neighbouring
-    // world coordinates could not be distinguished anyway.
-    static constexpr double maxChunkIndex = 9007199254740992.0; // 2^53
+    // Largest chunk index the partition computes exactly and whose cell
+    // footprint stays representable: binary doubles represent every integer
+    // up to 2^53, and at exactly 2^53 the footprint's upper edge (k + 1)
+    // would round back down to k and collapse the cell to zero width — so
+    // the symmetric supported range is ±(2^53 - 1).
+    static constexpr double maxChunkIndex = 9007199254740991.0; // 2^53 - 1
 
     // Upper bound on cells enumerated for one bounds query; a bounds
     // spanning more cells than this is rejected instead of hanging the
@@ -79,9 +88,19 @@ public:
     // configured grid is a modeling error, not a supported shape).
     static constexpr std::size_t maxEnumeratedChunks = 1000000;
 
-    ChunkGrid() = default;
-    // Throws WorldPartitionError (InvalidChunkSize) for non-finite or
-    // non-positive sizes.
+    // Production construction path: converts a physically specified edge
+    // (metres) into the canonical project-global unit through the resolved
+    // linear unit of the project georeference. A 1 km edge yields cells
+    // that are physically 1 km regardless of whether the project works in
+    // metres, US survey feet, or any other linear unit. Throws
+    // WorldPartitionError (InvalidLinearUnit) for a non-finite/non-positive
+    // unit factor and (InvalidChunkSize) for a non-finite/non-positive edge
+    // or a project-unit size that is not representable.
+    [[nodiscard]] static ChunkGrid fromMetreEdge(
+        const geo::ResolvedUnit& linearUnit, double edgeMetres = defaultChunkEdgeMetres);
+
+    // Explicit project-unit construction. Throws WorldPartitionError
+    // (InvalidChunkSize) for non-finite or non-positive sizes.
     explicit ChunkGrid(ChunkGridConfig config);
 
     [[nodiscard]] const ChunkGridConfig& config() const noexcept { return config_; }

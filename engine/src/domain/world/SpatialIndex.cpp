@@ -62,6 +62,9 @@ IndexMutation SpatialIndex::insert(
     }
     entities_.emplace(entity, Entry{bounds, chunks});
     ++revision_;
+    for (const auto chunk : chunks) {
+        chunkRevisions_[chunk] = revision_;
+    }
 
     IndexMutation mutation;
     mutation.entity = entity;
@@ -112,6 +115,11 @@ IndexMutation SpatialIndex::update(
     mutation.dirtyChunks = sortedChunkUnion(mutation.previousChunks, mutation.updatedChunks);
     mutation.classes = classes;
     mutation.revision = revision_;
+    // Exactly the dirty cells — old and new coverage — get a new content
+    // generation; unrelated cells keep theirs.
+    for (const auto chunk : mutation.dirtyChunks) {
+        chunkRevisions_[chunk] = revision_;
+    }
     return mutation;
 }
 
@@ -146,6 +154,9 @@ IndexMutation SpatialIndex::remove(const EntityId entity, const InvalidationMask
     mutation.dirtyChunks = std::move(previousChunks);
     mutation.classes = classes;
     mutation.revision = revision_;
+    for (const auto chunk : mutation.dirtyChunks) {
+        chunkRevisions_[chunk] = revision_;
+    }
     return mutation;
 }
 

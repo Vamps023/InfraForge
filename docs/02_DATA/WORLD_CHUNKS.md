@@ -8,7 +8,7 @@ Spatial bounds are axis-aligned rectangles in **project-global space** — the c
 
 ## Logical chunking
 
-The initial logical partition uses square cells with a default 1 km edge in project space (`defaultChunkSize = 1000` in the canonical linear unit). The value is project/runtime configuration (`ChunkGridConfig`), not encoded into entity identity, and is defined once rather than hard-coded at use sites.
+The initial logical partition uses square cells with a default **physical 1 km edge** (`defaultChunkEdgeMetres = 1000`, the single definition point of the physical default). Project-global coordinates are expressed in the project's canonical linear unit (ADR-0007), so the production grid is built through `ChunkGrid::fromMetreEdge(linearUnit, edgeMetres)`, which converts the metre edge through the resolved linear unit (`ResolvedUnit::toMetre`): a metre project and a US-survey-foot project get physically identical 1 km cells. There is no default project-unit edge — a grid in project units (`ChunkGridConfig`) always states its size explicitly. Chunk size is project/runtime configuration, not encoded into entity identity, and is never hard-coded at use sites.
 
 Cell identity (`ChunkCoord`, two signed 64-bit indices) comes from mathematical **floor division** of canonical coordinates: negative coordinates floor, never truncate toward zero, and a position exactly on a cell edge belongs to the higher cell. Cells are sparse and logical — chunk identity represents a spatial partition only, and never allocates a dense world matrix.
 
@@ -18,6 +18,7 @@ Entities retain canonical domain identity (`EntityId`, 128-bit UUID-compatible) 
 
 - Chunk *k* covers `[k*size, (k+1)*size)` for point mapping.
 - Bounds enumeration is conservative: a bounds ending exactly on a cell edge touches both adjacent cells, so invalidation never misses content that shares only an edge.
+- Chunk indices are supported in the symmetric range ±(2^53 − 1): doubles represent every integer up to 2^53, and at exactly 2^53 the cell footprint's `(k+1)` upper edge would round back onto `k` and collapse the cell. Beyond the range, mapping fails loudly instead of wrapping.
 
 ## Spatial index and chunk diffing
 
@@ -31,7 +32,7 @@ The canonical `SpatialIndex` maps stable entity ids to bounds and occupied cells
 
 ## Content classes and invalidation
 
-Changes declare typed invalidation classes — `geometry`, `material`, `topology`, `terrain`, `simulation` (`InvalidationClass`/`InvalidationMask`, composable per chunk) — so affected chunks are computed from old/new bounds plus the domain classes the change dirties. A chunk may reference derived payload for terrain, road render geometry, infrastructure, environment instances, simulation spatial data, and renderer acceleration structures.
+Every index mutation states its typed invalidation classes explicitly — `geometry`, `material`, `topology`, `terrain`, `simulation` (`InvalidationClass`/`InvalidationMask`, composable per chunk) — so affected chunks are computed from old/new bounds plus the domain classes the change dirties. An empty mask is a deliberate declaration ("no generated work"), never the path of least resistance. A chunk may reference derived payload for terrain, road render geometry, infrastructure, environment instances, simulation spatial data, and renderer acceleration structures.
 
 ## Streaming
 
@@ -39,4 +40,4 @@ Renderer residency is determined from camera/working-set policy, not total proje
 
 ## Generated data
 
-Chunk render/cache files carry versioned metadata — cache schema version, generator revision, and the canonical source revision they were derived from (`ChunkCacheMetadata`). Schema/tool/source drift marks the content stale and it is rebuilt instead of interpreted. Chunk caches are content-versioned, rebuildable, and never a storage location for canonical project data; no canonical entity exists exclusively because a chunk cache contains it.
+Chunk render/cache files carry versioned metadata — cache schema version, generator revision, and the canonical source revision they were derived from (`ChunkCacheMetadata`). The source revision for chunk-scoped content is the **per-chunk content generation** (`SpatialIndex::lastAffectingRevision(chunk)`), which advances only when a mutation dirties that specific cell; a distant one-entity edit therefore leaves unrelated chunk caches current and can never drag the whole world back to stale. Schema/tool drift marks the content stale and it is rebuilt instead of interpreted. Chunk caches are content-versioned, rebuildable, and never a storage location for canonical project data; no canonical entity exists exclusively because a chunk cache contains it.

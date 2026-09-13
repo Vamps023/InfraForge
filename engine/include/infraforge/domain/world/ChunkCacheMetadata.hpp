@@ -23,9 +23,12 @@ struct ChunkCacheMetadata {
     // the content. Generator changes mark old output stale even when the
     // canonical inputs are unchanged.
     std::uint64_t generatorRevision{0};
-    // Canonical-state revision the content was derived from (e.g. the
-    // project revision at generation time or the SpatialIndex revision —
-    // whichever monotonic canonical counter the generating system owns).
+    // Canonical-state revision the content was derived from. For
+    // chunk-scoped content this must be the per-chunk generation
+    // (SpatialIndex::lastAffectingRevision(chunk)) captured at generation
+    // time — never a global project/index revision, which every unrelated
+    // mutation advances and which would therefore drag the whole world
+    // back to stale on each local edit.
     std::uint64_t sourceRevision{0};
 
     friend bool operator==(const ChunkCacheMetadata&, const ChunkCacheMetadata&) = default;

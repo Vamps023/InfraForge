@@ -195,4 +195,136 @@ describe('ViewportSceneAdapter', () => {
       expect(parsed.revision).toBe('0')
     })
   })
+
+  // BLOCKER 20: Golden JSON fixture test that proves the exact chain:
+  // engine TerrainSceneResult → desktop adapter JSON → native parser expectations.
+  // This test catches future field-name drift.
+  describe('golden JSON fixture (BLOCKER 20)', () => {
+    it('produces JSON matching the viewport native parser contract', () => {
+      // Golden fixture: a scene with all field types represented.
+      const engineScene = {
+        originEasting: 500000,
+        originNorthing: 4650000,
+        originHeight: 100,
+        tiles: [
+          {
+            datasetUuid: 'ds-001',
+            datasetRevision: 12345n,
+            chunkX: 10n,
+            chunkY: -5n,
+            absolutePath: 'C:/projects/test/.iforge/terrain/tiles/ds-001_10_-5.iforgetile',
+            minEasting: 500000,
+            minNorthing: 4650000,
+            maxEasting: 501000,
+            maxNorthing: 4651000,
+          },
+          {
+            datasetUuid: 'ds-002',
+            datasetRevision: 67890n,
+            chunkX: -100n,
+            chunkY: 200n,
+            absolutePath: 'C:/projects/test/.iforge/terrain/tiles/ds-002_-100_200.iforgetile',
+            minEasting: 499000,
+            minNorthing: 4649000,
+            maxEasting: 500000,
+            maxNorthing: 4650000,
+          },
+        ],
+        missingTiles: 3n,
+        revision: 42n,
+      }
+
+      const result = adaptTerrainScene(engineScene)
+      expect(result).not.toBeNull()
+
+      // Serialize to JSON (this is what crosses the IPC boundary).
+      const json = JSON.stringify(result)
+      const parsed = JSON.parse(json)
+
+      // Verify the exact field names the native viewport parser expects.
+      expect(parsed.type).toBe('scene')
+      expect(parsed.originEasting).toBe(500000)
+      expect(parsed.originNorthing).toBe(4650000)
+      expect(parsed.originHeight).toBe(100)
+      expect(parsed.missingTiles).toBe('3')
+      expect(parsed.revision).toBe('42')
+
+      // Tile 0: verify all viewport-expected field names.
+      const tile0 = parsed.tiles[0]
+      expect(tile0.datasetUuid).toBe('ds-001')
+      expect(tile0.datasetRevision).toBe('12345')
+      expect(tile0.chunkX).toBe('10')
+      expect(tile0.chunkY).toBe('-5')
+      expect(tile0.path).toBe('C:/projects/test/.iforge/terrain/tiles/ds-001_10_-5.iforgetile')
+      expect(tile0.minE).toBe(500000)
+      expect(tile0.minN).toBe(4650000)
+      expect(tile0.maxE).toBe(501000)
+      expect(tile0.maxN).toBe(4651000)
+
+      // Verify protobuf field names are NOT present (no drift).
+      expect(tile0.absolutePath).toBeUndefined()
+      expect(tile0.minEasting).toBeUndefined()
+      expect(tile0.minNorthing).toBeUndefined()
+      expect(tile0.maxEasting).toBeUndefined()
+      expect(tile0.maxNorthing).toBeUndefined()
+
+      // Tile 1: verify signed chunk coordinates.
+      const tile1 = parsed.tiles[1]
+      expect(tile1.chunkX).toBe('-100')
+      expect(tile1.chunkY).toBe('200')
+      expect(tile1.path).toBe('C:/projects/test/.iforge/terrain/tiles/ds-002_-100_200.iforgetile')
+    })
+
+    it('empty scene golden fixture matches native parser expectations', () => {
+      const scene = emptyViewportScene()
+      const json = JSON.stringify(scene)
+      const parsed = JSON.parse(json)
+
+      // The native parser must handle an empty scene with all fields.
+      expect(parsed.type).toBe('scene')
+      expect(parsed.originEasting).toBe(0)
+      expect(parsed.originNorthing).toBe(0)
+      expect(parsed.originHeight).toBe(0)
+      expect(Array.isArray(parsed.tiles)).toBe(true)
+      expect(parsed.tiles).toHaveLength(0)
+      expect(parsed.missingTiles).toBe('0')
+      expect(parsed.revision).toBe('0')
+    })
+
+    it('preserves BigInt values beyond MAX_SAFE_INTEGER in JSON', () => {
+      const huge = BigInt(Number.MAX_SAFE_INTEGER) + 1n
+      const engineScene = {
+        originEasting: 0,
+        originNorthing: 0,
+        originHeight: 0,
+        tiles: [
+          {
+            datasetUuid: 'big',
+            datasetRevision: huge,
+            chunkX: huge,
+            chunkY: -huge,
+            absolutePath: '/big.tif',
+            minEasting: 0,
+            minNorthing: 0,
+            maxEasting: 1,
+            maxNorthing: 1,
+          },
+        ],
+        missingTiles: huge,
+        revision: huge,
+      }
+
+      const result = adaptTerrainScene(engineScene)
+      const json = JSON.stringify(result)
+      const parsed = JSON.parse(json)
+
+      // BigInt values must survive JSON round-trip as decimal strings.
+      const expected = huge.toString()
+      expect(parsed.tiles[0].datasetRevision).toBe(expected)
+      expect(parsed.tiles[0].chunkX).toBe(expected)
+      expect(parsed.tiles[0].chunkY).toBe('-' + expected)
+      expect(parsed.missingTiles).toBe(expected)
+      expect(parsed.revision).toBe(expected)
+    })
+  })
 })

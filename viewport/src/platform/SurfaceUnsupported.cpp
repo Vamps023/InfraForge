@@ -12,7 +12,7 @@ namespace {
 // (docs/01_ARCHITECTURE/PROCESS_MODEL.md).
 class UnsupportedSurface final : public NativeSurface {
 public:
-    void create(std::uint64_t, const SurfacePlacement&, bool) override {
+    void create(std::uint64_t, const SurfacePlacement&) override {
         throw NativeSurfaceError(
             "native child-surface embedding is not implemented on this platform; "
             "Windows is the first runtime acceptance platform for the viewport");

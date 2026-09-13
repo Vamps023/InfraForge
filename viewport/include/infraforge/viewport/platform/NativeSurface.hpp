@@ -16,15 +16,13 @@ class NativeSurface {
 public:
     virtual ~NativeSurface() = default;
 
-    // Creates the child surface inside the given parent window, initially
-    // visible or hidden per the shell's startup visibility decision — a
-    // surface created while a blocking overlay is open or the host window is
-    // minimized must never become visible before the first runtime
-    // visibility control command. Throws NativeSurfaceError on failure.
-    virtual void create(
-        std::uint64_t parentWindowHandle,
-        const SurfacePlacement& placement,
-        bool initialVisible) = 0;
+    // Creates the child surface inside the given parent window, always
+    // hidden. This is the flash invariant: no startup timing (overlay or
+    // minimize state changing while the process launches) can produce a
+    // visible window, because visibility only ever begins through the
+    // runtime visibility control path after the shell applies its policy.
+    // Throws NativeSurfaceError on failure.
+    virtual void create(std::uint64_t parentWindowHandle, const SurfacePlacement& placement) = 0;
 
     // Repositions/resizes the child surface to the given screen-coordinate
     // placement. Cheap; called on every shell layout change.

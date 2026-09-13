@@ -149,7 +149,11 @@ describe('ViewportSupervisor lifecycle', () => {
     await assertStartableAndStoppable(supervisor)
   })
 
-  it('passes --initial-visible 1 to the viewport process by default', async () => {
+  it('never passes visibility state to the spawned viewport process', async () => {
+    // Flash invariant: the native surface is always created hidden, so the
+    // spawn arguments must not carry any visibility decision — visibility
+    // begins only through the runtime control path after readiness. This
+    // guards against reintroducing a default-true startup visibility flag.
     await prepareFixture()
     const argvFile = path.join(workDir, 'argv.json')
     const supervisor = new ViewportSupervisor({
@@ -165,35 +169,11 @@ describe('ViewportSupervisor lifecycle', () => {
     expect(supervisor.snapshot().state).toBe('ready')
 
     const argv = JSON.parse(await readFile(argvFile, 'utf8')) as string[]
-    expect(argv).toContain('--initial-visible')
-    expect(argv[argv.indexOf('--initial-visible') + 1]).toBe('1')
+    expect(argv.some((arg) => arg.includes('visible'))).toBe(false)
+    expect(argv).toContain('--parent-window')
 
-    supervisor.stop()
-    await vi.waitUntil(() => supervisor.snapshot().state === 'stopped', { timeout: 5_000 })
-  })
-
-  it('passes --initial-visible 0 when startup visibility is hidden', async () => {
-    await prepareFixture()
-    const argvFile = path.join(workDir, 'argv.json')
-    const supervisor = new ViewportSupervisor({
-      commandOverride: {
-        executable: process.execPath,
-        leadingArgs: [fixturePath, modeFile, '', argvFile],
-      },
-      startupTimeoutMs: 3_000,
-    })
-
-    await setMode('ready')
-    await supervisor.start(parentWindowHandle, placement, { initialVisible: false })
-    expect(supervisor.snapshot().state).toBe('ready')
-
-    const argv = JSON.parse(await readFile(argvFile, 'utf8')) as string[]
-    expect(argv).toContain('--initial-visible')
-    expect(argv[argv.indexOf('--initial-visible') + 1]).toBe('0')
-
-    // The control path still works after a hidden startup: visibility=true
-    // flows through the normal set-visible channel (fixture exits on stdin
-    // close, proving the channel is alive).
+    // The runtime visibility channel still works after startup (the fixture
+    // exits cleanly on shutdown through stdin).
     supervisor.setVisible(true)
     supervisor.stop()
     await vi.waitUntil(() => supervisor.snapshot().state === 'stopped', { timeout: 5_000 })

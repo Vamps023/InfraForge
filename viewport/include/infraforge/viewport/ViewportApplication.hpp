@@ -21,10 +21,6 @@ struct ApplicationArguments {
     std::uint64_t parentWindowHandle{0};
     SurfacePlacement initialPlacement;
     bool validationEnabled{false};
-    // Shell's startup visibility decision: the child window is created
-    // visible or hidden accordingly, so a viewport started behind a blocking
-    // overlay never flashes. Runtime visibility stays on the control path.
-    bool initialVisible{true};
 };
 
 // Parses strict command-line arguments:

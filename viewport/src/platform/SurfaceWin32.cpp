@@ -54,10 +54,7 @@ Win32Surface::~Win32Surface() {
     }
 }
 
-void Win32Surface::create(
-    const std::uint64_t parentWindowHandle,
-    const SurfacePlacement& placement,
-    const bool initialVisible) {
+void Win32Surface::create(const std::uint64_t parentWindowHandle, const SurfacePlacement& placement) {
     if (handle_ != nullptr) {
         throw NativeSurfaceError("child surface already created");
     }
@@ -87,19 +84,17 @@ void Win32Surface::create(
     }
 
     // Initial size is 1x1; the first place() call sets the real geometry
-    // through the same code path the shell will keep using. WS_VISIBLE is
-    // applied only when the shell's startup visibility decision allows it:
-    // a surface created behind a blocking overlay must never flash before
-    // the first runtime visibility command. Renderer/surface setup below is
-    // identical either way; a hidden surface is shown later through the
-    // existing visibility control path (SW_SHOWNA, no activation steal).
-    const DWORD style = WS_CHILD | WS_CLIPSIBLINGS | WS_CLIPCHILDREN
-        | (initialVisible ? WS_VISIBLE : 0);
+    // through the same code path the shell will keep using. The window is
+    // ALWAYS created without WS_VISIBLE — the flash invariant. The surface
+    // (placement, Vulkan setup, control path) initializes identically while
+    // hidden and becomes visible only through the shell's visibility policy
+    // (visibility control path, SW_SHOWNA, no activation steal) after
+    // readiness, regardless of when overlays or minimize state change.
     const HWND window = CreateWindowExW(
         0,
         kClassName,
         L"InfraForge Viewport",
-        style,
+        WS_CHILD | WS_CLIPSIBLINGS | WS_CLIPCHILDREN,
         0, 0, 1, 1,
         parent,
         nullptr,

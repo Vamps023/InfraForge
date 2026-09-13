@@ -14,7 +14,7 @@ void printUsage(std::ostream& stream) {
         << "Usage:\n"
         << "  infraforge-viewport --parent-window <hex-hwnd> --screen-x <px> --screen-y <px>\n"
         << "                      --width <px> --height <px> --dpi-scale <milli-percent>\n"
-        << "                      [--initial-visible 0|1] [--validate]\n\n"
+        << "                      [--validate]\n\n"
         << "Control commands arrive as one JSON object per stdin line:\n"
         << "  {\"type\":\"place\",\"screenX\":..,\"screenY\":..,\"width\":..,\"height\":..,\"dpiScale\":..}\n"
         << "  {\"type\":\"visibility\",\"visible\":true}\n"

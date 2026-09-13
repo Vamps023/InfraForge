@@ -197,11 +197,6 @@ private:
     void untrackJob(const std::string& jobId);
     void cancelTrackedJobs();
 
-    // Download Area worker: acquires provider data, decodes, assembles
-    // canonical coverage, and commits through the same path as local import.
-    struct DownloadPayload;
-    void executeDownload(const DownloadPayload& payload, JobContext& context);
-
     ports::ProjectStore& store_;
     const domain::geo::GeoTransformService& transforms_;
     ports::TerrainSourceReader& reader_;

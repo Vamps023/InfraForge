@@ -43,12 +43,16 @@ export function applyProjectEvent(client: EngineClient, event: EventEnvelope) {
       // Clear terrain projection state: datasets belong to the closed project.
       useTerrainStore.getState().reset()
       // BLOCKER 3: send an empty scene to the viewport so the previous
-      // project's GPU terrain is released immediately.
+      // project's GPU terrain is released immediately. BLOCKER 7: use the
+      // typed adapter so the empty scene has the full viewport schema
+      // (missingTiles, revision) rather than a hand-built partial object.
       window.infraforgeDesktop?.setViewportScene?.({
         originEasting: 0,
         originNorthing: 0,
         originHeight: 0,
         tiles: [],
+        missingTiles: 0,
+        revision: 0,
       })
       break
     case 'projectRevisionChanged':

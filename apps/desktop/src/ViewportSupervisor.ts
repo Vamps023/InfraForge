@@ -3,6 +3,7 @@ import path from 'node:path'
 import readline from 'node:readline'
 import type { Readable, Writable } from 'node:stream'
 import { stat } from 'node:fs/promises'
+import { adaptTerrainScene, emptyViewportScene } from './ViewportSceneAdapter.js'
 
 export interface ViewportPlacement {
   screenX: number
@@ -122,12 +123,19 @@ export class ViewportSupervisor {
   }
 
   // Forwards the engine-derived terrain scene projection to the viewport.
-  // The shell treats this as opaque transport metadata: it validates the
-  // envelope shape and never interprets tile content. BigInt values
-  // (datasetRevision, chunkX, chunkY) are serialized as decimal strings so
-  // 64-bit values survive JSON transport losslessly (BLOCKER 8).
+  // BLOCKER 6: Uses an explicit adapter to map protobuf camelCase fields
+  // (absolutePath, minEasting, etc.) to the native viewport's expected
+  // field names (path, minE, etc.). BigInt values are serialized as
+  // decimal strings so 64-bit values survive JSON transport losslessly.
   sendScene(scene: Record<string, unknown>): void {
-    this.sendControl({ type: 'scene', ...scene })
+    const adapted = adaptTerrainScene(scene)
+    if (adapted) {
+      this.sendControl(adapted as unknown as Record<string, unknown>)
+    }
+  }
+
+  sendEmptyScene(): void {
+    this.sendControl(emptyViewportScene() as unknown as Record<string, unknown>)
   }
 
   setVisible(visible: boolean): void {

@@ -74,6 +74,10 @@ struct TerrainDataset {
     std::string sourceSha256;
     std::uint64_t sourceBytes{0};
 
+    // Attribution/provenance for remote-acquired terrain (BLOCKER 1).
+    // Required for providers that mandate attribution (e.g. AWS Terrain Tiles).
+    std::string sourceAttribution;
+
     // Per-dataset content revision; advances when canonical content is
     // re-ingested. Cache metadata records the revision it was derived from.
     std::uint64_t revision{1};

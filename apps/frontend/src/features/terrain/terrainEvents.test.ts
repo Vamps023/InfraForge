@@ -140,4 +140,124 @@ describe('terrain projection events', () => {
     expect(typeof job?.processed).toBe('bigint')
     expect(typeof job?.total).toBe('bigint')
   })
+
+  // BLOCKER 8: terrain.download must be recognized as a terrain job operation.
+  it('recognizes terrain.download as a terrain job operation', () => {
+    applyTerrainEvent(
+      client,
+      eventOf({
+        event: {
+          case: 'jobQueued',
+          value: {
+            jobId: 'job-dl-1',
+            operation: 'terrain.download',
+            label: 'downloading terrain',
+            cancellable: true,
+          },
+        },
+      }),
+    )
+    const jobs = useTerrainStore.getState().jobs
+    expect(jobs).toHaveLength(1)
+    expect(jobs[0]?.operation).toBe('terrain.download')
+    expect(jobs[0]?.state).toBe(JobState.QUEUED)
+  })
+
+  it('tracks terrain.download lifecycle through queued/started/progress/completed', () => {
+    applyTerrainEvent(
+      client,
+      eventOf({
+        event: {
+          case: 'jobQueued',
+          value: {
+            jobId: 'job-dl-2',
+            operation: 'terrain.download',
+            label: 'downloading terrain',
+            cancellable: true,
+          },
+        },
+      }),
+    )
+    applyTerrainEvent(
+      client,
+      eventOf({ event: { case: 'jobStarted', value: { jobId: 'job-dl-2' } } }),
+    )
+    applyTerrainEvent(
+      client,
+      eventOf({
+        event: {
+          case: 'jobProgress',
+          value: { jobId: 'job-dl-2', progress: 0.5, processed: 5n, total: 10n, message: 'downloading' },
+        },
+      }),
+    )
+    let jobs = useTerrainStore.getState().jobs
+    expect(jobs[0]?.state).toBe(JobState.RUNNING)
+    expect(jobs[0]?.progress).toBe(0.5)
+
+    applyTerrainEvent(
+      client,
+      eventOf({ event: { case: 'jobCompleted', value: { jobId: 'job-dl-2' } } }),
+    )
+    jobs = useTerrainStore.getState().jobs
+    expect(jobs[0]?.state).toBe(JobState.COMPLETED)
+  })
+
+  it('displays failure message for failed terrain.download jobs', () => {
+    applyTerrainEvent(
+      client,
+      eventOf({
+        event: {
+          case: 'jobQueued',
+          value: {
+            jobId: 'job-dl-3',
+            operation: 'terrain.download',
+            label: 'downloading terrain',
+            cancellable: true,
+          },
+        },
+      }),
+    )
+    applyTerrainEvent(
+      client,
+      eventOf({
+        event: {
+          case: 'jobFailed',
+          value: { jobId: 'job-dl-3', errorCode: 'PROVIDER_AUTH', errorMessage: 'authentication failed' },
+        },
+      }),
+    )
+    const jobs = useTerrainStore.getState().jobs
+    expect(jobs[0]?.state).toBe(JobState.FAILED)
+    expect(jobs[0]?.message).toBe('authentication failed')
+  })
+
+  it('refreshes scene when terrain.download completes', async () => {
+    const publisher = vi.fn()
+    const { setTerrainScenePublisher } = await import('./terrainEvents')
+    setTerrainScenePublisher(publisher)
+
+    applyTerrainEvent(
+      client,
+      eventOf({
+        event: {
+          case: 'jobQueued',
+          value: {
+            jobId: 'job-dl-4',
+            operation: 'terrain.download',
+            label: 'downloading terrain',
+            cancellable: true,
+          },
+        },
+      }),
+    )
+    applyTerrainEvent(
+      client,
+      eventOf({ event: { case: 'jobCompleted', value: { jobId: 'job-dl-4' } } }),
+    )
+    await vi.waitFor(() => {
+      expect(publisher).toHaveBeenCalled()
+    })
+    setTerrainScenePublisher(null)
+  })
 })

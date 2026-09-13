@@ -104,11 +104,13 @@ void TerrainTileCache::rebuildIndex() {
 double TerrainTileCache::tileCenterDistanceSquared(const Entry& entry, const TerrainCameraState& camera) const {
     // Convert tile canonical bounds to render-local before computing
     // distance, so the camera (render-local) and tile centers are in the
-    // same coordinate space.
+    // same coordinate space. BLOCKER 12: terrain vertices use
+    // Render Y = -north, so the tile center Y must be negated to match.
     const double centerE = (entry.tile.minEasting + entry.tile.maxEasting) * 0.5 - camera.originEasting;
     const double centerN = (entry.tile.minNorthing + entry.tile.maxNorthing) * 0.5 - camera.originNorthing;
+    const double renderY = -centerN;
     const double dx = centerE - camera.centerX;
-    const double dy = centerN - camera.centerY;
+    const double dy = renderY - camera.centerY;
     return dx * dx + dy * dy;
 }
 

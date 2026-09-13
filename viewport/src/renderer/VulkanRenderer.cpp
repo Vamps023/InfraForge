@@ -255,27 +255,31 @@ void VulkanRenderer::runLoop(std::atomic_bool& running) {
                 // operates in render-local coordinates (matching terrain
                 // vertices). BLOCKER 2: prevents canonical vs render-local
                 // coordinate mismatch for projects with large origins.
+                // BLOCKER 12: terrain vertices use Render Y = -north, so the
+                // camera center and extent must use the same negation to
+                // avoid a Y-axis mirror between geometry and camera.
                 renderOriginE_ = fitScene->originEasting;
                 renderOriginN_ = fitScene->originNorthing;
                 double minE = fitScene->tiles.front().minEasting - renderOriginE_;
                 double maxE = fitScene->tiles.front().maxEasting - renderOriginE_;
-                double minN = fitScene->tiles.front().minNorthing - renderOriginN_;
-                double maxN = fitScene->tiles.front().maxNorthing - renderOriginN_;
+                // Render Y = -(northing - originN), so min/max swap.
+                double minR = -(fitScene->tiles.front().maxNorthing - renderOriginN_);
+                double maxR = -(fitScene->tiles.front().minNorthing - renderOriginN_);
                 for (const TerrainSceneTile& tile : fitScene->tiles) {
                     minE = std::min(minE, tile.minEasting - renderOriginE_);
                     maxE = std::max(maxE, tile.maxEasting - renderOriginE_);
-                    minN = std::min(minN, tile.minNorthing - renderOriginN_);
-                    maxN = std::max(maxN, tile.maxNorthing - renderOriginN_);
+                    minR = std::min(minR, -(tile.maxNorthing - renderOriginN_));
+                    maxR = std::max(maxR, -(tile.minNorthing - renderOriginN_));
                 }
                 const double extentX = std::max(1.0, maxE - minE);
-                const double extentY = std::max(1.0, maxN - minN);
+                const double extentY = std::max(1.0, maxR - minR);
                 const double mpp = std::clamp(
                     std::max(extentX / static_cast<double>(width),
                         extentY / static_cast<double>(height)),
                     0.05, 100000.0);
                 camera_.setMetersPerPixel(mpp);
-                // Camera center in render-local coordinates.
-                camera_.setCenter((minE + maxE) * 0.5, (minN + maxN) * 0.5);
+                // Camera center in render-local coordinates (Y negated).
+                camera_.setCenter((minE + maxE) * 0.5, (minR + maxR) * 0.5);
                 cameraFitted_ = true;
             }
         }
@@ -295,7 +299,7 @@ void VulkanRenderer::runLoop(std::atomic_bool& running) {
                 camera_.setMetersPerPixel(mpp);
                 camera_.setCenter(
                     camera_.centerWorldX() - event.dragDx * mpp,
-                    camera_.centerWorldY() - event.dragDy * mpp);
+                    camera_.centerWorldY() + event.dragDy * mpp);
             }
         }
 

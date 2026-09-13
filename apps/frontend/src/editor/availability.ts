@@ -45,8 +45,16 @@ export function deriveAvailability(
   viewportState: ViewportState,
 ): AvailabilityContext {
   const engine = engineAvailabilityFromStatus(engineStatus)
-  // ready requires both the status projection and a live session client.
+  // ready requires BOTH the status projection AND a live session client.
+  // If the status says 'ready' but the session has not yet been installed,
+  // report 'starting' so requiresEngine commands stay disabled until the
+  // session is actually available.
   const engineReady = engine === 'ready' && engineSession !== null
+  const engineState: EngineAvailabilityState = engineReady
+    ? 'ready'
+    : engine === 'ready'
+      ? 'starting'
+      : engine
   const project: ProjectAvailabilityState =
     projectSummary === null
       ? 'no-project'
@@ -55,7 +63,7 @@ export function deriveAvailability(
         : 'project-open'
   const viewportActive = viewportSurfaceActive(viewportState)
   return {
-    engine: engineReady ? 'ready' : engine,
+    engine: engineState,
     engineMessage: engineStatus.message,
     project,
     viewportActive,

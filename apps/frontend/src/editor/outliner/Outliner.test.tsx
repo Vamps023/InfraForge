@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { render, screen, act } from '@testing-library/react'
+import { render, screen, act, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { Outliner } from './Outliner'
 import {
@@ -31,7 +31,7 @@ function makeProjection(
       }
     },
     emit: () => listener?.(),
-    setNodes: (next: OutlinerNode[]) => {
+    setNodes: (next) => {
       nodes = next
     },
   } as OutlinerProjection & { emit: () => void; setNodes: (nodes: OutlinerNode[]) => void }
@@ -167,12 +167,48 @@ describe('Outliner reactivity', () => {
     expect(screen.getByText('parent.child')).toBeInTheDocument()
     expect(screen.getByText('parent')).toBeInTheDocument()
   })
+})
 
-  it('tree rows are focusable (tabindex)', () => {
-    outlinerProjectionRegistry.register(makeProjection('infra', [node('a', null)]))
+describe('Outliner roving focus', () => {
+  it('exactly one treeitem has tabindex=0 when selection is empty', () => {
+    outlinerProjectionRegistry.register(
+      makeProjection('infra', [node('a', null), node('b', null), node('c', null)]),
+    )
     render(<Outliner />)
-    const row = screen.getByText('a').closest('[role="treeitem"]')!
-    expect(row).toHaveAttribute('tabindex')
+    const rows = screen.getAllByRole('treeitem')
+    const tabIndexZero = rows.filter((r) => r.getAttribute('tabindex') === '0')
+    const tabIndexMinusOne = rows.filter((r) => r.getAttribute('tabindex') === '-1')
+    expect(tabIndexZero).toHaveLength(1)
+    expect(tabIndexMinusOne).toHaveLength(2)
+    // The first row should be the roving focus target when nothing is selected.
+    expect(tabIndexZero[0]).toBe(rows[0])
+  })
+
+  it('keyboard-only Tab can enter the tree without a prior mouse click', async () => {
+    outlinerProjectionRegistry.register(
+      makeProjection('infra', [node('a', null), node('b', null)]),
+    )
+    render(<Outliner />)
+    const rows = screen.getAllByRole('treeitem')
+    // The first row has tabindex=0, so Tab from the search field should
+    // land on it.
+    const searchInput = screen.getByLabelText('Search outliner')
+    searchInput.focus()
+    await userEvent.tab()
+    expect(rows[0]).toHaveFocus()
+  })
+
+  it('selected item becomes the roving focus target', () => {
+    outlinerProjectionRegistry.register(
+      makeProjection('infra', [node('a', null), node('b', null), node('c', null)]),
+    )
+    useSelectionStore.getState().select(['b'])
+    render(<Outliner />)
+    const rows = screen.getAllByRole('treeitem')
+    const tabIndexZero = rows.filter((r) => r.getAttribute('tabindex') === '0')
+    expect(tabIndexZero).toHaveLength(1)
+    // The selected row 'b' (index 1) should be the roving focus target.
+    expect(tabIndexZero[0]).toBe(rows[1])
   })
 
   it('ArrowDown moves focus to the next tree row', async () => {
@@ -181,7 +217,7 @@ describe('Outliner reactivity', () => {
     )
     render(<Outliner />)
     const rows = screen.getAllByRole('treeitem')
-    await userEvent.click(rows[0]!)
+    rows[0]!.focus()
     await userEvent.keyboard('{ArrowDown}')
     expect(rows[1]).toHaveFocus()
   })
@@ -192,7 +228,7 @@ describe('Outliner reactivity', () => {
     )
     render(<Outliner />)
     const rows = screen.getAllByRole('treeitem')
-    await userEvent.click(rows[1]!)
+    rows[1]!.focus()
     await userEvent.keyboard('{ArrowUp}')
     expect(rows[0]).toHaveFocus()
   })
@@ -201,7 +237,7 @@ describe('Outliner reactivity', () => {
     outlinerProjectionRegistry.register(makeProjection('infra', [node('a', null)]))
     render(<Outliner />)
     const row = screen.getAllByRole('treeitem')[0]!
-    await userEvent.click(row)
+    row.focus()
     await userEvent.keyboard('{Enter}')
     expect(useSelectionStore.getState().selectedIds).toEqual(['a'])
   })
@@ -216,8 +252,8 @@ describe('Outliner reactivity', () => {
     render(<Outliner />)
     // Parent is collapsed; child is not visible.
     expect(screen.queryByText('parent.child')).not.toBeInTheDocument()
-    const parentRow = screen.getByText('parent').closest('[role="treeitem"]')!
-    await userEvent.click(parentRow)
+    const parentRow = screen.getByText('parent').closest('[role="treeitem"]') as HTMLElement
+    parentRow.focus()
     await userEvent.keyboard('{ArrowRight}')
     expect(screen.getByText('parent.child')).toBeInTheDocument()
   })
@@ -230,14 +266,93 @@ describe('Outliner reactivity', () => {
       ]),
     )
     render(<Outliner />)
-    const parentRow = screen.getByText('parent').closest('[role="treeitem"]')!
+    const parentRow = screen.getByText('parent').closest('[role="treeitem"]') as HTMLElement
     // First expand.
-    await userEvent.click(parentRow)
+    parentRow.focus()
     await userEvent.keyboard('{ArrowRight}')
     expect(screen.getByText('parent.child')).toBeInTheDocument()
     // Then collapse.
-    await userEvent.click(parentRow)
     await userEvent.keyboard('{ArrowLeft}')
     expect(screen.queryByText('parent.child')).not.toBeInTheDocument()
+  })
+
+  it('ArrowDown crosses a virtualization boundary and scrolls', async () => {
+    // Create enough nodes to exceed the default jsdom viewport.
+    // In jsdom, clientHeight is 0, so the Outliner mounts only
+    // OVERSCAN (6) rows. This test verifies that ArrowDown can move
+    // focus beyond the initial mounted slice by scrolling and
+    // re-mounting the target row.
+    const manyNodes: OutlinerNode[] = []
+    for (let i = 0; i < 50; i++) {
+      manyNodes.push(node(`item-${i}`, null))
+    }
+    outlinerProjectionRegistry.register(makeProjection('infra', manyNodes))
+    render(<Outliner />)
+    // Focus the first row.
+    const firstRow = screen.getAllByRole('treeitem')[0]!
+    firstRow.focus()
+    expect(firstRow).toHaveFocus()
+    // Press ArrowDown past the initial mounted slice (6 rows with
+    // OVERSCAN=6 and viewportHeight=0). The Outliner should scroll
+    // and focus each subsequent row.
+    for (let i = 1; i < 15; i++) {
+      await userEvent.keyboard('{ArrowDown}')
+      await waitFor(() => {
+        const focused = document.activeElement as HTMLElement | null
+        expect(focused?.getAttribute('role')).toBe('treeitem')
+        expect(focused?.dataset.nodeId).toBe(`item-${i}`)
+      })
+    }
+  })
+
+  it('ArrowUp crosses a virtualization boundary and scrolls', async () => {
+    const manyNodes: OutlinerNode[] = []
+    for (let i = 0; i < 50; i++) {
+      manyNodes.push(node(`item-${i}`, null))
+    }
+    outlinerProjectionRegistry.register(makeProjection('infra', manyNodes))
+    render(<Outliner />)
+    const tree = screen.getByRole('tree')
+    // Set a small viewport and scroll to the middle.
+    act(() => {
+      Object.defineProperty(tree, 'clientHeight', { value: 80, configurable: true })
+      Object.defineProperty(tree, 'scrollTop', { value: 500, configurable: true })
+      tree.dispatchEvent(new Event('scroll'))
+    })
+    // Find a row in the middle and focus it.
+    const rows = screen.getAllByRole('treeitem')
+    // Focus the last visible row in the current slice.
+    const lastRow = rows[rows.length - 1]!
+    lastRow.focus()
+    const startId = lastRow.dataset.nodeId
+    // Press ArrowUp to cross the boundary upward.
+    for (let i = 0; i < 5; i++) {
+      await userEvent.keyboard('{ArrowUp}')
+      const focused = document.activeElement as HTMLElement | null
+      expect(focused).not.toBeNull()
+      expect(focused?.getAttribute('role')).toBe('treeitem')
+    }
+    // The focused row should have moved up from the starting row.
+    const focused = document.activeElement as HTMLElement | null
+    expect(focused?.dataset.nodeId).not.toBe(startId)
+  })
+
+  it('tree rows have aria-level for flat virtualized tree', async () => {
+    outlinerProjectionRegistry.register(
+      makeProjection('infra', [
+        node('parent', null, true, 0),
+        node('parent.child', 'parent', false, 1),
+      ]),
+    )
+    render(<Outliner />)
+    // Expand the parent so the child is rendered.
+    const parentRow = screen.getByText('parent').closest('[role="treeitem"]') as HTMLElement
+    parentRow.focus()
+    await userEvent.keyboard('{ArrowRight}')
+    const rows = screen.getAllByRole('treeitem')
+    // Parent at depth 0 => aria-level=1
+    expect(rows[0]).toHaveAttribute('aria-level', '1')
+    // Child at depth 1 => aria-level=2
+    expect(rows[1]).toHaveAttribute('aria-level', '2')
   })
 })

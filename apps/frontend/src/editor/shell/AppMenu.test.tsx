@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen, within, act, fireEvent } from '@testing-library/react'
+import { render, screen, within, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { AppMenu } from './AppMenu'
 import { Toolbar } from './Toolbar'
@@ -109,7 +109,7 @@ describe('AppMenu reactivity', () => {
     await userEvent.click(screen.getByText('Project'))
     const dropdown = screen.getByRole('menu')
     const saveEntry = within(dropdown).getByText('Save Project').closest('button')!
-    expect(saveEntry).toBeDisabled()
+    expect(saveEntry).toHaveAttribute('aria-disabled', 'true')
   })
 
   it('Save is enabled when a project is open and engine is ready', async () => {
@@ -120,7 +120,7 @@ describe('AppMenu reactivity', () => {
     await userEvent.click(screen.getByText('Project'))
     const dropdown = screen.getByRole('menu')
     const saveEntry = within(dropdown).getByText('Save Project').closest('button')!
-    expect(saveEntry).not.toBeDisabled()
+    expect(saveEntry).toHaveAttribute('aria-disabled', 'false')
   })
 
   it('Save is disabled while a project operation is busy', async () => {
@@ -131,41 +131,65 @@ describe('AppMenu reactivity', () => {
     await userEvent.click(screen.getByText('Project'))
     const dropdown = screen.getByRole('menu')
     const saveEntry = within(dropdown).getByText('Save Project').closest('button')!
-    expect(saveEntry).toBeDisabled()
+    expect(saveEntry).toHaveAttribute('aria-disabled', 'true')
   })
 })
 
 describe('AppMenu keyboard navigation', () => {
-  it('Escape closes the open dropdown', async () => {
+  it('Escape closes the open dropdown and restores focus to trigger', async () => {
     act(() => {
       commandRegistry.register(makeCommand({ id: 'a', category: 'Project', label: 'Alpha' }))
       commandRegistry.register(makeCommand({ id: 'b', category: 'Project', label: 'Beta' }))
     })
     render(<AppMenu context={ctx(readyContext())} />)
-    await userEvent.click(screen.getByText('Project'))
+    const trigger = screen.getByText('Project').closest('button')!
+    await userEvent.click(trigger)
     expect(screen.getByRole('menu')).toBeInTheDocument()
-    // Focus a menu item so keyboard events bubble through the dropdown.
-    const dropdown = screen.getByRole('menu')
-    const items = within(dropdown).getAllByRole('menuitem')
-    await userEvent.click(items[0]!)
     await userEvent.keyboard('{Escape}')
     expect(screen.queryByRole('menu')).not.toBeInTheDocument()
+    expect(trigger).toHaveFocus()
   })
 
-  it('ArrowDown moves focus to the next menu item', async () => {
+  it('ArrowDown on trigger opens menu and focuses first item', async () => {
     act(() => {
       commandRegistry.register(makeCommand({ id: 'a', category: 'Project', label: 'Alpha' }))
       commandRegistry.register(makeCommand({ id: 'b', category: 'Project', label: 'Beta' }))
     })
     render(<AppMenu context={ctx(readyContext())} />)
-    await userEvent.click(screen.getByText('Project'))
-    const dropdown = screen.getByRole('menu')
-    const items = within(dropdown).getAllByRole('menuitem')
-    // Focus the first item so the dropdown's onKeyDown receives the event.
+    const trigger = screen.getByText('Project').closest('button')!
+    trigger.focus()
+    await userEvent.keyboard('{ArrowDown}')
+    expect(screen.getByRole('menu')).toBeInTheDocument()
+    const items = within(screen.getByRole('menu')).getAllByRole('menuitem')
+    expect(items[0]).toHaveFocus()
+  })
+
+  it('ArrowDown moves focus to the next menu item without manual focus', async () => {
     act(() => {
-      items[0]!.focus()
+      commandRegistry.register(makeCommand({ id: 'a', category: 'Project', label: 'Alpha' }))
+      commandRegistry.register(makeCommand({ id: 'b', category: 'Project', label: 'Beta' }))
     })
-    fireEvent.keyDown(dropdown, { key: 'ArrowDown' })
+    render(<AppMenu context={ctx(readyContext())} />)
+    const trigger = screen.getByText('Project').closest('button')!
+    trigger.focus()
+    await userEvent.keyboard('{ArrowDown}')
+    const items = within(screen.getByRole('menu')).getAllByRole('menuitem')
+    expect(items[0]).toHaveFocus()
+    await userEvent.keyboard('{ArrowDown}')
+    expect(items[1]).toHaveFocus()
+  })
+
+  it('ArrowUp on trigger opens menu and focuses last item', async () => {
+    act(() => {
+      commandRegistry.register(makeCommand({ id: 'a', category: 'Project', label: 'Alpha' }))
+      commandRegistry.register(makeCommand({ id: 'b', category: 'Project', label: 'Beta' }))
+    })
+    render(<AppMenu context={ctx(readyContext())} />)
+    const trigger = screen.getByText('Project').closest('button')!
+    trigger.focus()
+    await userEvent.keyboard('{ArrowUp}')
+    expect(screen.getByRole('menu')).toBeInTheDocument()
+    const items = within(screen.getByRole('menu')).getAllByRole('menuitem')
     expect(items[1]).toHaveFocus()
   })
 
@@ -175,14 +199,48 @@ describe('AppMenu keyboard navigation', () => {
       commandRegistry.register(makeCommand({ id: 'b', category: 'Project', label: 'Beta' }))
     })
     render(<AppMenu context={ctx(readyContext())} />)
-    await userEvent.click(screen.getByText('Project'))
-    const dropdown = screen.getByRole('menu')
-    const items = within(dropdown).getAllByRole('menuitem')
-    // Focus the second item, then ArrowUp should move to the first.
+    const trigger = screen.getByText('Project').closest('button')!
+    trigger.focus()
+    await userEvent.keyboard('{ArrowUp}')
+    const items = within(screen.getByRole('menu')).getAllByRole('menuitem')
+    expect(items[1]).toHaveFocus()
+    await userEvent.keyboard('{ArrowUp}')
+    expect(items[0]).toHaveFocus()
+  })
+
+  it('disabled entries do not trap keyboard navigation', async () => {
     act(() => {
-      items[1]!.focus()
+      commandRegistry.register(makeCommand({ id: 'a', category: 'Project', label: 'Alpha' }))
+      commandRegistry.register(
+        makeCommand({ id: 'b', category: 'Project', label: 'Beta', requiresProject: true }),
+      )
+      commandRegistry.register(makeCommand({ id: 'c', category: 'Project', label: 'Gamma' }))
     })
-    fireEvent.keyDown(dropdown, { key: 'ArrowUp' })
+    render(<AppMenu context={ctx(noProjectContext())} />)
+    const trigger = screen.getByText('Project').closest('button')!
+    trigger.focus()
+    await userEvent.keyboard('{ArrowDown}')
+    const items = within(screen.getByRole('menu')).getAllByRole('menuitem')
+    // First item (Alpha) is enabled and has focus.
+    expect(items[0]).toHaveFocus()
+    expect(items[0]).not.toHaveAttribute('aria-disabled', 'true')
+    // Beta requires a project and is aria-disabled.
+    expect(items[1]).toHaveAttribute('aria-disabled', 'true')
+    // ArrowDown should skip Beta and focus Gamma.
+    await userEvent.keyboard('{ArrowDown}')
+    expect(items[2]).toHaveFocus()
+  })
+
+  it('Enter on trigger opens menu and focuses first item', async () => {
+    act(() => {
+      commandRegistry.register(makeCommand({ id: 'a', category: 'Project', label: 'Alpha' }))
+    })
+    render(<AppMenu context={ctx(readyContext())} />)
+    const trigger = screen.getByText('Project').closest('button')!
+    trigger.focus()
+    await userEvent.keyboard('{Enter}')
+    expect(screen.getByRole('menu')).toBeInTheDocument()
+    const items = within(screen.getByRole('menu')).getAllByRole('menuitem')
     expect(items[0]).toHaveFocus()
   })
 })

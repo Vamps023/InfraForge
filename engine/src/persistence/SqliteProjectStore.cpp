@@ -488,6 +488,39 @@ ports::TerrainDatasetInsertResult SqliteProjectStore::insertTerrainDataset(
     return withinStoreBoundary([&] { return insertTerrainDatasetImpl(dataset); });
 }
 
+void SqliteProjectStore::removeTerrainDataset(const std::string& datasetId) {
+    withinStoreBoundary([&] { removeTerrainDatasetImpl(datasetId); });
+}
+
+void SqliteProjectStore::removeTerrainDatasetImpl(const std::string& datasetId) {
+    if (!connection_.has_value()) {
+        throw std::logic_error("cannot remove a terrain dataset without an open project session");
+    }
+    const std::string modifiedAt = runtime::utcTimestampNow();
+    {
+        SqliteTransaction transaction{*connection_};
+        SqliteStatement remove{*connection_,
+            "DELETE FROM terrain_datasets WHERE id = ?"};
+        remove.bindText(1, datasetId);
+        (void)remove.step();
+        if (connection_->lastChanges() != 1) {
+            fail(ports::StoreErrorCategory::NotFound,
+                "terrain dataset row not found for rollback: " + datasetId);
+        }
+        SqliteStatement state{*connection_,
+            "UPDATE project_state SET revision = revision + 1, modified_at = ? WHERE id = 1"};
+        state.bindText(1, modifiedAt);
+        (void)state.step();
+        if (connection_->lastChanges() != 1) {
+            fail(ports::StoreErrorCategory::PersistenceFailure,
+                "project_state row went missing during terrain dataset remove (corrupt project database)");
+        }
+        transaction.commit();
+    }
+    record_.revision += 1;
+    record_.modifiedAt = modifiedAt;
+}
+
 std::vector<domain::terrain::TerrainDataset> SqliteProjectStore::terrainDatasetsImpl() const {
     if (!connection_.has_value()) {
         throw std::logic_error("cannot read terrain datasets without an open project session");

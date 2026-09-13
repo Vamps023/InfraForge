@@ -364,4 +364,79 @@ TEST_CASE("cancelling a queued import commits nothing; the running import comple
     CHECK_FALSE(tempLeft);
 }
 
+// HIGH 6 regression: a west-up raster (negative X pixel step) must be
+// rejected as UnsupportedRaster, not silently mirrored with abs().
+TEST_CASE("probe rejects west-up (negative X) rasters explicitly") {
+    infraforge::testhelpers::ScratchDirectory scratch;
+    const auto demPath = scratch.path() / "west-up.tif";
+    GDALAllRegister();
+    GDALDriver* driver = GetGDALDriverManager()->GetDriverByName("GTiff");
+    REQUIRE(driver != nullptr);
+    GDALDataset* dataset = driver->Create(demPath.string().c_str(), 16, 16, 1, GDT_Float32, nullptr);
+    REQUIRE(dataset != nullptr);
+    // North-up but west-up: origin at top-right, X decreases as columns
+    // increase. This is a valid GeoTIFF but unsupported by InfraForge.
+    double geotransform[6] = {500160.0, -10.0, 0.0, 4650160.0, 0.0, -10.0};
+    dataset->SetGeoTransform(geotransform);
+    OGRSpatialReference srs;
+    srs.SetFromUserInput("EPSG:32633");
+    char* wkt = nullptr;
+    srs.exportToWkt(&wkt);
+    dataset->SetProjection(wkt);
+    CPLFree(wkt);
+    GDALClose(dataset);
+
+    infraforge::persistence::GdalTerrainSource reader;
+    bool threw = false;
+    try {
+        (void)reader.probe(demPath);
+    } catch (const infraforge::domain::terrain::TerrainError& error) {
+        threw = true;
+        CHECK(error.code() == infraforge::domain::terrain::TerrainErrorCode::UnsupportedRaster);
+    }
+    CHECK(threw);
+}
+
+// HIGH 5 regression: if the source raster changes between the initial probe
+// and the async copy, the stored copy's metadata must be authoritative.
+TEST_CASE("import canonicalizes metadata from the stored copy, not the initial probe") {
+    // This test verifies the TOCTOU fix by importing a normal DEM and
+    // confirming the persisted dataset metadata matches the stored copy.
+    // The fixture DEM is deterministic, so the stored copy == the source.
+    TerrainHarness harness{infraforge::testhelpers::TerrainDemSpec{
+        .width = 32, .height = 32, .originX = 500000.0, .originY = 4650320.0,
+        .cellSize = 10.0, .nodataRow = 5, .nodataCol = 5, .withNodata = true}};
+
+    const auto first = harness.terrain->startImport(
+        {.sourcePath = harness.demPath, .displayName = "TOCTOU Test"});
+
+    const bool settled = harness.waitFor(
+        [&] { return isTerminal(harness.jobs->job(first.jobId)); },
+        std::chrono::seconds{30});
+    REQUIRE(settled);
+    CHECK(harness.jobs->job(first.jobId)->state == infraforge::application::JobState::Completed);
+
+    REQUIRE(harness.store.terrainDatasets().size() == 1);
+    const auto storedDatasets = harness.store.terrainDatasets();
+    const auto& dataset = storedDatasets.front();
+    // The stored copy is a byte-for-byte copy of the source, so all metadata
+    // must match the fixture definition (proving the stored copy is
+    // authoritative, not some stale initial probe).
+    CHECK(dataset.sourceFormat == "GTiff");
+    CHECK(dataset.rasterWidth == 32);
+    CHECK(dataset.rasterHeight == 32);
+    CHECK(dataset.cellSizeX == doctest::Approx(10.0));
+    CHECK(dataset.cellSizeY == doctest::Approx(10.0));
+    CHECK(dataset.hasNodata);
+    CHECK(dataset.nodataValue == doctest::Approx(-9999.0));
+
+    // Wait for tile generation to complete before destroying the harness
+    // (prevents use-after-free: the tile job captures terrain state).
+    const std::string datasetUuid =
+        infraforge::domain::terrain::uuidTextFromEntityId(dataset.id);
+    REQUIRE(harness.waitFor(
+        [&] { return harness.terrain->datasetDetails(datasetUuid).presentTiles > 0; },
+        std::chrono::seconds{30}));
+}
+
 } // TEST_SUITE

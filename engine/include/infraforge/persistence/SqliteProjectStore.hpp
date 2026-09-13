@@ -40,6 +40,7 @@ public:
     [[nodiscard]] std::vector<domain::terrain::TerrainDataset> terrainDatasets() const override;
     [[nodiscard]] ports::TerrainDatasetInsertResult insertTerrainDataset(
         const domain::terrain::TerrainDataset& dataset) override;
+    void removeTerrainDataset(const std::string& datasetId) override;
     void close() override;
 
 private:
@@ -61,6 +62,7 @@ private:
     [[nodiscard]] std::vector<domain::terrain::TerrainDataset> terrainDatasetsImpl() const;
     [[nodiscard]] ports::TerrainDatasetInsertResult insertTerrainDatasetImpl(
         const domain::terrain::TerrainDataset& dataset);
+    void removeTerrainDatasetImpl(const std::string& datasetId);
     void closeImpl();
 
     [[nodiscard]] domain::project::ProjectRecord readRecord(const SqliteConnection& connection) const;

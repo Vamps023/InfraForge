@@ -387,22 +387,40 @@ void CommandProcessor::shutdown() {
     }
     signal_.notify_all();
 
-    // BLOCKER 5: deterministic shutdown order. Cancel active terrain jobs
-    // and join the JobSystem worker BEFORE joining the executor or destroying
-    // dependent services. This prevents use-after-free: the worker body
-    // captures TerrainService/reader state; once the worker is joined, no
-    // body can reference them. Completion callbacks posted to the executor
-    // are dropped (stopped_ = true) so they never run against destroyed
-    // services.
-    if (terrainService_) {
-        terrainService_->onProjectClosed();
+    // Deterministic shutdown order that prevents cross-thread mutation of
+    // executor-owned state:
+    //
+    // 1. Join the application executor FIRST. The executor is the sole
+    //    mutator of canonical project/terrain state (ProjectStore,
+    //    TerrainService datasets_, world_, etc.). Once stopped_ is true and
+    //    the queue is cleared, the executor finishes its current command
+    //    (if any) and returns. After the join, no thread mutates
+    //    executor-owned state.
+    //
+    // 2. Shut down the JobSystem (cancel + join the background worker). The
+    //    worker body captures TerrainService/reader state; TerrainService is
+    //    still alive (member of CommandProcessor, destroyed later). The
+    //    worker's completion callback would post to the executor, but
+    //    postTask() drops it (stopped_ = true), so no callback runs against
+    //    destroyed objects. The worker is joined before TerrainService is
+    //    destroyed, preventing use-after-free.
+    //
+    // 3. Call terrainService_->onProjectClosed() — now safe because both the
+    //    executor and the worker are dead; no concurrent access to
+    //    TerrainService state.
+    //
+    // This ordering cannot deadlock: the executor never waits for the worker
+    // to complete (command dispatch returns immediately after submitting a
+    // background job), so joining the executor before shutting down the
+    // JobSystem is safe.
+    if (executor_.joinable()) {
+        executor_.join();
     }
     if (jobs_) {
         jobs_->shutdown();
     }
-
-    if (executor_.joinable()) {
-        executor_.join();
+    if (terrainService_) {
+        terrainService_->onProjectClosed();
     }
 }
 

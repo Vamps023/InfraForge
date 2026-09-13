@@ -392,10 +392,32 @@ TerrainPass::TileGpu TerrainPass::uploadPayload(const TilePayload& payload) cons
     const VkDeviceSize vertexBytes = static_cast<VkDeviceSize>(payload.vertices.size() * sizeof(float));
     const VkDeviceSize indexBytes = static_cast<VkDeviceSize>(payload.indices.size() * sizeof(std::uint32_t));
 
+    // BLOCKER 3: an all-NoData tile legitimately produces zero indices. Skip
+    // all GPU allocation/upload when there is nothing to draw — Vulkan
+    // buffers must have size > 0. The render code checks indexCount == 0
+    // and skips drawing, so a TileGpu with VK_NULL_HANDLE buffers is safe.
+    if (indexBytes == 0) {
+        TileGpu empty;
+        empty.indexCount = 0;
+        return empty;
+    }
+
     // BLOCKER 7: portable GPU upload via host-visible staging buffer +
     // device-local final buffers. Does not require HOST_VISIBLE +
     // DEVICE_LOCAL on the same memory type (not available on discrete GPUs).
     // Handles non-coherent mapped memory with explicit flush.
+
+    // BLOCKER 2: for non-coherent memory, flush ranges must obey
+    // nonCoherentAtomSize alignment. We map the entire allocation and flush
+    // with VK_WHOLE_SIZE, which the Vulkan spec always accepts regardless of
+    // atom size. The atom size is queried for diagnostic logging only.
+    VkPhysicalDeviceProperties properties{};
+    vkGetPhysicalDeviceProperties(physical_, &properties);
+    const VkDeviceSize atomSize = properties.limits.nonCoherentAtomSize;
+    if (atomSize == 0) {
+        // Should never happen per the Vulkan spec, but guard defensively.
+        runtime::logWarn("viewport", "terrain.invalid_atom_size", {});
+    }
 
     const auto createBuffer = [&](const VkDeviceSize size, const VkBufferUsageFlags usage) {
         VkBufferCreateInfo info{};
@@ -410,6 +432,8 @@ TerrainPass::TileGpu TerrainPass::uploadPayload(const TilePayload& payload) cons
 
     // Allocate host-visible memory for a staging buffer. Prefer HOST_COHERENT
     // for simplicity; fall back to HOST_VISIBLE only and flush explicitly.
+    // Returns the allocation size (from VkMemoryRequirements::size) so the
+    // caller can map/flush the entire allocation, not just the payload bytes.
     const auto allocateStaging = [&](const VkBuffer buffer) {
         VkMemoryRequirements requirements{};
         vkGetBufferMemoryRequirements(device_, buffer, &requirements);
@@ -433,7 +457,7 @@ TerrainPass::TileGpu TerrainPass::uploadPayload(const TilePayload& payload) cons
         VkDeviceMemory raw = VK_NULL_HANDLE;
         VK_CHECK(vkAllocateMemory(device_, &alloc, nullptr, &raw), "terrain staging memory allocation");
         VK_CHECK(vkBindBufferMemory(device_, buffer, raw, 0), "terrain staging buffer bind");
-        return std::make_pair(raw, coherent);
+        return std::make_tuple(raw, coherent, requirements.size);
     };
 
     // Allocate device-local memory for the final vertex/index buffers.
@@ -451,17 +475,20 @@ TerrainPass::TileGpu TerrainPass::uploadPayload(const TilePayload& payload) cons
         return raw;
     };
 
-    // Map, copy, and flush (if non-coherent) a staging buffer.
-    const auto fillStaging = [&](const VkDeviceMemory memory, const VkDeviceSize size, const void* data, bool coherent) {
+    // Map the entire allocation, copy payload bytes, and flush if non-coherent.
+    // Using VK_WHOLE_SIZE for the flush range is always spec-valid when the
+    // entire allocation is mapped, regardless of nonCoherentAtomSize.
+    const auto fillStaging = [&](const VkDeviceMemory memory, const VkDeviceSize allocationSize,
+                                  const VkDeviceSize payloadSize, const void* data, bool coherent) {
         void* mapped = nullptr;
-        VK_CHECK(vkMapMemory(device_, memory, 0, size, 0, &mapped), "terrain staging map");
-        std::memcpy(mapped, data, static_cast<std::size_t>(size));
+        VK_CHECK(vkMapMemory(device_, memory, 0, allocationSize, 0, &mapped), "terrain staging map");
+        std::memcpy(mapped, data, static_cast<std::size_t>(payloadSize));
         if (!coherent) {
             VkMappedMemoryRange range{};
             range.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
             range.memory = memory;
             range.offset = 0;
-            range.size = size;
+            range.size = VK_WHOLE_SIZE; // Always spec-valid for full-allocation mapping
             VK_CHECK(vkFlushMappedMemoryRanges(device_, 1, &range), "terrain staging flush");
         }
         vkUnmapMemory(device_, memory);
@@ -505,8 +532,8 @@ TerrainPass::TileGpu TerrainPass::uploadPayload(const TilePayload& payload) cons
 
     // Vertex buffer: staging → device-local.
     VkBuffer vertexStaging = createBuffer(vertexBytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
-    auto [vertexStagingMemory, vertexCoherent] = allocateStaging(vertexStaging);
-    fillStaging(vertexStagingMemory, vertexBytes, payload.vertices.data(), vertexCoherent);
+    auto [vertexStagingMemory, vertexCoherent, vertexAllocSize] = allocateStaging(vertexStaging);
+    fillStaging(vertexStagingMemory, vertexAllocSize, vertexBytes, payload.vertices.data(), vertexCoherent);
     gpu.vertexBuffer = createBuffer(vertexBytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT);
     gpu.vertexMemory = allocateDeviceLocal(gpu.vertexBuffer);
     submitCopy(vertexStaging, gpu.vertexBuffer, vertexBytes);
@@ -515,8 +542,8 @@ TerrainPass::TileGpu TerrainPass::uploadPayload(const TilePayload& payload) cons
 
     // Index buffer: staging → device-local.
     VkBuffer indexStaging = createBuffer(indexBytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
-    auto [indexStagingMemory, indexCoherent] = allocateStaging(indexStaging);
-    fillStaging(indexStagingMemory, indexBytes, payload.indices.data(), indexCoherent);
+    auto [indexStagingMemory, indexCoherent, indexAllocSize] = allocateStaging(indexStaging);
+    fillStaging(indexStagingMemory, indexAllocSize, indexBytes, payload.indices.data(), indexCoherent);
     gpu.indexBuffer = createBuffer(indexBytes, VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT);
     gpu.indexMemory = allocateDeviceLocal(gpu.indexBuffer);
     submitCopy(indexStaging, gpu.indexBuffer, indexBytes);

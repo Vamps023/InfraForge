@@ -79,6 +79,7 @@ add_executable(infraforge-viewport-tests
     tests/SwapchainStateTests.cpp
     tests/TerrainSceneTests.cpp
     tests/TerrainTileCacheTests.cpp
+    tests/VulkanFlushRangeTests.cpp
     tests/ViewportApplicationTests.cpp
     tests/Win32DpiTests.cpp
 )

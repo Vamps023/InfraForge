@@ -81,11 +81,12 @@ public:
     // log record.
     void postTask(std::function<void()> task);
 
-    // Stops accepting work, cancels active terrain jobs, shuts down the
-    // JobSystem (joins the worker), and joins the executor. Idempotent; also
-    // invoked by the destructor. This deterministic shutdown order prevents
-    // use-after-free: the worker is joined before any dependent service is
-    // destroyed, and no callback may reference a destroyed TerrainService.
+    // Stops accepting work, joins the application executor (sole mutator of
+    // canonical state), then cancels/joins the JobSystem worker, then clears
+    // terrain session state. Idempotent; also invoked by the destructor.
+    // This ordering prevents cross-thread mutation of executor-owned state
+    // and use-after-free: the executor is dead before the worker is joined,
+    // and the worker is joined before TerrainService is touched or destroyed.
     void shutdown();
 
 private:

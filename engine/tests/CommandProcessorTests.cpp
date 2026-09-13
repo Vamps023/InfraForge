@@ -954,5 +954,43 @@ TEST_SUITE("command processor") {
         store.close();
     }
 
+    // BLOCKER 1 regression: repeated shutdown is idempotent and does not
+    // deadlock or crash. The executor is joined before the JobSystem worker,
+    // and onProjectClosed is called after both are dead.
+    TEST_CASE("repeated shutdown is idempotent") {
+        infraforge::testhelpers::ScratchDirectory scratch;
+        infraforge::persistence::SqliteProjectStore store;
+        RecordingSink sink;
+        infraforge::domain::geo::GeoTransformService transforms;
+        infraforge::application::CommandProcessor processor(store, transforms, sink);
+        processor.start();
+        processor.shutdown();
+        processor.shutdown(); // must not deadlock or crash
+        processor.shutdown(); // third time, still safe
+        store.close();
+    }
+
+    // BLOCKER 1 regression: shutdown while commands are queued does not
+    // crash and leaves no background worker alive.
+    TEST_CASE("shutdown while commands are queued is safe") {
+        infraforge::testhelpers::ScratchDirectory scratch;
+        infraforge::persistence::SqliteProjectStore store;
+        RecordingSink sink;
+        infraforge::domain::geo::GeoTransformService transforms;
+        infraforge::application::CommandProcessor processor(store, transforms, sink);
+        processor.start();
+
+        // Queue several commands rapidly without waiting for them.
+        for (int i = 0; i < 5; ++i) {
+            processor.post("conn-1", createCommandFrame("req-" + std::to_string(i), scratch.path()));
+        }
+
+        // Shut down immediately — some commands may still be queued.
+        processor.shutdown();
+
+        // No crash, no deadlock. The store can still be closed cleanly.
+        store.close();
+    }
+
 
 }

@@ -361,15 +361,19 @@ ports::TerrainSourceInfo GdalTerrainSource::probe(const std::filesystem::path& f
         throwTerrainError(TerrainErrorCode::UnsupportedRaster,
             "raster is not north-up (positive y row step)");
     }
+    if (geotransform[1] <= 0.0) {
+        throwTerrainError(TerrainErrorCode::UnsupportedRaster,
+            "raster is not east-up (non-positive x pixel step); only north-up east-up rasters are accepted");
+    }
     if (!std::isfinite(geotransform[0]) || !std::isfinite(geotransform[3])
-        || !(std::fabs(geotransform[1]) > 0.0) || !(std::fabs(geotransform[5]) > 0.0)
+        || !(geotransform[1] > 0.0) || !(geotransform[5] < 0.0)
         || !std::isfinite(geotransform[1]) || !std::isfinite(geotransform[5])) {
         throwTerrainError(TerrainErrorCode::UnsupportedRaster, "raster geotransform is degenerate");
     }
     info.originX = geotransform[0];
     info.originY = geotransform[3];
-    info.pixelSizeX = std::fabs(geotransform[1]);
-    info.pixelSizeY = std::fabs(geotransform[5]);
+    info.pixelSizeX = geotransform[1];
+    info.pixelSizeY = -geotransform[5];
 
     const OGRSpatialReference* spatialRef = dataset->GetSpatialRef();
     if (spatialRef == nullptr || spatialRef->IsEmpty() != 0) {

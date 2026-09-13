@@ -8,6 +8,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <array>
 #include <map>
 #include <optional>
 #include <unordered_map>
@@ -44,9 +45,13 @@ struct IndexMutation {
 // Accumulates per-chunk invalidation classes across mutations — the single
 // canonical dirty set handed to rebuild/streaming consumers. Deterministic
 // ordered iteration (ChunkCoord row-major); only touched cells appear.
+// Mutations that declare an empty class mask are "no generated work" by
+// contract and contribute nothing.
 class ChunkDirtySet {
 public:
-    // Adds the mutation's classes to each of its dirty chunks.
+    // Adds the mutation's classes to each of its dirty chunks. A mutation
+    // with an empty class mask is ignored: it declared no generated work,
+    // so it must not create dirty entries.
     void absorb(const IndexMutation& mutation);
 
     [[nodiscard]] bool contains(const ChunkCoord chunk) const {
@@ -126,18 +131,30 @@ public:
 
     [[nodiscard]] std::uint64_t revision() const noexcept { return revision_; }
 
-    // Last index revision whose mutations affected this cell's content
-    // (insert/update/remove of an entity covering it). Generated chunk
-    // content must record this value as its cache sourceRevision at
-    // generation time; a later comparison against the chunk's current
-    // value marks exactly the edited cells stale while unrelated chunks
-    // stay current — a distant one-entity edit can never invalidate the
-    // whole world. 0 means no mutation ever affected the cell (it has no
-    // derived content to invalidate).
-    [[nodiscard]] std::uint64_t lastAffectingRevision(ChunkCoord chunk) const {
-        const auto found = chunkRevisions_.find(chunk);
-        return found == chunkRevisions_.end() ? 0 : found->second;
-    }
+    // Per-chunk content generations, one per invalidation class. A
+    // mutation advances only the generations of the classes it declared,
+    // so a Material-only edit never stales a Terrain-dependent cache, and
+    // an empty-mask mutation (explicit "no generated work") advances
+    // nothing at all.
+    //
+    // Generated chunk content must record the generation matching its
+    // dependencies at generation time
+    // (lastAffectingRevision(chunk, dependencyMask)); a later comparison
+    // against the same call marks exactly the chunks whose declared
+    // dependencies were edited stale while unrelated chunks — and
+    // unrelated cache types within the same chunk — stay current. Never
+    // version caches with the global revision(): every unrelated mutation
+    // advances it, which would drag the whole world back to stale on each
+    // local edit.
+    //
+    // The dependency-less overload reports the latest generation across
+    // all classes (e.g. for residency staleness, where any change counts).
+    // Both return 0 for cells no relevant mutation ever touched — no
+    // derived content exists to invalidate.
+    [[nodiscard]] std::uint64_t lastAffectingRevision(
+        ChunkCoord chunk, InvalidationMask dependencies) const;
+
+    [[nodiscard]] std::uint64_t lastAffectingRevision(ChunkCoord chunk) const;
 
     // Cells intersecting the closed bounds (grid delegation, deterministic
     // row-major order).
@@ -164,12 +181,18 @@ private:
         std::vector<ChunkCoord> chunks;
     };
 
+    // Per-cell content generations indexed by InvalidationClass; all zero
+    // for untouched cells. Sparse: entries exist only for cells a
+    // non-empty-mask mutation actually dirtied.
+    using ChunkGenerations = std::array<std::uint64_t, invalidationClassCount()>;
+
+    void advanceContentGenerations(
+        const std::vector<ChunkCoord>& chunks, InvalidationMask classes);
+
     ChunkGrid grid_;
     std::unordered_map<EntityId, Entry, EntityIdHash> entities_;
     std::unordered_map<ChunkCoord, std::vector<EntityId>, ChunkCoordHash> chunkEntities_;
-    // Sparse: one entry per cell ever touched by a mutation — never the
-    // dense world matrix.
-    std::unordered_map<ChunkCoord, std::uint64_t, ChunkCoordHash> chunkRevisions_;
+    std::unordered_map<ChunkCoord, ChunkGenerations, ChunkCoordHash> chunkGenerations_;
     std::uint64_t revision_{0};
 };
 

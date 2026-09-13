@@ -36,6 +36,11 @@ void validateBounds(const SpatialBounds bounds) {
 } // namespace
 
 void ChunkDirtySet::absorb(const IndexMutation& mutation) {
+    if (mutation.classes.empty()) {
+        // An empty mask is the explicit "no generated work" declaration:
+        // the mutation contributes nothing to per-chunk invalidation state.
+        return;
+    }
     for (const auto chunk : mutation.dirtyChunks) {
         chunks_[chunk] |= mutation.classes;
     }
@@ -43,6 +48,24 @@ void ChunkDirtySet::absorb(const IndexMutation& mutation) {
 
 SpatialIndex::SpatialIndex(ChunkGrid grid)
     : grid_(std::move(grid)) {}
+
+void SpatialIndex::advanceContentGenerations(
+    const std::vector<ChunkCoord>& chunks, const InvalidationMask classes) {
+    if (classes.empty()) {
+        // Declared "no generated work": no content generation moves, so
+        // no dependent cache can be staled by this mutation.
+        return;
+    }
+    for (const auto chunk : chunks) {
+        auto& generations = chunkGenerations_[chunk];
+        for (auto index = std::size_t{0}; index < invalidationClassCount(); ++index) {
+            const auto invalidationClass = static_cast<InvalidationClass>(index);
+            if (classes.contains(invalidationClass)) {
+                generations[index] = revision_;
+            }
+        }
+    }
+}
 
 IndexMutation SpatialIndex::insert(
     const EntityId entity, const SpatialBounds bounds, const InvalidationMask classes) {
@@ -62,9 +85,7 @@ IndexMutation SpatialIndex::insert(
     }
     entities_.emplace(entity, Entry{bounds, chunks});
     ++revision_;
-    for (const auto chunk : chunks) {
-        chunkRevisions_[chunk] = revision_;
-    }
+    advanceContentGenerations(chunks, classes);
 
     IndexMutation mutation;
     mutation.entity = entity;
@@ -115,11 +136,9 @@ IndexMutation SpatialIndex::update(
     mutation.dirtyChunks = sortedChunkUnion(mutation.previousChunks, mutation.updatedChunks);
     mutation.classes = classes;
     mutation.revision = revision_;
-    // Exactly the dirty cells — old and new coverage — get a new content
-    // generation; unrelated cells keep theirs.
-    for (const auto chunk : mutation.dirtyChunks) {
-        chunkRevisions_[chunk] = revision_;
-    }
+    // Exactly the dirty cells — old and new coverage — get their declared
+    // content generations advanced; unrelated cells keep theirs.
+    advanceContentGenerations(mutation.dirtyChunks, classes);
     return mutation;
 }
 
@@ -154,9 +173,7 @@ IndexMutation SpatialIndex::remove(const EntityId entity, const InvalidationMask
     mutation.dirtyChunks = std::move(previousChunks);
     mutation.classes = classes;
     mutation.revision = revision_;
-    for (const auto chunk : mutation.dirtyChunks) {
-        chunkRevisions_[chunk] = revision_;
-    }
+    advanceContentGenerations(mutation.dirtyChunks, classes);
     return mutation;
 }
 
@@ -166,6 +183,33 @@ std::optional<SpatialBounds> SpatialIndex::boundsOf(const EntityId entity) const
         return std::nullopt;
     }
     return found->second.bounds;
+}
+
+std::uint64_t SpatialIndex::lastAffectingRevision(
+    const ChunkCoord chunk, const InvalidationMask dependencies) const {
+    if (dependencies.empty()) {
+        // A consumer depending on nothing is never stale.
+        return 0;
+    }
+    const auto found = chunkGenerations_.find(chunk);
+    if (found == chunkGenerations_.end()) {
+        return 0;
+    }
+    std::uint64_t latest = 0;
+    for (auto index = std::size_t{0}; index < invalidationClassCount(); ++index) {
+        if (dependencies.contains(static_cast<InvalidationClass>(index))) {
+            latest = std::max(latest, found->second[index]);
+        }
+    }
+    return latest;
+}
+
+std::uint64_t SpatialIndex::lastAffectingRevision(const ChunkCoord chunk) const {
+    const auto found = chunkGenerations_.find(chunk);
+    if (found == chunkGenerations_.end()) {
+        return 0;
+    }
+    return *std::max_element(found->second.begin(), found->second.end());
 }
 
 std::vector<EntityId> SpatialIndex::entitiesIntersecting(const SpatialBounds bounds) const {

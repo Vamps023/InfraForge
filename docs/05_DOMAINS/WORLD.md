@@ -29,7 +29,7 @@ part of chunk identity.
 | `domain::world::SpatialBounds` (`SpatialBounds.hpp`) | Canonical axis-aligned double-precision bounds in project-global space. Closed edges, explicit empty state, union/intersection/containment/expansion. |
 | `domain::world::ChunkGrid` (`ChunkGrid.hpp`/`.cpp`) | Logical chunk cells (`ChunkCoord`), configurable `ChunkGridConfig` (explicit project-unit edge; the physical default `defaultChunkEdgeMetres` = 1 km is converted through the resolved canonical linear unit via `ChunkGrid::fromMetreEdge`, so non-metre projects get physically identical cells), floor-division mapping, conservative closed-bounds enumeration, cell footprints. |
 | `domain::world::Invalidation` (`Invalidation.hpp`/`.cpp`) | `InvalidationClass` (geometry, material, topology, terrain, simulation) and the composable `InvalidationMask` bit set. Strongly typed — never free-form strings; every mutation states its classes explicitly. |
-| `domain::world::SpatialIndex` (`SpatialIndex.hpp`/`.cpp`) | Canonical sparse index: entity id → canonical bounds → occupied cells. `insert`/`update`/`remove` return an `IndexMutation` carrying previous cells, updated cells, their deterministic union (dirty), the declared invalidation classes, and the new index revision. Per-cell content generations (`lastAffectingRevision`) advance only for the cells a mutation actually dirtied, so generated caches of unrelated chunks stay current across local edits. `ChunkDirtySet` accumulates per-cell class masks across mutations — the one canonical chunk-diff mechanism. |
+| `domain::world::SpatialIndex` (`SpatialIndex.hpp`/`.cpp`) | Canonical sparse index: entity id → canonical bounds → occupied cells. `insert`/`update`/`remove` return an `IndexMutation` carrying previous cells, updated cells, their deterministic union (dirty), the declared invalidation classes, and the new index revision. Per-cell content generations are class-aware (`lastAffectingRevision(chunk, dependencyMask)`): a mutation advances only the generations of the classes it declared, so a Material-only edit never stales a Terrain-dependent cache and an empty-mask mutation (explicit "no generated work") moves nothing. `ChunkDirtySet` accumulates per-cell class masks across mutations and ignores empty-mask mutations — the one canonical chunk-diff mechanism. |
 | `domain::world::ChunkResidency` (`ChunkResidency.hpp`/`.cpp`) | `ChunkResidencyState` (unloaded, loading, resident, stale, evicting) and `ChunkResidencyTracker` validating transitions. Transient derived state, never canonical project truth. |
 | `domain::world::ChunkCacheMetadata` (`ChunkCacheMetadata.hpp`) | Versioned provenance record (schema version, generator revision, per-chunk source generation) with `isCurrent` staleness checking. Caches are always reconstructable from canonical data. |
 | `domain::world::WorldPartitionError` (`WorldPartitionError.hpp`) | Failure taxonomy: invalid chunk size, invalid/non-representable bounds or coordinates, null/duplicate/unknown entity, illegal residency transition. Violations fail loudly — never clamped or absorbed. |
@@ -59,7 +59,8 @@ invalidates the cells it left as well as the cells it entered. A local edit
 produces a dirty set bounded by the entity's old/new coverage — never a
 full-world rebuild. Each mutation declares its invalidation classes
 explicitly; an empty `InvalidationMask` is an intentional "no generated
-work" declaration, not a default.
+work" declaration — it still reports the spatial chunk diff, but creates no
+dirty entries and advances no content generations.
 
 ## Renderer residency and cache separation
 
@@ -67,13 +68,15 @@ Residency (`unloaded → loading → resident → stale → evicting → unloade
 with failure/cancellation edges) describes derived content only. Eviction
 and staleness never modify canonical entities, and the full project is
 never assumed resident. Generated-cache metadata records schema version,
-generator revision, and the chunk's per-cell content generation
-(`SpatialIndex::lastAffectingRevision`, which advances only for the cells a
-mutation dirtied) — so a distant local edit leaves unrelated chunk caches
-current and can never invalidate the whole world. Any schema, generator,
-or generation drift marks the cache stale for rebuild. Caches are never
-canonical storage — no entity exists only because a chunk cache contains
-it.
+generator revision, and the chunk's dependency-scoped content generation
+(`SpatialIndex::lastAffectingRevision(chunk, dependencies)` — per
+invalidation class, advanced only when a mutation declaring that class
+dirties the cell). A distant local edit leaves unrelated chunk caches
+current, and within one chunk a Material-only edit never stales a
+Terrain-dependent cache; only resident dirty cells go stale. Any schema,
+generator, or generation drift marks the cache stale for rebuild. Caches
+are never canonical storage — no entity exists only because a chunk cache
+contains it.
 
 ## Large-world behavior
 

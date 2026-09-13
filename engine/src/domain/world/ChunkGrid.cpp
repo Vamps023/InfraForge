@@ -85,6 +85,22 @@ std::vector<ChunkCoord> ChunkGrid::chunksIntersecting(const SpatialBounds bounds
 }
 
 SpatialBounds ChunkGrid::chunkBounds(const ChunkCoord chunk) const {
+    // ChunkCoord is a public value type, so its full int64 range can reach
+    // this call even though chunkAt never produces coordinates beyond
+    // maxChunkIndex. Enforce the documented supported range explicitly:
+    // beyond it the (k+1) footprint edge rounds back onto k and the cell
+    // would collapse to zero width instead of failing loudly.
+    const auto beyondRange = [](const std::int64_t axis) {
+        return std::abs(static_cast<double>(axis)) > maxChunkIndex;
+    };
+    if (beyondRange(chunk.x) || beyondRange(chunk.y)) {
+        throw WorldPartitionError{
+            WorldPartitionErrorCode::CoordinateOutOfRange,
+            "chunk coordinate (" + std::to_string(chunk.x) + ", "
+                + std::to_string(chunk.y)
+                + ") is outside the supported chunk-index range"};
+    }
+
     const auto x = static_cast<double>(chunk.x);
     const auto y = static_cast<double>(chunk.y);
     const auto size = config_.chunkSize;

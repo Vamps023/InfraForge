@@ -377,12 +377,14 @@ TEST_SUITE("canonical spatial index") {
         const world::ChunkCoord cellB{60, 0};
         REQUIRE(cellA != cellB);
 
-        // A generator records each chunk's content generation at
-        // generation time.
+        // A generator records each chunk's content generation for its
+        // dependency class at generation time.
         const world::ChunkCacheMetadata generatedA{
-            world::currentChunkCacheSchemaVersion, 1, index.lastAffectingRevision(cellA)};
+            world::currentChunkCacheSchemaVersion, 1,
+            index.lastAffectingRevision(cellA, geometry)};
         const world::ChunkCacheMetadata generatedB{
-            world::currentChunkCacheSchemaVersion, 1, index.lastAffectingRevision(cellB)};
+            world::currentChunkCacheSchemaVersion, 1,
+            index.lastAffectingRevision(cellB, geometry)};
         REQUIRE(generatedA.sourceRevision > 0);
         REQUIRE(generatedB.sourceRevision > 0);
 
@@ -394,29 +396,108 @@ TEST_SUITE("canonical spatial index") {
         // The global index revision moved; that must be irrelevant for B.
         CHECK(index.revision() == editRevisionBefore + 1);
 
-        // Chunk A's content generation advanced -> its cache is stale.
-        const world::ChunkCacheExpectation expectationA{
-            world::currentChunkCacheSchemaVersion, 1, index.lastAffectingRevision(cellA)};
-        CHECK(index.lastAffectingRevision(cellA) > generatedA.sourceRevision);
-        CHECK_FALSE(world::isCurrent(generatedA, expectationA));
+        // Chunk A's geometry generation advanced -> its cache is stale.
+        CHECK(index.lastAffectingRevision(cellA, geometry) > generatedA.sourceRevision);
+        CHECK_FALSE(world::isCurrent(generatedA,
+            world::ChunkCacheExpectation{
+                world::currentChunkCacheSchemaVersion, 1,
+                index.lastAffectingRevision(cellA, geometry)}));
 
         // Chunk B was never touched: its generation is unchanged and its
         // cache is still current — a distant local edit must not stale the
         // whole world.
-        CHECK(index.lastAffectingRevision(cellB) == generatedB.sourceRevision);
-        const world::ChunkCacheExpectation expectationB{
-            world::currentChunkCacheSchemaVersion, 1, index.lastAffectingRevision(cellB)};
-        CHECK(world::isCurrent(generatedB, expectationB));
+        CHECK(index.lastAffectingRevision(cellB, geometry) == generatedB.sourceRevision);
+        CHECK(world::isCurrent(generatedB,
+            world::ChunkCacheExpectation{
+                world::currentChunkCacheSchemaVersion, 1,
+                index.lastAffectingRevision(cellB, geometry)}));
 
         // Removing the far entity dirties exactly its own cell too.
+        const auto cellAGenerationBeforeRemoval = index.lastAffectingRevision(cellA, geometry);
         static_cast<void>(index.remove(entityId(71), geometry));
-        CHECK(index.lastAffectingRevision(cellB) > generatedB.sourceRevision);
+        CHECK(index.lastAffectingRevision(cellB, geometry) > generatedB.sourceRevision);
         CHECK_FALSE(world::isCurrent(generatedB,
             world::ChunkCacheExpectation{
                 world::currentChunkCacheSchemaVersion, 1,
-                index.lastAffectingRevision(cellB)}));
+                index.lastAffectingRevision(cellB, geometry)}));
         // ...and the untouched near cell keeps its generation.
-        CHECK(index.lastAffectingRevision(cellA) == expectationA.sourceRevision);
+        CHECK(index.lastAffectingRevision(cellA, geometry) == cellAGenerationBeforeRemoval);
+    }
+
+    TEST_CASE("content generations are class-aware within a chunk") {
+        world::SpatialIndex index{kilometreGrid()};
+        const auto geometry = world::InvalidationMask::of(world::InvalidationClass::Geometry);
+        const auto material = world::InvalidationMask::of(world::InvalidationClass::Material);
+        const auto terrain = world::InvalidationMask::of(world::InvalidationClass::Terrain);
+        const world::ChunkCoord cell{0, 0};
+
+        static_cast<void>(index.insert(
+            entityId(80), world::SpatialBounds::ofPoint(10.0, 10.0), geometry));
+
+        // Dependent generators with different dependency masks record
+        // their own content generation for the same cell.
+        const auto geometryAtGeneration = index.lastAffectingRevision(cell, geometry);
+        const auto terrainAtGeneration = index.lastAffectingRevision(cell, terrain);
+        CHECK(geometryAtGeneration > 0);
+        CHECK(terrainAtGeneration == 0); // no terrain-class change ever hit the cell
+
+        // A geometry-only edit moves the geometry generation but leaves
+        // terrain untouched: terrain-dependent caches stay current.
+        static_cast<void>(index.update(
+            entityId(80), world::SpatialBounds::ofPoint(20.0, 20.0), geometry));
+        CHECK(index.lastAffectingRevision(cell, geometry) > geometryAtGeneration);
+        CHECK(index.lastAffectingRevision(cell, terrain) == terrainAtGeneration);
+
+        // A material-only edit moves only material: neither the geometry
+        // nor the terrain generation moves.
+        const auto geometryAfterGeometryEdit = index.lastAffectingRevision(cell, geometry);
+        static_cast<void>(index.update(
+            entityId(80), world::SpatialBounds::ofPoint(30.0, 30.0), material));
+        CHECK(index.lastAffectingRevision(cell, material)
+            > index.lastAffectingRevision(cell, geometry));
+        CHECK(index.lastAffectingRevision(cell, geometry) == geometryAfterGeometryEdit);
+        CHECK(index.lastAffectingRevision(cell, terrain) == terrainAtGeneration);
+
+        // A combined dependency sees the newest of its classes.
+        CHECK(index.lastAffectingRevision(cell, geometry | material)
+            == index.lastAffectingRevision(cell, material));
+        CHECK(index.lastAffectingRevision(cell, geometry | terrain)
+            == index.lastAffectingRevision(cell, geometry));
+    }
+
+    TEST_CASE("empty-mask mutations declare no generated work") {
+        world::SpatialIndex index{kilometreGrid()};
+        const auto geometry = world::InvalidationMask::of(world::InvalidationClass::Geometry);
+        static_cast<void>(index.insert(
+            entityId(90), world::SpatialBounds::ofPoint(10.0, 10.0), geometry));
+        const world::ChunkCoord cell{0, 0};
+        const auto generationBefore = index.lastAffectingRevision(cell, geometry);
+        REQUIRE(generationBefore > 0);
+
+        // Bookkeeping-only mutation: spatial consequences are still
+        // reported, but no content generation moves and no dirty entry is
+        // produced.
+        const auto mutation = index.update(
+            entityId(90), world::SpatialBounds::ofPoint(20.0, 20.0), world::InvalidationMask{});
+        REQUIRE(mutation.dirtyChunks.size() == 1);
+        CHECK(mutation.classes.empty());
+        CHECK(index.revision() == 2);
+
+        world::ChunkDirtySet dirty;
+        dirty.absorb(mutation);
+        CHECK(dirty.empty());
+        CHECK(dirty.classesFor(mutation.dirtyChunks.front()) == std::nullopt);
+        CHECK(index.lastAffectingRevision(cell, geometry) == generationBefore);
+        CHECK(index.lastAffectingRevision(cell, world::InvalidationMask::of(
+                                                      world::InvalidationClass::Simulation))
+            == 0);
+        CHECK(index.lastAffectingRevision(cell) == generationBefore);
+
+        // A geometry mutation right after still lands on a later revision
+        // and remains observable.
+        static_cast<void>(index.update(
+            entityId(90), world::SpatialBounds::ofPoint(30.0, 30.0), geometry));
+        CHECK(index.lastAffectingRevision(cell, geometry) > generationBefore);
     }
 
     TEST_CASE("never-affected chunks carry content generation zero") {

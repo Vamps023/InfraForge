@@ -5,6 +5,7 @@
 #include "infraforge/domain/world/ChunkGrid.hpp"
 #include "infraforge/domain/world/WorldPartitionError.hpp"
 
+#include <cmath>
 #include <cstdint>
 #include <limits>
 #include <string>
@@ -92,6 +93,72 @@ TEST_SUITE("logical chunk grid") {
 
         // Mixed signs.
         CHECK(grid.chunkAt(2500.0, -2500.0) == world::ChunkCoord{2, -3});
+    }
+
+    TEST_CASE("grid boundaries classify exactly for non-binary chunk sizes") {
+        // The US-survey-foot grid reproduces the division-rounding bug:
+        // k * chunkSize re-divided by chunkSize can land one quotient ULP
+        // past the integer (e.g. -11.000000000000002), and naive floor
+        // then drops the exact boundary into the wrong cell.
+        const auto footGrid = world::ChunkGrid::fromMetreEdge(usSurveyFootUnit());
+
+        for (const auto k : {-49, -11, -2, -1, 0, 1, 2, 11, 49}) {
+            const auto boundary = static_cast<double>(k) * footGrid.chunkSize();
+            CAPTURE(k);
+            CAPTURE(boundary);
+
+            const auto below = std::nextafter(boundary, -std::numeric_limits<double>::infinity());
+            const auto above = std::nextafter(boundary, std::numeric_limits<double>::infinity());
+
+            // Exact grid boundary -> cell k, on both axes.
+            CHECK(footGrid.chunkAt(boundary, 0.0).x == k);
+            CHECK(footGrid.chunkAt(0.0, boundary).y == k);
+            // One representable value below -> the mathematically lower cell.
+            CHECK(footGrid.chunkAt(below, 0.0).x == k - 1);
+            CHECK(footGrid.chunkAt(0.0, below).y == k - 1);
+            // One representable value above -> still cell k.
+            CHECK(footGrid.chunkAt(above, 0.0).x == k);
+            CHECK(footGrid.chunkAt(0.0, above).y == k);
+        }
+
+        // The fix is generic grid math, not a foot special case: a
+        // non-binary-friendly third-of-a-kilometre grid behaves the same.
+        const world::ChunkGrid thirdGrid{world::ChunkGridConfig{1000.0 / 3.0}};
+        for (const auto k : {-11, -2, -1, 0, 1, 5, 12}) {
+            const auto boundary = static_cast<double>(k) * thirdGrid.chunkSize();
+            CAPTURE(k);
+            CAPTURE(boundary);
+
+            CHECK(thirdGrid.chunkAt(boundary, 0.0).x == k);
+            CHECK(thirdGrid.chunkAt(0.0, boundary).y == k);
+            CHECK(thirdGrid.chunkAt(
+                      std::nextafter(boundary, -std::numeric_limits<double>::infinity()), 0.0)
+                      .x
+                == k - 1);
+            CHECK(thirdGrid.chunkAt(0.0,
+                      std::nextafter(boundary, std::numeric_limits<double>::infinity()))
+                      .y
+                == k);
+        }
+    }
+
+    TEST_CASE("chunk bounds and chunkAt agree on cell edges for non-metre grids") {
+        const auto footGrid = world::ChunkGrid::fromMetreEdge(usSurveyFootUnit());
+
+        for (const auto k : {-3, -1, 0, 2, 7}) {
+            CAPTURE(k);
+            const auto footprint = footGrid.chunkBounds(world::ChunkCoord{k, k});
+
+            // The reconstructed min edge is cell k's left edge.
+            CHECK(footGrid.chunkAt(footprint.minEasting, footprint.minNorthing)
+                == world::ChunkCoord{k, k});
+            // The closed max edge is the left edge of the neighbouring cell.
+            CHECK(footGrid.chunkAt(footprint.maxEasting, footprint.maxNorthing)
+                == world::ChunkCoord{k + 1, k + 1});
+            // A point strictly inside maps back to k on both axes.
+            CHECK(footGrid.chunkAt(footprint.minEasting + 1.0, footprint.minNorthing + 1.0)
+                == world::ChunkCoord{k, k});
+        }
     }
 
     TEST_CASE("bounds fully inside one chunk select exactly that chunk") {

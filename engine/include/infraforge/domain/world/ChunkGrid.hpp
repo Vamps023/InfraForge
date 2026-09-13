@@ -3,6 +3,7 @@
 #include "infraforge/domain/geo/ProjectGeoreference.hpp"
 #include "infraforge/domain/world/SpatialBounds.hpp"
 
+#include <compare>
 #include <cstdint>
 #include <cstddef>
 #include <functional>
@@ -67,6 +68,13 @@ struct ChunkGridConfig {
 // - Cell k covers the half-open footprint [k*size, (k+1)*size) on an axis;
 //   a position exactly on a cell edge belongs to the higher cell (floor
 //   division, never truncation toward zero — negative coordinates floor).
+// - "Exactly on a cell edge" is decided against the grid's own
+//   reconstructed boundary products (k*size as a double), with exact
+//   comparisons: k*size maps to k, and the neighbouring representable
+//   doubles map to k-1 and k respectively. The naive quotient can round
+//   one ULP past the integer for non-binary chunk sizes (e.g.
+//   US-survey-foot grids), so classification never trusts it blindly —
+//   and never snaps with an epsilon either.
 // - A bounds lying exactly on a cell edge touches both adjacent cells:
 //   chunksIntersecting enumerates every cell whose footprint intersects
 //   the closed bounds, so invalidation is conservative (never misses

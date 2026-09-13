@@ -143,6 +143,7 @@ add_executable(infraforge-engine-tests
     tests/TerrainDomainTests.cpp
     tests/TerrainDownloadProviderTests.cpp
     tests/TerrainServiceTests.cpp
+    tests/TerrariumProviderTests.cpp
     tests/WebSocketServerTests.cpp
     src/network/CommandRouter.cpp
     src/network/WebSocketServer.cpp

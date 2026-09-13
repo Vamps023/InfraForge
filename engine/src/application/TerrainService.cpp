@@ -962,9 +962,67 @@ domain::terrain::DownloadPlan TerrainService::planDownload(
             "unknown terrain provider: " + providerId);
     }
 
+    // BLOCKER 15: Validate geographic inputs rigorously.
+    auto validateDouble = [](double v, const char* name) {
+        if (std::isnan(v) || std::isinf(v)) {
+            throw TerrainError(TerrainErrorCode::InvalidArgument,
+                std::string(name) + " is NaN or infinite");
+        }
+    };
+    validateDouble(area.west, "area.west");
+    validateDouble(area.east, "area.east");
+    validateDouble(area.south, "area.south");
+    validateDouble(area.north, "area.north");
+    if (area.west >= area.east) {
+        throw TerrainError(TerrainErrorCode::InvalidArgument,
+            "area.west must be less than area.east");
+    }
+    if (area.south >= area.north) {
+        throw TerrainError(TerrainErrorCode::InvalidArgument,
+            "area.south must be less than area.north");
+    }
+    // Validate longitude/latitude ranges (WGS84).
+    if (area.west < -180.0 || area.east > 180.0) {
+        throw TerrainError(TerrainErrorCode::InvalidArgument,
+            "longitude must be in [-180, 180]");
+    }
+    if (area.south < -90.0 || area.north > 90.0) {
+        throw TerrainError(TerrainErrorCode::InvalidArgument,
+            "latitude must be in [-90, 90]");
+    }
+    // Validate tile size.
+    if (tileSizeMetres != 1000 && tileSizeMetres != 2000 &&
+        tileSizeMetres != 4000 && tileSizeMetres != 8000 &&
+        tileSizeMetres != 16000) {
+        throw TerrainError(TerrainErrorCode::InvalidArgument,
+            "tile size must be 1000, 2000, 4000, 8000, or 16000 metres");
+    }
+    // Validate selection.
+    if (selectedIndices.empty()) {
+        throw TerrainError(TerrainErrorCode::InvalidArgument,
+            "no tiles selected for download");
+    }
+    // Check for duplicate indices.
+    std::vector<std::int32_t> sortedIndices = selectedIndices;
+    std::sort(sortedIndices.begin(), sortedIndices.end());
+    for (std::size_t i = 1; i < sortedIndices.size(); ++i) {
+        if (sortedIndices[i] == sortedIndices[i - 1]) {
+            throw TerrainError(TerrainErrorCode::InvalidArgument,
+                "duplicate selected tile index: " + std::to_string(sortedIndices[i]));
+        }
+    }
+
     // Compute the deterministic selection grid over the drawn area.
     std::vector<domain::terrain::SelectionTile> allTiles =
         domain::terrain::computeSelectionGrid(area, tileSizeMetres);
+
+    // Validate selected indices are in range.
+    for (std::int32_t idx : selectedIndices) {
+        if (idx < 0 || static_cast<std::size_t>(idx) >= allTiles.size()) {
+            throw TerrainError(TerrainErrorCode::InvalidArgument,
+                "selected tile index out of range: " + std::to_string(idx));
+        }
+    }
 
     domain::terrain::DownloadPlan plan;
     plan.providerId = providerId;
@@ -974,10 +1032,6 @@ domain::terrain::DownloadPlan TerrainService::planDownload(
     // Build the selected tiles list from the indices.
     std::vector<domain::terrain::SelectionTile> selectedTiles;
     for (std::int32_t idx : selectedIndices) {
-        if (idx < 0 || static_cast<std::size_t>(idx) >= allTiles.size()) {
-            throw TerrainError(TerrainErrorCode::InvalidArgument,
-                "selected tile index out of range: " + std::to_string(idx));
-        }
         selectedTiles.push_back(allTiles[static_cast<std::size_t>(idx)]);
         plan.selectedIndices.push_back(idx);
     }
@@ -1001,18 +1055,42 @@ domain::terrain::DownloadPlan TerrainService::planDownload(
     // Effective resolution from provider.
     plan.effectiveResolutionMpp = provider->info().maxResolutionMpp;
 
-    // Check coverage.
+    // BLOCKER 14: Coverage checking — distinguish fully covered, partially
+    // covered, and outside. Do not report fullCoverage = true merely because
+    // some overlap exists.
     if (!provider->info().coverage.isEmpty()) {
-        // Check if any selected tile is outside provider coverage.
+        bool anyOutside = false;
+        bool anyPartial = false;
         for (const auto& tile : selectedTiles) {
-            if (tile.bounds.east < provider->info().coverage.west ||
-                tile.bounds.west > provider->info().coverage.east ||
-                tile.bounds.north < provider->info().coverage.south ||
-                tile.bounds.south > provider->info().coverage.north) {
-                plan.fullCoverage = false;
-                plan.warnings.push_back("selected area is partially outside provider coverage");
-                break;
+            const auto& cov = provider->info().coverage;
+            // Check if tile is entirely outside coverage.
+            if (tile.bounds.east <= cov.west ||
+                tile.bounds.west >= cov.east ||
+                tile.bounds.north <= cov.south ||
+                tile.bounds.south >= cov.north) {
+                anyOutside = true;
+                continue;
             }
+            // Check if tile is fully inside coverage.
+            const bool fullyInside =
+                tile.bounds.west >= cov.west &&
+                tile.bounds.east <= cov.east &&
+                tile.bounds.south >= cov.south &&
+                tile.bounds.north <= cov.north;
+            if (!fullyInside) {
+                anyPartial = true;
+            }
+        }
+        if (anyOutside) {
+            plan.fullCoverage = false;
+            plan.warnings.push_back(
+                "selected area is partially outside provider coverage");
+        }
+        if (anyPartial) {
+            plan.fullCoverage = false;
+            plan.warnings.push_back(
+                "selected area has tiles partially outside provider coverage; "
+                "provider overfetch may be required");
         }
     }
 

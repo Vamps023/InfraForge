@@ -201,20 +201,21 @@ void CommandProcessor::start() {
 }
 
 void CommandProcessor::post(std::string connectionId, protocol::v1::Frame frame) {
-    const std::string_view label = frame.has_command() ? commandName(frame) : std::string_view{"unknown"};
     const std::string jobId = runtime::generateUuidV4();
     {
         std::lock_guard lock{mutex_};
         if (stopped_) {
             // The engine is shutting down; connections are closing anyway.
-            runtime::logWarn("application", "command.dropped_at_shutdown", {{"command", label}});
+            // No job.queued is emitted (post() is enqueue-only), so no
+            // orphan pending job is created.
+            runtime::logWarn("application", "command.dropped_at_shutdown",
+                {{"command", frame.has_command() ? commandName(frame) : std::string_view{"unknown"}}});
             return;
         }
-        // Emit job.queued before enqueuing so subscribers see the operation
-        // enter the pending state. targetId is the current project UUID when
-        // a project is open (commands operate on the active session).
-        const std::string targetId = store_.isOpen() ? store_.current().uuid : std::string{};
-        publishJobQueued(jobId, label, label, targetId);
+        // Enqueue only: no ProjectStore read, no broadcastEvent, no job.queued.
+        // The job lifecycle (queued -> started -> terminal) is owned entirely
+        // by processCommand() on the executor thread, preserving the single
+        // application-executor ownership model.
         queue_.push_back({std::move(connectionId), jobId, std::make_unique<ProtocolFrame>(std::move(frame))});
     }
     signal_.notify_one();
@@ -230,6 +231,9 @@ void CommandProcessor::shutdown() {
         const std::size_t discarded = queue_.size();
         queue_.clear();
         if (discarded > 0) {
+            // Commands discarded during shutdown never had job.queued
+            // emitted (post() is enqueue-only), so no orphan pending jobs
+            // are created.
             runtime::logWarn("application", "command.queue_discarded", {{"count", std::to_string(discarded)}});
         }
     }
@@ -265,228 +269,56 @@ void CommandProcessor::runExecutor() {
     }
 }
 
-void CommandProcessor::processCommand(const std::string& connectionId, const std::string& jobId, const ProtocolFrame& frame) {
-    switch (frame.command().command_case()) {
-    case protocol::v1::CommandEnvelope::kCreateProject:
-        handleCreateProject(connectionId, jobId, frame);
-        break;
-    case protocol::v1::CommandEnvelope::kOpenProject:
-        handleOpenProject(connectionId, jobId, frame);
-        break;
-    case protocol::v1::CommandEnvelope::kSaveProject:
-        runServiceCommand(connectionId, jobId, frame, [this] { return service_.save(); });
-        break;
-    case protocol::v1::CommandEnvelope::kSaveProjectAs:
-        handleSaveProjectAs(connectionId, jobId, frame);
-        break;
-    case protocol::v1::CommandEnvelope::kCloseProject:
-        runServiceCommand(connectionId, jobId, frame, [this] { return service_.close(); });
-        break;
-    case protocol::v1::CommandEnvelope::kGetProjectSummary:
-        runServiceCommand(connectionId, jobId, frame, [this] { return service_.getSummary(); });
-        break;
-    case protocol::v1::CommandEnvelope::kGetGeoreference:
-        handleGetGeoreference(connectionId, jobId, frame);
-        break;
-    case protocol::v1::CommandEnvelope::kSetGeoreference:
-        handleSetGeoreference(connectionId, jobId, frame);
-        break;
-    case protocol::v1::CommandEnvelope::kTransformToProjectGlobal:
-        handleTransformToProjectGlobal(connectionId, jobId, frame);
-        break;
-    case protocol::v1::CommandEnvelope::COMMAND_NOT_SET:
-        sendFailureResult(connectionId, frame.request_id(),
-            CommandFailure{CommandFailureCode::InvalidArgument, "command envelope is empty"});
-        break;
-    }
-}
-
-void CommandProcessor::handleCreateProject(const std::string& connectionId, const std::string& jobId, const ProtocolFrame& frame) {
-    const auto& command = frame.command().create_project();
-    const auto trafficSide = mapTrafficSide(command.traffic_side());
-    const auto axisConvention = mapAxisConvention(command.georeference().axis_convention());
-    if (!trafficSide.has_value() || !axisConvention.has_value()) {
-        sendFailureResult(connectionId, frame.request_id(),
-            CommandFailure{CommandFailureCode::InvalidArgument,
-                !trafficSide.has_value() ? "traffic_side must be LEFT or RIGHT"
-                                         : "axis_convention must be EASTING_NORTHING_UP"});
-        return;
-    }
-
-    domain::project::CreateProjectSpec spec;
-    spec.displayName = command.display_name();
-    spec.parentDirectory = runtime::pathFromUtf8(command.parent_directory());
-    spec.trafficSide = *trafficSide;
-    spec.georeference.horizontalCrs = command.georeference().horizontal_crs();
-    spec.georeference.linearUnit = command.georeference().linear_unit();
-    spec.georeference.axisConvention = *axisConvention;
-    spec.georeference.originEasting = command.georeference().origin_easting();
-    spec.georeference.originNorthing = command.georeference().origin_northing();
-    spec.georeference.verticalCrs = command.georeference().vertical_crs();
-
-    runServiceCommand(connectionId, jobId, frame, [this, spec = std::move(spec)] { return service_.create(spec); });
-}
-
-void CommandProcessor::handleOpenProject(const std::string& connectionId, const std::string& jobId, const ProtocolFrame& frame) {
-    const auto& command = frame.command().open_project();
-    runServiceCommand(connectionId, jobId, frame,
-        [this, directory = runtime::pathFromUtf8(command.project_directory())] {
-            return service_.open(directory);
-        });
-}
-
-void CommandProcessor::handleSaveProjectAs(const std::string& connectionId, const std::string& jobId, const ProtocolFrame& frame) {
-    const auto& command = frame.command().save_project_as();
-    domain::project::SaveAsSpec spec;
-    spec.displayName = command.display_name();
-    spec.parentDirectory = runtime::pathFromUtf8(command.parent_directory());
-    runServiceCommand(connectionId, jobId, frame, [this, spec = std::move(spec)] { return service_.saveAs(spec); });
-}
-
-template <typename UseCase>
-void CommandProcessor::runServiceCommand(
-    const std::string& connectionId,
-    const std::string& jobId,
-    const ProtocolFrame& frame,
-    UseCase&& useCase) {
-    executeCommand(connectionId, jobId, frame, [this, &connectionId, &frame, &useCase] {
-        const ProjectCommandResult result = useCase();
-
-        ProtocolFrame response;
-        response.set_request_id(frame.request_id());
-        if (result.sessionClosed) {
-            response.mutable_result()->mutable_project_closed()->set_project_uuid(result.record.uuid);
-        } else {
-            fillSummary(response.mutable_result()->mutable_project_state()->mutable_summary(), result.record);
-        }
-        sink_.sendToConnection(connectionId, response);
-        publishEvents(result.events);
-
-        // After project open/create, evaluate the vertical reference state
-        // and emit diagnostic events for the real "no vertical reference"
-        // condition. After close, clear project-scoped diagnostics.
-        for (const ProjectEvent& event : result.events) {
-            if (event.kind == ProjectEventKind::Opened) {
-                evaluateVerticalReferenceDiagnostic(event.record);
-            } else if (event.kind == ProjectEventKind::Closed) {
-                publishDiagnosticCleared("georeference");
-            }
-        }
-    });
-}
-
-void CommandProcessor::handleGetGeoreference(const std::string& connectionId, const std::string& jobId, const ProtocolFrame& frame) {
-    executeCommand(connectionId, jobId, frame, [this, &connectionId, &frame] {
-        const GeoreferenceInfoResult result = geoService_.getGeoreference();
-
-        ProtocolFrame response;
-        response.set_request_id(frame.request_id());
-        auto* state = response.mutable_result()->mutable_georeference_state();
-        fillGeoreferenceInfo(state->mutable_georeference(), result.config, result.resolved);
-        state->set_revision(result.revision);
-        sink_.sendToConnection(connectionId, response);
-    });
-}
-
-void CommandProcessor::handleSetGeoreference(const std::string& connectionId, const std::string& jobId, const ProtocolFrame& frame) {
-    const auto& command = frame.command().set_georeference();
-    const auto axisConvention = mapAxisConvention(command.georeference().axis_convention());
-    if (!axisConvention.has_value()) {
-        sendFailureResult(connectionId, frame.request_id(),
-            CommandFailure{CommandFailureCode::InvalidArgument,
-                "axis_convention must be EASTING_NORTHING_UP"});
-        return;
-    }
-
-    domain::geo::GeoreferenceConfig config;
-    config.horizontalCrs = command.georeference().horizontal_crs();
-    config.linearUnit = command.georeference().linear_unit();
-    config.axisConvention = *axisConvention;
-    config.originEasting = command.georeference().origin_easting();
-    config.originNorthing = command.georeference().origin_northing();
-    config.originHeight = command.georeference().origin_height();
-    config.verticalCrs = command.georeference().vertical_crs();
-
-    const std::optional<std::uint64_t> expectedRevision = command.has_expected_revision()
-        ? std::optional<std::uint64_t>{command.expected_revision()}
-        : std::nullopt;
-
-    executeCommand(connectionId, jobId, frame,
-        [this, &connectionId, &frame, config = std::move(config), expectedRevision] {
-            const GeoreferenceMutationResult result =
-                geoService_.setGeoreference(config, expectedRevision);
-
-            ProtocolFrame response;
-            response.set_request_id(frame.request_id());
-            auto* state = response.mutable_result()->mutable_georeference_state();
-            fillGeoreferenceInfo(state->mutable_georeference(), result.record.georeference, result.resolved);
-            state->set_revision(result.record.revision);
-            sink_.sendToConnection(connectionId, response);
-            publishEvents(result.events);
-
-            // After a georeference change, re-evaluate the vertical reference
-            // diagnostic so the Problems panel reflects the new state.
-            evaluateVerticalReferenceDiagnostic(result.record);
-        });
-}
-
-void CommandProcessor::handleTransformToProjectGlobal(
+void CommandProcessor::processCommand(
     const std::string& connectionId,
     const std::string& jobId,
     const ProtocolFrame& frame) {
-    const auto& command = frame.command().transform_to_project_global();
-    if (command.coordinates_size() > static_cast<int>(kMaxTransformCoordinates)) {
-        sendFailureResult(connectionId, frame.request_id(),
-            CommandFailure{CommandFailureCode::InvalidArgument,
-                "transform batch exceeds the " + std::to_string(kMaxTransformCoordinates)
-                    + " coordinate limit"});
-        return;
-    }
-
-    domain::geo::SourceSpatialReference source;
-    source.horizontalCrs = command.source_crs();
-    source.verticalCrs = command.source_vertical_crs();
-
-    std::vector<domain::geo::GeoCoordinate> coordinates;
-    coordinates.reserve(static_cast<std::size_t>(command.coordinates_size()));
-    for (const auto& coordinate : command.coordinates()) {
-        coordinates.push_back({coordinate.x(), coordinate.y(), coordinate.z()});
-    }
-
-    executeCommand(connectionId, jobId, frame,
-        [this, &connectionId, &frame, source = std::move(source), coordinates = std::move(coordinates)] {
-            const std::vector<domain::geo::ProjectGlobalPosition> positions =
-                geoService_.transformToProjectGlobal(source, coordinates);
-
-            ProtocolFrame response;
-            response.set_request_id(frame.request_id());
-            auto* result = response.mutable_result()->mutable_transform_to_project_global();
-            for (const auto& position : positions) {
-                auto* coordinate = result->add_coordinates();
-                coordinate->set_easting(position.easting);
-                coordinate->set_northing(position.northing);
-                coordinate->set_height(position.height);
-            }
-            sink_.sendToConnection(connectionId, response);
-        });
-}
-
-template <typename Emit>
-void CommandProcessor::executeCommand(
-    const std::string& connectionId,
-    const std::string& jobId,
-    const ProtocolFrame& frame,
-    Emit&& emit) {
+    const std::string_view label = frame.has_command() ? commandName(frame) : std::string_view{"unknown"};
     const std::string requestId = frame.request_id();
-    const std::string_view label = commandName(frame);
-    const auto startedAt = std::chrono::steady_clock::now();
 
-    // Emit job.started before executing the command so subscribers see the
-    // transition from queued to running.
+    // Derive targetId safely on the executor thread. This is the only place
+    // ProjectStore is read for job metadata; post() does not read it.
+    const std::string targetId = store_.isOpen() ? store_.current().uuid : std::string{};
+
+    // Lifecycle envelope: emit queued -> started, dispatch, emit terminal.
+    // Every path through this function emits exactly one terminal event.
+    publishJobQueued(jobId, label, label, targetId);
     publishJobStarted(jobId);
 
+    const auto startedAt = std::chrono::steady_clock::now();
+
     try {
-        emit();
+        switch (frame.command().command_case()) {
+        case protocol::v1::CommandEnvelope::kCreateProject:
+            handleCreateProject(connectionId, frame);
+            break;
+        case protocol::v1::CommandEnvelope::kOpenProject:
+            handleOpenProject(connectionId, frame);
+            break;
+        case protocol::v1::CommandEnvelope::kSaveProject:
+            runServiceCommand(connectionId, frame, [this] { return service_.save(); });
+            break;
+        case protocol::v1::CommandEnvelope::kSaveProjectAs:
+            handleSaveProjectAs(connectionId, frame);
+            break;
+        case protocol::v1::CommandEnvelope::kCloseProject:
+            runServiceCommand(connectionId, frame, [this] { return service_.close(); });
+            break;
+        case protocol::v1::CommandEnvelope::kGetProjectSummary:
+            runServiceCommand(connectionId, frame, [this] { return service_.getSummary(); });
+            break;
+        case protocol::v1::CommandEnvelope::kGetGeoreference:
+            handleGetGeoreference(connectionId, frame);
+            break;
+        case protocol::v1::CommandEnvelope::kSetGeoreference:
+            handleSetGeoreference(connectionId, frame);
+            break;
+        case protocol::v1::CommandEnvelope::kTransformToProjectGlobal:
+            handleTransformToProjectGlobal(connectionId, frame);
+            break;
+        case protocol::v1::CommandEnvelope::COMMAND_NOT_SET:
+            throw CommandFailure{CommandFailureCode::InvalidArgument, "command envelope is empty"};
+        }
 
         const auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - startedAt);
@@ -519,6 +351,178 @@ void CommandProcessor::executeCommand(
 
         publishJobFailed(jobId, "INTERNAL", "internal engine error while handling " + std::string{label});
     }
+}
+
+void CommandProcessor::handleCreateProject(const std::string& connectionId, const ProtocolFrame& frame) {
+    const auto& command = frame.command().create_project();
+    const auto trafficSide = mapTrafficSide(command.traffic_side());
+    const auto axisConvention = mapAxisConvention(command.georeference().axis_convention());
+    if (!trafficSide.has_value() || !axisConvention.has_value()) {
+        // Throw so processCommand's lifecycle envelope emits job.failed.
+        throw CommandFailure{CommandFailureCode::InvalidArgument,
+            !trafficSide.has_value() ? "traffic_side must be LEFT or RIGHT"
+                                     : "axis_convention must be EASTING_NORTHING_UP"};
+    }
+
+    domain::project::CreateProjectSpec spec;
+    spec.displayName = command.display_name();
+    spec.parentDirectory = runtime::pathFromUtf8(command.parent_directory());
+    spec.trafficSide = *trafficSide;
+    spec.georeference.horizontalCrs = command.georeference().horizontal_crs();
+    spec.georeference.linearUnit = command.georeference().linear_unit();
+    spec.georeference.axisConvention = *axisConvention;
+    spec.georeference.originEasting = command.georeference().origin_easting();
+    spec.georeference.originNorthing = command.georeference().origin_northing();
+    spec.georeference.verticalCrs = command.georeference().vertical_crs();
+
+    runServiceCommand(connectionId, frame, [this, spec = std::move(spec)] { return service_.create(spec); });
+}
+
+void CommandProcessor::handleOpenProject(const std::string& connectionId, const ProtocolFrame& frame) {
+    const auto& command = frame.command().open_project();
+    runServiceCommand(connectionId, frame,
+        [this, directory = runtime::pathFromUtf8(command.project_directory())] {
+            return service_.open(directory);
+        });
+}
+
+void CommandProcessor::handleSaveProjectAs(const std::string& connectionId, const ProtocolFrame& frame) {
+    const auto& command = frame.command().save_project_as();
+    domain::project::SaveAsSpec spec;
+    spec.displayName = command.display_name();
+    spec.parentDirectory = runtime::pathFromUtf8(command.parent_directory());
+    runServiceCommand(connectionId, frame, [this, spec = std::move(spec)] { return service_.saveAs(spec); });
+}
+
+template <typename UseCase>
+void CommandProcessor::runServiceCommand(
+    const std::string& connectionId,
+    const ProtocolFrame& frame,
+    UseCase&& useCase) {
+    executeCommand( [this, &connectionId, &frame, &useCase] {
+        const ProjectCommandResult result = useCase();
+
+        ProtocolFrame response;
+        response.set_request_id(frame.request_id());
+        if (result.sessionClosed) {
+            response.mutable_result()->mutable_project_closed()->set_project_uuid(result.record.uuid);
+        } else {
+            fillSummary(response.mutable_result()->mutable_project_state()->mutable_summary(), result.record);
+        }
+        sink_.sendToConnection(connectionId, response);
+        publishEvents(result.events);
+
+        // After project open/create, evaluate the vertical reference state
+        // and emit diagnostic events for the real "no vertical reference"
+        // condition. After close, clear project-scoped diagnostics.
+        for (const ProjectEvent& event : result.events) {
+            if (event.kind == ProjectEventKind::Opened) {
+                evaluateVerticalReferenceDiagnostic(event.record);
+            } else if (event.kind == ProjectEventKind::Closed) {
+                publishDiagnosticCleared("georeference");
+            }
+        }
+    });
+}
+
+void CommandProcessor::handleGetGeoreference(const std::string& connectionId, const ProtocolFrame& frame) {
+    executeCommand( [this, &connectionId, &frame] {
+        const GeoreferenceInfoResult result = geoService_.getGeoreference();
+
+        ProtocolFrame response;
+        response.set_request_id(frame.request_id());
+        auto* state = response.mutable_result()->mutable_georeference_state();
+        fillGeoreferenceInfo(state->mutable_georeference(), result.config, result.resolved);
+        state->set_revision(result.revision);
+        sink_.sendToConnection(connectionId, response);
+    });
+}
+
+void CommandProcessor::handleSetGeoreference(const std::string& connectionId, const ProtocolFrame& frame) {
+    const auto& command = frame.command().set_georeference();
+    const auto axisConvention = mapAxisConvention(command.georeference().axis_convention());
+    if (!axisConvention.has_value()) {
+        // Throw so processCommand's lifecycle envelope emits job.failed.
+        throw CommandFailure{CommandFailureCode::InvalidArgument,
+            "axis_convention must be EASTING_NORTHING_UP"};
+    }
+
+    domain::geo::GeoreferenceConfig config;
+    config.horizontalCrs = command.georeference().horizontal_crs();
+    config.linearUnit = command.georeference().linear_unit();
+    config.axisConvention = *axisConvention;
+    config.originEasting = command.georeference().origin_easting();
+    config.originNorthing = command.georeference().origin_northing();
+    config.originHeight = command.georeference().origin_height();
+    config.verticalCrs = command.georeference().vertical_crs();
+
+    const std::optional<std::uint64_t> expectedRevision = command.has_expected_revision()
+        ? std::optional<std::uint64_t>{command.expected_revision()}
+        : std::nullopt;
+
+    executeCommand(
+        [this, &connectionId, &frame, config = std::move(config), expectedRevision] {
+            const GeoreferenceMutationResult result =
+                geoService_.setGeoreference(config, expectedRevision);
+
+            ProtocolFrame response;
+            response.set_request_id(frame.request_id());
+            auto* state = response.mutable_result()->mutable_georeference_state();
+            fillGeoreferenceInfo(state->mutable_georeference(), result.record.georeference, result.resolved);
+            state->set_revision(result.record.revision);
+            sink_.sendToConnection(connectionId, response);
+            publishEvents(result.events);
+
+            // After a georeference change, re-evaluate the vertical reference
+            // diagnostic so the Problems panel reflects the new state.
+            evaluateVerticalReferenceDiagnostic(result.record);
+        });
+}
+
+void CommandProcessor::handleTransformToProjectGlobal(
+    const std::string& connectionId,
+    const ProtocolFrame& frame) {
+    const auto& command = frame.command().transform_to_project_global();
+    if (command.coordinates_size() > static_cast<int>(kMaxTransformCoordinates)) {
+        // Throw so processCommand's lifecycle envelope emits job.failed.
+        throw CommandFailure{CommandFailureCode::InvalidArgument,
+            "transform batch exceeds the " + std::to_string(kMaxTransformCoordinates)
+                + " coordinate limit"};
+    }
+
+    domain::geo::SourceSpatialReference source;
+    source.horizontalCrs = command.source_crs();
+    source.verticalCrs = command.source_vertical_crs();
+
+    std::vector<domain::geo::GeoCoordinate> coordinates;
+    coordinates.reserve(static_cast<std::size_t>(command.coordinates_size()));
+    for (const auto& coordinate : command.coordinates()) {
+        coordinates.push_back({coordinate.x(), coordinate.y(), coordinate.z()});
+    }
+
+    executeCommand(
+        [this, &connectionId, &frame, source = std::move(source), coordinates = std::move(coordinates)] {
+            const std::vector<domain::geo::ProjectGlobalPosition> positions =
+                geoService_.transformToProjectGlobal(source, coordinates);
+
+            ProtocolFrame response;
+            response.set_request_id(frame.request_id());
+            auto* result = response.mutable_result()->mutable_transform_to_project_global();
+            for (const auto& position : positions) {
+                auto* coordinate = result->add_coordinates();
+                coordinate->set_easting(position.easting);
+                coordinate->set_northing(position.northing);
+                coordinate->set_height(position.height);
+            }
+            sink_.sendToConnection(connectionId, response);
+        });
+}
+
+template <typename Emit>
+void CommandProcessor::executeCommand(Emit&& emit) {
+    // No job lifecycle here — processCommand owns the lifecycle envelope.
+    // Exceptions propagate to processCommand's catch block.
+    emit();
 }
 
 void CommandProcessor::publishEvents(const std::span<const ProjectEvent> events) {

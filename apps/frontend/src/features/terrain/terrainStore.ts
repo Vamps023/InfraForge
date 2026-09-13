@@ -4,6 +4,11 @@ import type { JobRecord, TerrainDatasetInfo, TerrainProbeSourceResult } from '@i
 // Frontend projection of terrain state. Everything here mirrors engine
 // truth (command results and events); the frontend never owns canonical
 // terrain data and never receives raster payloads.
+//
+// BLOCKER 21: A session token guards against stale async responses from
+// a previous project overwriting the current project's state. Each
+// project open/switch mints a new token; async responses check the token
+// before applying results.
 interface TerrainState {
   datasets: TerrainDatasetInfo[]
   selectedDatasetUuid: string | null
@@ -12,6 +17,7 @@ interface TerrainState {
   probeError: string | null
   importing: boolean
   lastError: string | null
+  sessionToken: number
   setDatasets(datasets: TerrainDatasetInfo[]): void
   selectDataset(uuid: string | null): void
   upsertDataset(dataset: TerrainDatasetInfo): void
@@ -21,6 +27,7 @@ interface TerrainState {
   setProbeError(error: string | null): void
   setImporting(value: boolean): void
   setLastError(error: string | null): void
+  beginSession(): number
   reset(): void
 }
 
@@ -42,6 +49,7 @@ export const useTerrainStore = create<TerrainState>((set) => ({
   probeError: null,
   importing: false,
   lastError: null,
+  sessionToken: 0,
   setDatasets: (datasets) =>
     set((state) => ({
       datasets,
@@ -65,6 +73,23 @@ export const useTerrainStore = create<TerrainState>((set) => ({
   setProbeError: (probeError) => set({ probeError, probe: null }),
   setImporting: (importing) => set({ importing }),
   setLastError: (lastError) => set({ lastError }),
+  beginSession: () => {
+    let token = 0
+    set((state) => {
+      token = state.sessionToken + 1
+      return {
+        sessionToken: token,
+        datasets: [],
+        jobs: [],
+        probe: null,
+        probeError: null,
+        selectedDatasetUuid: null,
+        importing: false,
+        lastError: null,
+      }
+    })
+    return token
+  },
   reset: () =>
     set({
       datasets: [],
@@ -74,5 +99,6 @@ export const useTerrainStore = create<TerrainState>((set) => ({
       probeError: null,
       importing: false,
       lastError: null,
+      sessionToken: 0,
     }),
 }))

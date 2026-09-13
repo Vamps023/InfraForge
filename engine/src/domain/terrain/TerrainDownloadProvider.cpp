@@ -18,6 +18,17 @@ constexpr double kMaxLat = 85.05112878;
 // Convert latitude in degrees to metres using the WebMercator projection.
 // This is an approximation suitable for tile grid computation, not for
 // canonical CRS transforms (which use PROJ).
+//
+// BLOCKER 16 note: The selection grid uses WebMercator for deterministic
+// tile size approximation. At high latitudes (>60°), the physical scale
+// differs significantly — a "4 km tile" at 70° latitude is approximately
+// 2 km in the east-west direction. This is acceptable for the UI selection
+// grid because:
+//   1. The grid is a project-area unit, not canonical terrain geometry
+//   2. The canonical terrain data uses real CRS via GDAL/PROJ
+//   3. The provider requests use the tile bounds in WGS84, not the
+//      WebMercator approximation
+// The canonical transformation always uses GeoTransformService (PROJ).
 [[nodiscard]] double latToMeters(double latDeg) {
     const double lat = std::clamp(latDeg, -kMaxLat, kMaxLat);
     const double rad = lat * kPi / 180.0;

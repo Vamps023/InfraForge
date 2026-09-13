@@ -101,7 +101,25 @@ The desktop shell manages a centralized visibility policy (`ViewportVisibilityPo
 
 When restored, placement is recomputed from the latest cached bounds before showing.
 
-### 3.3 `shutdown`
+### 3.3 `scene`
+
+Replaces the renderer's terrain scene manifest (engine-derived via `terrain.get_scene`, forwarded by the shell; opaque transport metadata for the shell):
+
+```json
+{"type":"scene","originEasting":500000.0,"originNorthing":4650000.0,"originHeight":0.0,
+ "missingTiles":0,"revision":7,
+ "tiles":[{"datasetUuid":"…","datasetRevision":3,"chunkX":-1,"chunkY":2,
+           "path":"D:/proj.iforge/cache/terrain/<uuid>/tile_-1_2.iforgetile",
+           "minE":499000.0,"minN":4649000.0,"maxE":500000.0,"maxN":4650000.0}]}
+```
+
+- `tiles: []` clears the terrain scene (no terrain is rendered).
+- Tile paths are session-context absolute paths of derived, versioned cache
+  files; the viewport validates each file's embedded provenance against
+  this manifest and rejects stale/corrupt tiles explicitly.
+- Malformed scenes are rejected with a parse error — never partially applied.
+
+### 3.4 `shutdown`
 
 Instruct the viewport process to cleanly exit:
 

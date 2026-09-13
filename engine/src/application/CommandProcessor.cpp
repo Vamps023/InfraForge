@@ -1,6 +1,9 @@
 #include "infraforge/application/CommandProcessor.hpp"
 
 #include "infraforge/application/ProjectService.hpp"
+#include "infraforge/domain/geo/GeoTypes.hpp"
+#include "infraforge/domain/terrain/TerrainTypes.hpp"
+#include "infraforge/persistence/GdalTerrainSource.hpp"
 #include "infraforge/runtime/FileSystemUtf8.hpp"
 #include "infraforge/runtime/Logging.hpp"
 #include "infraforge/runtime/Uuid.hpp"
@@ -10,10 +13,12 @@
 
 #include <chrono>
 #include <cstdint>
+#include <exception>
 #include <filesystem>
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_set>
 #include <utility>
 
 namespace infraforge::application {
@@ -42,6 +47,10 @@ ProtocolCommandErrorCode mapFailureCode(const CommandFailureCode code) {
         return ProtocolCommandErrorCode::COMMAND_ERROR_CODE_INTERNAL;
     case CommandFailureCode::GeoUnsupported:
         return ProtocolCommandErrorCode::COMMAND_ERROR_CODE_GEO_UNSUPPORTED;
+    case CommandFailureCode::TerrainUnsupported:
+        return ProtocolCommandErrorCode::COMMAND_ERROR_CODE_TERRAIN_UNSUPPORTED;
+    case CommandFailureCode::NotFound:
+        return ProtocolCommandErrorCode::COMMAND_ERROR_CODE_NOT_FOUND;
     }
     return ProtocolCommandErrorCode::COMMAND_ERROR_CODE_INTERNAL;
 }
@@ -143,6 +152,24 @@ std::string_view commandName(const ProtocolFrame& frame) {
         return "geo.set_georeference";
     case protocol::v1::CommandEnvelope::kTransformToProjectGlobal:
         return "geo.transform_to_project_global";
+    case protocol::v1::CommandEnvelope::kTerrainProbeSource:
+        return "terrain.probe_source";
+    case protocol::v1::CommandEnvelope::kTerrainImportDataset:
+        return "terrain.import_dataset";
+    case protocol::v1::CommandEnvelope::kTerrainListDatasets:
+        return "terrain.list_datasets";
+    case protocol::v1::CommandEnvelope::kTerrainGetDataset:
+        return "terrain.get_dataset";
+    case protocol::v1::CommandEnvelope::kTerrainSample:
+        return "terrain.sample";
+    case protocol::v1::CommandEnvelope::kTerrainRegenerateTiles:
+        return "terrain.regenerate_tiles";
+    case protocol::v1::CommandEnvelope::kTerrainGetScene:
+        return "terrain.get_scene";
+    case protocol::v1::CommandEnvelope::kJobCancel:
+        return "job.cancel";
+    case protocol::v1::CommandEnvelope::kJobList:
+        return "job.list";
     case protocol::v1::CommandEnvelope::COMMAND_NOT_SET:
         break;
     }
@@ -171,8 +198,108 @@ std::string_view failureCodeName(const CommandFailureCode code) {
         return "INTERNAL";
     case CommandFailureCode::GeoUnsupported:
         return "GEO_UNSUPPORTED";
+    case CommandFailureCode::TerrainUnsupported:
+        return "TERRAIN_UNSUPPORTED";
+    case CommandFailureCode::NotFound:
+        return "NOT_FOUND";
     }
     return "INTERNAL";
+}
+
+// Translates terrain-domain failures into the application failure taxonomy.
+[[nodiscard]] CommandFailure toCommandFailure(const domain::terrain::TerrainError& error) {
+    switch (error.code()) {
+    case domain::terrain::TerrainErrorCode::InvalidArgument:
+        return CommandFailure(CommandFailureCode::InvalidArgument, error.what());
+    case domain::terrain::TerrainErrorCode::MissingCrs:
+    case domain::terrain::TerrainErrorCode::UnsupportedRaster:
+    case domain::terrain::TerrainErrorCode::CorruptSource:
+    case domain::terrain::TerrainErrorCode::SourceUnreadable:
+    case domain::terrain::TerrainErrorCode::SourceDataMissing:
+    case domain::terrain::TerrainErrorCode::InvalidCoverage:
+    case domain::terrain::TerrainErrorCode::TileGenerationFailed:
+    case domain::terrain::TerrainErrorCode::NodataCells:
+        return CommandFailure(CommandFailureCode::TerrainUnsupported, error.what());
+    }
+    return CommandFailure(CommandFailureCode::TerrainUnsupported, error.what());
+}
+
+[[nodiscard]] CommandFailure toCommandFailure(const domain::geo::GeoError& error) {
+    switch (error.code()) {
+    case domain::geo::GeoErrorCode::InvalidCrs:
+    case domain::geo::GeoErrorCode::NotFinite:
+        return CommandFailure(CommandFailureCode::InvalidArgument, error.what());
+    case domain::geo::GeoErrorCode::UnsupportedCrs:
+    case domain::geo::GeoErrorCode::UnsupportedUnit:
+    case domain::geo::GeoErrorCode::UnsupportedTransform:
+        return CommandFailure(CommandFailureCode::GeoUnsupported, error.what());
+    case domain::geo::GeoErrorCode::LibraryUnavailable:
+    case domain::geo::GeoErrorCode::LibraryFailure:
+        return CommandFailure(CommandFailureCode::Internal, error.what());
+    }
+    return CommandFailure(CommandFailureCode::Internal, error.what());
+}
+
+void fillTerrainDatasetInfo(
+    protocol::v1::TerrainDatasetInfo* info, const domain::terrain::TerrainDataset& dataset) {
+    info->set_dataset_uuid(domain::terrain::uuidTextFromEntityId(dataset.id));
+    info->set_display_name(dataset.displayName);
+    info->set_storage_path(dataset.storagePath);
+    info->set_source_format(dataset.sourceFormat);
+    info->set_source_crs(dataset.sourceCrs);
+    info->set_raster_width(dataset.rasterWidth);
+    info->set_raster_height(dataset.rasterHeight);
+    info->set_cell_size_x(dataset.cellSizeX);
+    info->set_cell_size_y(dataset.cellSizeY);
+    info->set_elevation_unit(dataset.elevationUnit);
+    info->set_has_nodata(dataset.hasNodata);
+    info->set_nodata_value(dataset.nodataValue);
+    info->set_min_z(dataset.minZ);
+    info->set_max_z(dataset.maxZ);
+    info->set_bounds_east(dataset.bounds.maxEasting);
+    info->set_bounds_west(dataset.bounds.minEasting);
+    info->set_bounds_north(dataset.bounds.maxNorthing);
+    info->set_bounds_south(dataset.bounds.minNorthing);
+    info->set_revision(dataset.revision);
+    for (const domain::terrain::TerrainDiagnostic& diagnostic : dataset.diagnostics) {
+        auto* entry = info->add_diagnostics();
+        entry->set_code(std::string{domain::terrain::terrainErrorCodeName(diagnostic.code)});
+        entry->set_message(diagnostic.message);
+    }
+    info->set_created_at(dataset.createdAt);
+}
+
+protocol::v1::JobState mapJobState(const JobState state) {
+    switch (state) {
+    case JobState::Queued:
+        return protocol::v1::JOB_STATE_QUEUED;
+    case JobState::Running:
+        return protocol::v1::JOB_STATE_RUNNING;
+    case JobState::Completed:
+        return protocol::v1::JOB_STATE_COMPLETED;
+    case JobState::Failed:
+        return protocol::v1::JOB_STATE_FAILED;
+    case JobState::Cancelled:
+        return protocol::v1::JOB_STATE_CANCELLED;
+    }
+    return protocol::v1::JOB_STATE_UNSPECIFIED;
+}
+
+void fillJobRecord(protocol::v1::JobRecord* output, const JobRecord& record) {
+    output->set_job_id(record.jobId);
+    output->set_operation(record.kind);
+    output->set_state(mapJobState(record.state));
+    if (record.progress.normalized > 0.0 || record.progress.unitsTotal > 0) {
+        output->set_progress(record.progress.normalized);
+    }
+    if (record.progress.unitsTotal > 0) {
+        output->set_processed(record.progress.unitsDone);
+        output->set_total(record.progress.unitsTotal);
+    }
+    output->set_label(record.progress.label);
+    output->set_message(record.message);
+    output->set_created_at(record.createdAt);
+    output->set_cancellable(record.cancellable);
 }
 
 } // namespace
@@ -184,7 +311,15 @@ CommandProcessor::CommandProcessor(
     : store_(store),
       service_(store, transforms),
       geoService_(store, transforms),
-      sink_(sink) {}
+      sink_(sink) {
+    // The job system marshals worker completions onto this executor; the
+    // terrain service emits its events through the shared publishing path.
+    terrainReader_.emplace();
+    jobs_.emplace([this](std::function<void()> task) { postTask(std::move(task)); });
+    world_ = WorldState{};
+    terrainService_.emplace(store_, transforms, *terrainReader_, world_, *jobs_,
+        [this](const TerrainServiceEvent& event) { publishTerrainEvent(event); });
+}
 
 CommandProcessor::~CommandProcessor() {
     shutdown();
@@ -221,6 +356,18 @@ void CommandProcessor::post(std::string connectionId, protocol::v1::Frame frame)
     signal_.notify_one();
 }
 
+void CommandProcessor::postTask(std::function<void()> task) {
+    {
+        std::lock_guard lock{mutex_};
+        if (stopped_) {
+            runtime::logWarn("application", "task.dropped_at_shutdown", {});
+            return;
+        }
+        tasks_.push_back({std::move(task)});
+    }
+    signal_.notify_one();
+}
+
 void CommandProcessor::shutdown() {
     {
         std::lock_guard lock{mutex_};
@@ -228,8 +375,9 @@ void CommandProcessor::shutdown() {
             return;
         }
         stopped_ = true;
-        const std::size_t discarded = queue_.size();
+        const std::size_t discarded = queue_.size() + tasks_.size();
         queue_.clear();
+        tasks_.clear();
         if (discarded > 0) {
             // Commands discarded during shutdown never had job.queued
             // emitted (post() is enqueue-only), so no orphan pending jobs
@@ -238,6 +386,21 @@ void CommandProcessor::shutdown() {
         }
     }
     signal_.notify_all();
+
+    // BLOCKER 5: deterministic shutdown order. Cancel active terrain jobs
+    // and join the JobSystem worker BEFORE joining the executor or destroying
+    // dependent services. This prevents use-after-free: the worker body
+    // captures TerrainService/reader state; once the worker is joined, no
+    // body can reference them. Completion callbacks posted to the executor
+    // are dropped (stopped_ = true) so they never run against destroyed
+    // services.
+    if (terrainService_) {
+        terrainService_->onProjectClosed();
+    }
+    if (jobs_) {
+        jobs_->shutdown();
+    }
+
     if (executor_.joinable()) {
         executor_.join();
     }
@@ -246,11 +409,29 @@ void CommandProcessor::shutdown() {
 void CommandProcessor::runExecutor() {
     std::unique_lock lock{mutex_};
     for (;;) {
-        signal_.wait(lock, [this] { return stopped_ || !queue_.empty(); });
-        if (stopped_ || queue_.empty()) {
-            if (stopped_) {
-                return;
+        signal_.wait(lock, [this] { return stopped_ || !queue_.empty() || !tasks_.empty(); });
+        if (stopped_) {
+            return;
+        }
+        // Process posted tasks (job completion callbacks) with priority so
+        // long-running job finalization is not delayed by queued commands.
+        if (!tasks_.empty()) {
+            auto task = std::move(tasks_.front());
+            tasks_.pop_front();
+            lock.unlock();
+            try {
+                if (task.task) {
+                    task.task();
+                }
+            } catch (const std::exception& error) {
+                runtime::logError("application", "task.executor_unexpected_error", {{"detail", error.what()}});
+            } catch (...) {
+                runtime::logError("application", "task.executor_unexpected_error", {{"detail", "unknown exception"}});
             }
+            lock.lock();
+            continue;
+        }
+        if (queue_.empty()) {
             continue;
         }
         auto command = std::move(queue_.front());
@@ -282,7 +463,10 @@ void CommandProcessor::processCommand(
 
     // Lifecycle envelope: emit queued -> started, dispatch, emit terminal.
     // Every path through this function emits exactly one terminal event.
-    publishJobQueued(jobId, label, label, targetId);
+    // For async terrain commands (import, regenerate), the command's
+    // completed event means "command accepted"; the background job has its
+    // own lifecycle with a separate job ID.
+    publishJobQueued(jobId, label, label, targetId, false);
     publishJobStarted(jobId);
 
     const auto startedAt = std::chrono::steady_clock::now();
@@ -316,6 +500,33 @@ void CommandProcessor::processCommand(
         case protocol::v1::CommandEnvelope::kTransformToProjectGlobal:
             handleTransformToProjectGlobal(connectionId, frame);
             break;
+        case protocol::v1::CommandEnvelope::kTerrainProbeSource:
+            handleTerrainProbeSource(connectionId, frame);
+            break;
+        case protocol::v1::CommandEnvelope::kTerrainImportDataset:
+            handleTerrainImportDataset(connectionId, frame);
+            break;
+        case protocol::v1::CommandEnvelope::kTerrainListDatasets:
+            handleTerrainListDatasets(connectionId, frame);
+            break;
+        case protocol::v1::CommandEnvelope::kTerrainGetDataset:
+            handleTerrainGetDataset(connectionId, frame);
+            break;
+        case protocol::v1::CommandEnvelope::kTerrainSample:
+            handleTerrainSample(connectionId, frame);
+            break;
+        case protocol::v1::CommandEnvelope::kTerrainRegenerateTiles:
+            handleTerrainRegenerateTiles(connectionId, frame);
+            break;
+        case protocol::v1::CommandEnvelope::kTerrainGetScene:
+            handleTerrainGetScene(connectionId, frame);
+            break;
+        case protocol::v1::CommandEnvelope::kJobCancel:
+            handleJobCancel(connectionId, frame);
+            break;
+        case protocol::v1::CommandEnvelope::kJobList:
+            handleJobList(connectionId, frame);
+            break;
         case protocol::v1::CommandEnvelope::COMMAND_NOT_SET:
             throw CommandFailure{CommandFailureCode::InvalidArgument, "command envelope is empty"};
         }
@@ -328,7 +539,7 @@ void CommandProcessor::processCommand(
                 {"outcome", "ok"},
                 {"durationMs", std::to_string(duration.count())}});
 
-        // Terminal success event emitted exactly once.
+        // Terminal success event emitted exactly once for the command dispatch.
         publishJobCompleted(jobId);
     } catch (const CommandFailure& failure) {
         sendFailureResult(connectionId, requestId, failure);
@@ -341,6 +552,14 @@ void CommandProcessor::processCommand(
                 {"durationMs", std::to_string(duration.count())}});
 
         // Terminal failure event emitted exactly once with structured error.
+        publishJobFailed(jobId, failureCodeName(failure.code()), failure.what());
+    } catch (const domain::terrain::TerrainError& error) {
+        const CommandFailure failure = toCommandFailure(error);
+        sendFailureResult(connectionId, requestId, failure);
+        publishJobFailed(jobId, failureCodeName(failure.code()), failure.what());
+    } catch (const domain::geo::GeoError& error) {
+        const CommandFailure failure = toCommandFailure(error);
+        sendFailureResult(connectionId, requestId, failure);
         publishJobFailed(jobId, failureCodeName(failure.code()), failure.what());
     } catch (const std::exception& error) {
         // Internal details stay in the log; the client receives a stable
@@ -399,8 +618,17 @@ void CommandProcessor::runServiceCommand(
     const std::string& connectionId,
     const ProtocolFrame& frame,
     UseCase&& useCase) {
-    executeCommand( [this, &connectionId, &frame, &useCase] {
+    executeCommand([this, &connectionId, &frame, &useCase] {
         const ProjectCommandResult result = useCase();
+
+        // Terrain session state (world partition + dataset registry) follows
+        // the project session lifecycle events.
+        for (const ProjectEvent& event : result.events) {
+            if (event.kind == ProjectEventKind::Opened || event.kind == ProjectEventKind::Closed) {
+                syncTerrainSession();
+                break;
+            }
+        }
 
         ProtocolFrame response;
         response.set_request_id(frame.request_id());
@@ -426,7 +654,7 @@ void CommandProcessor::runServiceCommand(
 }
 
 void CommandProcessor::handleGetGeoreference(const std::string& connectionId, const ProtocolFrame& frame) {
-    executeCommand( [this, &connectionId, &frame] {
+    executeCommand([this, &connectionId, &frame] {
         const GeoreferenceInfoResult result = geoService_.getGeoreference();
 
         ProtocolFrame response;
@@ -445,6 +673,13 @@ void CommandProcessor::handleSetGeoreference(const std::string& connectionId, co
         // Throw so processCommand's lifecycle envelope emits job.failed.
         throw CommandFailure{CommandFailureCode::InvalidArgument,
             "axis_convention must be EASTING_NORTHING_UP"};
+    }
+    if (terrainService_->hasDatasets()) {
+        // Imported terrain coverage is derived from the canonical
+        // georeference; changing it would silently invalidate stored
+        // dataset bounds. The conflict is rejected explicitly instead.
+        throw CommandFailure{CommandFailureCode::InvalidArgument,
+            "the project georeference cannot change while terrain datasets exist"};
     }
 
     domain::geo::GeoreferenceConfig config;
@@ -518,6 +753,216 @@ void CommandProcessor::handleTransformToProjectGlobal(
         });
 }
 
+// --- Terrain command handlers ---
+
+void CommandProcessor::handleTerrainProbeSource(
+    const std::string& connectionId, const ProtocolFrame& frame) {
+    const auto& command = frame.command().terrain_probe_source();
+    if (command.path().empty()) {
+        throw CommandFailure{CommandFailureCode::InvalidArgument, "path must not be empty"};
+    }
+    executeCommand([this, &connectionId, &frame, path = runtime::pathFromUtf8(command.path())] {
+        const TerrainProbeResult result = terrainService_->probeSource(path);
+
+        ProtocolFrame response;
+        response.set_request_id(frame.request_id());
+        auto* probe = response.mutable_result()->mutable_terrain_probe_source_result();
+        auto* source = probe->mutable_source();
+        source->set_format(result.source.format);
+        source->set_crs_definition(result.source.crsDefinition);
+        source->set_width(result.source.width);
+        source->set_height(result.source.height);
+        source->set_origin_x(result.source.originX);
+        source->set_origin_y(result.source.originY);
+        source->set_pixel_size_x(result.source.pixelSizeX);
+        source->set_pixel_size_y(result.source.pixelSizeY);
+        source->set_elevation_unit(result.source.elevationUnit);
+        source->set_sample_type(result.source.sampleTypeName);
+        source->set_has_nodata(result.source.hasNodata);
+        source->set_nodata_value(result.source.nodataValue);
+        source->set_file_bytes(result.source.fileBytes);
+        probe->set_crs_name(result.crsName);
+        probe->set_crs_kind(result.crsKind);
+        probe->set_crs_authority(result.crsAuthority);
+        probe->set_crs_code(result.crsCode);
+        sink_.sendToConnection(connectionId, response);
+    });
+}
+
+void CommandProcessor::handleTerrainImportDataset(
+    const std::string& connectionId, const ProtocolFrame& frame) {
+    const auto& command = frame.command().terrain_import_dataset();
+    if (command.path().empty() || command.display_name().empty()) {
+        throw CommandFailure{CommandFailureCode::InvalidArgument,
+            "path and display_name must not be empty"};
+    }
+    executeCommand(
+        [this, &connectionId, &frame, path = runtime::pathFromUtf8(command.path()),
+            displayName = command.display_name()] {
+            TerrainImportSpec spec;
+            spec.sourcePath = path;
+            spec.displayName = displayName;
+            const JobRecord record = terrainService_->startImport(spec);
+
+            // Return the background job ID immediately. The command dispatch
+            // lifecycle completes (meaning "command accepted"); the background
+            // job lifecycle is the real long operation tracked by Operations.
+            ProtocolFrame response;
+            response.set_request_id(frame.request_id());
+            auto* started = response.mutable_result()->mutable_job_started();
+            started->set_job_id(record.jobId);
+            sink_.sendToConnection(connectionId, response);
+
+            // Emit the background job's queued event.
+            TerrainServiceEvent event;
+            event.job = record;
+            event.revision = store_.isOpen() ? store_.current().revision : 0;
+            publishTerrainEvent(event);
+        });
+}
+
+void CommandProcessor::handleTerrainListDatasets(
+    const std::string& connectionId, const ProtocolFrame& frame) {
+    executeCommand([this, &connectionId, &frame] {
+        const std::vector<domain::terrain::TerrainDataset> datasets = terrainService_->listDatasets();
+
+        ProtocolFrame response;
+        response.set_request_id(frame.request_id());
+        auto* result = response.mutable_result()->mutable_terrain_list_datasets_result();
+        for (const domain::terrain::TerrainDataset& dataset : datasets) {
+            fillTerrainDatasetInfo(result->add_datasets(), dataset);
+        }
+        sink_.sendToConnection(connectionId, response);
+    });
+}
+
+void CommandProcessor::handleTerrainGetDataset(
+    const std::string& connectionId, const ProtocolFrame& frame) {
+    const auto& command = frame.command().terrain_get_dataset();
+    executeCommand(
+        [this, &connectionId, &frame, uuid = command.dataset_uuid()] {
+            const TerrainDatasetDetails details = terrainService_->datasetDetails(uuid);
+
+            ProtocolFrame response;
+            response.set_request_id(frame.request_id());
+            auto* result = response.mutable_result()->mutable_terrain_get_dataset_result();
+            fillTerrainDatasetInfo(result->mutable_dataset(), details.dataset);
+            result->set_expected_tiles(details.expectedTiles);
+            result->set_present_tiles(details.presentTiles);
+            sink_.sendToConnection(connectionId, response);
+        });
+}
+
+void CommandProcessor::handleTerrainSample(
+    const std::string& connectionId, const ProtocolFrame& frame) {
+    const auto& command = frame.command().terrain_sample();
+    executeCommand(
+        [this, &connectionId, &frame, uuid = command.dataset_uuid(), easting = command.easting(),
+            northing = command.northing()] {
+            const TerrainSampleResult result = terrainService_->sample(uuid, easting, northing);
+
+            ProtocolFrame response;
+            response.set_request_id(frame.request_id());
+            auto* sample = response.mutable_result()->mutable_terrain_sample_result();
+            sample->set_dataset_uuid(result.datasetUuid);
+            switch (result.sample.status) {
+            case domain::terrain::TerrainSampleStatus::Height:
+                sample->set_status(protocol::v1::TERRAIN_SAMPLE_STATUS_HEIGHT);
+                sample->set_height(result.sample.height);
+                break;
+            case domain::terrain::TerrainSampleStatus::NoData:
+                sample->set_status(protocol::v1::TERRAIN_SAMPLE_STATUS_NODATA);
+                break;
+            case domain::terrain::TerrainSampleStatus::OutsideCoverage:
+                sample->set_status(protocol::v1::TERRAIN_SAMPLE_STATUS_OUTSIDE_COVERAGE);
+                break;
+            }
+            sink_.sendToConnection(connectionId, response);
+        });
+}
+
+void CommandProcessor::handleTerrainRegenerateTiles(
+    const std::string& connectionId, const ProtocolFrame& frame) {
+    const auto& command = frame.command().terrain_regenerate_tiles();
+    executeCommand([this, &connectionId, &frame, uuid = command.dataset_uuid()] {
+        const JobRecord record = terrainService_->regenerateTiles(uuid);
+
+        ProtocolFrame response;
+        response.set_request_id(frame.request_id());
+        auto* started = response.mutable_result()->mutable_job_started();
+        started->set_job_id(record.jobId);
+        sink_.sendToConnection(connectionId, response);
+
+        // Emit the background job's queued event.
+        TerrainServiceEvent event;
+        event.job = record;
+        event.revision = store_.isOpen() ? store_.current().revision : 0;
+        publishTerrainEvent(event);
+    });
+}
+
+void CommandProcessor::handleTerrainGetScene(
+    const std::string& connectionId, const ProtocolFrame& frame) {
+    executeCommand([this, &connectionId, &frame] {
+        const TerrainSceneProjection projection = terrainService_->sceneProjection();
+
+        ProtocolFrame response;
+        response.set_request_id(frame.request_id());
+        auto* scene = response.mutable_result()->mutable_terrain_scene_result();
+        scene->set_origin_easting(projection.renderOrigin.easting);
+        scene->set_origin_northing(projection.renderOrigin.northing);
+        scene->set_origin_height(projection.renderOrigin.height);
+        for (const TerrainSceneTile& tile : projection.tiles) {
+            auto* message = scene->add_tiles();
+            message->set_dataset_uuid(tile.datasetUuid);
+            message->set_dataset_revision(tile.datasetRevision);
+            message->set_chunk_x(tile.chunkX);
+            message->set_chunk_y(tile.chunkY);
+            message->set_absolute_path(tile.absolutePath);
+            message->set_min_easting(tile.minEasting);
+            message->set_min_northing(tile.minNorthing);
+            message->set_max_easting(tile.maxEasting);
+            message->set_max_northing(tile.maxNorthing);
+        }
+        scene->set_missing_tiles(projection.missingTiles);
+        scene->set_revision(projection.revision);
+        sink_.sendToConnection(connectionId, response);
+    });
+}
+
+void CommandProcessor::handleJobCancel(
+    const std::string& connectionId, const ProtocolFrame& frame) {
+    const auto& command = frame.command().job_cancel();
+    executeCommand([this, &connectionId, &frame, jobId = command.job_id()] {
+        if (!jobs_->job(jobId).has_value()) {
+            throw CommandFailure{CommandFailureCode::NotFound, "unknown job: " + jobId};
+        }
+        const bool cancelled = jobs_->requestCancel(jobId);
+
+        ProtocolFrame response;
+        response.set_request_id(frame.request_id());
+        auto* result = response.mutable_result()->mutable_job_cancel_result();
+        result->set_job_id(jobId);
+        result->set_cancelled(cancelled);
+        sink_.sendToConnection(connectionId, response);
+    });
+}
+
+void CommandProcessor::handleJobList(
+    const std::string& connectionId, const ProtocolFrame& frame) {
+    executeCommand([this, &connectionId, &frame] {
+        const std::vector<JobRecord> records = jobs_->listJobs();
+
+        ProtocolFrame response;
+        response.set_request_id(frame.request_id());
+        auto* result = response.mutable_result()->mutable_job_list_result();
+        for (const JobRecord& record : records) {
+            fillJobRecord(result->add_jobs(), record);
+        }
+        sink_.sendToConnection(connectionId, response);
+    });
+}
+
 template <typename Emit>
 void CommandProcessor::executeCommand(Emit&& emit) {
     // No job lifecycle here — processCommand owns the lifecycle envelope.
@@ -562,6 +1007,111 @@ void CommandProcessor::publishEvents(const std::span<const ProjectEvent> events)
     }
 }
 
+void CommandProcessor::publishTerrainEvent(const TerrainServiceEvent& event) {
+    if (event.datasetAdded.has_value()) {
+        ProtocolFrame eventFrame;
+        auto* envelope = eventFrame.mutable_event();
+        envelope->set_event_id(runtime::generateUuidV4());
+        auto* added = envelope->mutable_terrain_dataset_added();
+        fillTerrainDatasetInfo(added->mutable_dataset(), *event.datasetAdded);
+        added->set_revision(event.revision);
+        sink_.broadcastEvent(eventFrame);
+
+        // The dataset insert is a canonical mutation: derive the standard
+        // revision/dirty projections from the post-mutation store state.
+        if (store_.isOpen()) {
+            const auto& record = store_.current();
+            ProtocolFrame revisionFrame;
+            auto* revisionEnvelope = revisionFrame.mutable_event();
+            revisionEnvelope->set_event_id(runtime::generateUuidV4());
+            revisionEnvelope->mutable_project_revision_changed()->set_revision(record.revision);
+            sink_.broadcastEvent(revisionFrame);
+
+            ProtocolFrame dirtyFrame;
+            auto* dirtyEnvelope = dirtyFrame.mutable_event();
+            dirtyEnvelope->set_event_id(runtime::generateUuidV4());
+            auto* dirty = dirtyEnvelope->mutable_project_dirty_state_changed();
+            dirty->set_dirty(record.isDirty());
+            dirty->set_revision(record.revision);
+            sink_.broadcastEvent(dirtyFrame);
+        }
+
+        // Route terrain diagnostics through the Problems/diagnostics system.
+        for (const domain::terrain::TerrainDiagnostic& diagnostic : event.datasetAdded->diagnostics) {
+            const std::string diagnosticId = "terrain:" + std::string{domain::terrain::uuidTextFromEntityId(event.datasetAdded->id)}
+                + ":" + std::string{domain::terrain::terrainErrorCodeName(diagnostic.code)};
+            publishDiagnosticAdded(diagnosticId, "terrain",
+                protocol::v1::DIAGNOSTIC_SEVERITY_WARNING,
+                diagnostic.message,
+                domain::terrain::uuidTextFromEntityId(event.datasetAdded->id));
+            hasTerrainDiagnostics_ = true;
+        }
+    }
+
+    if (event.job.has_value()) {
+        const JobRecord& record = *event.job;
+        ProtocolFrame eventFrame;
+        auto* envelope = eventFrame.mutable_event();
+        envelope->set_event_id(runtime::generateUuidV4());
+        switch (record.state) {
+        case JobState::Queued: {
+            auto* queued = envelope->mutable_job_queued();
+            queued->set_job_id(record.jobId);
+            queued->set_operation(record.kind);
+            queued->set_label(record.progress.label);
+            queued->set_cancellable(record.cancellable);
+            break;
+        }
+        case JobState::Running: {
+            // First Running update emits job.started; subsequent updates emit
+            // job.progress. Track started jobs to distinguish the two.
+            static thread_local std::unordered_set<std::string> startedJobs;
+            if (startedJobs.insert(record.jobId).second) {
+                envelope->mutable_job_started()->set_job_id(record.jobId);
+            } else {
+                auto* progress = envelope->mutable_job_progress();
+                progress->set_job_id(record.jobId);
+                progress->set_progress(record.progress.normalized);
+                progress->set_processed(record.progress.unitsDone);
+                progress->set_total(record.progress.unitsTotal);
+                progress->set_message(record.progress.label);
+            }
+            break;
+        }
+        case JobState::Completed: {
+            envelope->mutable_job_completed()->set_job_id(record.jobId);
+            break;
+        }
+        case JobState::Failed: {
+            auto* failed = envelope->mutable_job_failed();
+            failed->set_job_id(record.jobId);
+            failed->set_error_code("TERRAIN_UNSUPPORTED");
+            failed->set_error_message(record.message);
+            break;
+        }
+        case JobState::Cancelled: {
+            envelope->mutable_job_cancelled()->set_job_id(record.jobId);
+            break;
+        }
+        }
+        sink_.broadcastEvent(eventFrame);
+    }
+}
+
+void CommandProcessor::syncTerrainSession() {
+    if (store_.isOpen()) {
+        terrainService_->onProjectOpened();
+    } else {
+        terrainService_->onProjectClosed();
+        // Clear terrain-scoped diagnostics when the project closes, but only
+        // if any were actually emitted (avoids spurious events).
+        if (hasTerrainDiagnostics_) {
+            publishDiagnosticCleared("terrain");
+            hasTerrainDiagnostics_ = false;
+        }
+    }
+}
+
 void CommandProcessor::sendFailureResult(
     const std::string& connectionId,
     const std::string& requestId,
@@ -593,7 +1143,8 @@ void CommandProcessor::publishJobQueued(
     const std::string& jobId,
     std::string_view operation,
     std::string_view label,
-    std::string_view targetId) {
+    std::string_view targetId,
+    bool cancellable) {
     ProtocolFrame eventFrame;
     auto* envelope = eventFrame.mutable_event();
     envelope->set_event_id(runtime::generateUuidV4());
@@ -604,8 +1155,7 @@ void CommandProcessor::publishJobQueued(
     if (!targetId.empty()) {
         queued->set_target_id(std::string{targetId});
     }
-    // Cancellation is not yet wired end-to-end; no current operation supports it.
-    queued->set_cancellable(false);
+    queued->set_cancellable(cancellable);
     sink_.broadcastEvent(eventFrame);
 }
 
@@ -614,6 +1164,21 @@ void CommandProcessor::publishJobStarted(const std::string& jobId) {
     auto* envelope = eventFrame.mutable_event();
     envelope->set_event_id(runtime::generateUuidV4());
     envelope->mutable_job_started()->set_job_id(jobId);
+    sink_.broadcastEvent(eventFrame);
+}
+
+void CommandProcessor::publishJobProgress(
+    const std::string& jobId, double progress,
+    std::uint64_t processed, std::uint64_t total, std::string_view message) {
+    ProtocolFrame eventFrame;
+    auto* envelope = eventFrame.mutable_event();
+    envelope->set_event_id(runtime::generateUuidV4());
+    auto* prog = envelope->mutable_job_progress();
+    prog->set_job_id(jobId);
+    prog->set_progress(progress);
+    prog->set_processed(processed);
+    prog->set_total(total);
+    prog->set_message(std::string{message});
     sink_.broadcastEvent(eventFrame);
 }
 
@@ -636,6 +1201,14 @@ void CommandProcessor::publishJobFailed(
     failed->set_job_id(jobId);
     failed->set_error_code(std::string{errorCode});
     failed->set_error_message(std::string{errorMessage});
+    sink_.broadcastEvent(eventFrame);
+}
+
+void CommandProcessor::publishJobCancelled(const std::string& jobId) {
+    ProtocolFrame eventFrame;
+    auto* envelope = eventFrame.mutable_event();
+    envelope->set_event_id(runtime::generateUuidV4());
+    envelope->mutable_job_cancelled()->set_job_id(jobId);
     sink_.broadcastEvent(eventFrame);
 }
 

@@ -6,7 +6,6 @@
 
 #include <array>
 #include <cmath>
-
 namespace infraforge::viewport {
 namespace {
 
@@ -55,7 +54,7 @@ ControlCommand parseControlCommand(const std::string_view line) {
     }
 
     const std::string type = json.at("type").get<std::string>();
-    static constexpr std::array<std::string_view, 3> kKnownTypes{"place", "visibility", "shutdown"};
+    static constexpr std::array<std::string_view, 4> kKnownTypes{"place", "visibility", "shutdown", "scene"};
     bool knownType = false;
     for (const std::string_view candidate : kKnownTypes) {
         knownType = knownType || type == candidate;
@@ -69,6 +68,16 @@ ControlCommand parseControlCommand(const std::string_view line) {
             failParse("shutdown command takes no extra fields");
         }
         return ShutdownCommand{};
+    }
+
+    if (type == "scene") {
+        // The terrain scene body is parsed and validated by the renderer
+        // layer's scene parser (same explicit-rejection rules).
+        try {
+            return SceneCommand{.scene = parseTerrainScene(line)};
+        } catch (const CommandParseError& error) {
+            failParse(std::string("scene command rejected: ") + error.message);
+        }
     }
 
     if (type == "visibility") {

@@ -23,6 +23,8 @@ type ViewportStatusPayload = Readonly<{
 
 type ViewportRect = Readonly<{ x: number; y: number; width: number; height: number }>
 
+type FileFilter = Readonly<{ name: string; extensions: ReadonlyArray<string> }>
+
 declare global {
   interface Window {
     infraforgeDesktop?: Readonly<{
@@ -33,6 +35,8 @@ declare global {
       }>
       getEngineBootstrap: () => Promise<EngineBootstrap>
       pickDirectory: (options: Readonly<{ title: string; buttonLabel?: string }>) => Promise<string | null>
+      pickFile: (options: Readonly<{ title: string; filters?: ReadonlyArray<FileFilter> }>) => Promise<string | null>
+      setViewportScene: (scene: Record<string, unknown>) => void
       setViewportBounds: (rect: ViewportRect, dpiScale: number) => void
       setViewportVisible: (visible: boolean) => void
       onViewportStatus: (listener: (status: ViewportStatusPayload) => void) => () => void

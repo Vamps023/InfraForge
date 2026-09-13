@@ -1,0 +1,313 @@
+#include "infraforge/viewport/renderer/TerrainTileCache.hpp"
+
+#include <algorithm>
+#include <cmath>
+#include <stdexcept>
+#include <utility>
+
+namespace infraforge::viewport {
+namespace {
+
+[[nodiscard]] TerrainTileId keyOf(
+    const std::string& datasetUuid, const std::int64_t chunkX, const std::int64_t chunkY) {
+    return {datasetUuid, {chunkX, chunkY}};
+}
+
+} // namespace
+
+std::string_view TerrainTileCache::residencyName(const Residency residency) noexcept {
+    switch (residency) {
+    case Residency::Unloaded:
+        return "unloaded";
+    case Residency::Loading:
+        return "loading";
+    case Residency::Resident:
+        return "resident";
+    case Residency::LodReplacing:
+        return "lod_replacing";
+    case Residency::Stale:
+        return "stale";
+    case Residency::Evicting:
+        return "evicting";
+    }
+    return "unknown";
+}
+
+std::size_t TerrainTileCache::adoptScene(const TerrainScene& scene) {
+    scene_ = scene;
+
+    std::size_t staled = 0;
+    for (Entry& entry : entries_) {
+        const auto tile = std::find_if(scene.tiles.begin(), scene.tiles.end(),
+            [&](const TerrainSceneTile& candidate) {
+                return candidate.datasetUuid == entry.tile.datasetUuid
+                    && candidate.chunkX == entry.tile.chunkX
+                    && candidate.chunkY == entry.tile.chunkY;
+            });
+        if (tile == scene.tiles.end()) {
+            // Removed with the scene: release, then drop on notifyReleased.
+            entry.residency = Residency::Evicting;
+            entry.releaseQueued = false;
+            continue;
+        }
+        const bool revisionMoved = tile->datasetRevision != entry.tile.datasetRevision;
+        entry.tile = *tile;
+        if (revisionMoved
+            && (entry.residency == Residency::Resident
+                || entry.residency == Residency::LodReplacing
+                || entry.residency == Residency::Loading)) {
+            // Resident content derived from a superseded revision must not be
+            // shown again; the tile reloads from the regenerated file.
+            entry.residency = Residency::Stale;
+            entry.lodLoadInProgress = false;
+            ++staled;
+        }
+    }
+
+    for (const TerrainSceneTile& tile : scene.tiles) {
+        if (!indexOf(tile.datasetUuid, tile.chunkX, tile.chunkY).has_value()) {
+            Entry entry;
+            entry.tile = tile;
+            entries_.push_back(std::move(entry));
+        }
+    }
+    rebuildIndex();
+    return staled;
+}
+
+std::optional<std::size_t> TerrainTileCache::indexOf(
+    const std::string& datasetUuid, const std::int64_t chunkX, const std::int64_t chunkY) const {
+    const auto found = index_.find(keyOf(datasetUuid, chunkX, chunkY));
+    if (found == index_.end()) {
+        return std::nullopt;
+    }
+    return found->second;
+}
+
+bool TerrainTileCache::presentInScene(const Entry& entry) const {
+    return std::any_of(scene_.tiles.begin(), scene_.tiles.end(),
+        [&](const TerrainSceneTile& candidate) {
+            return candidate.datasetUuid == entry.tile.datasetUuid
+                && candidate.chunkX == entry.tile.chunkX
+                && candidate.chunkY == entry.tile.chunkY;
+        });
+}
+
+void TerrainTileCache::rebuildIndex() {
+    index_.clear();
+    for (std::size_t i = 0; i < entries_.size(); ++i) {
+        const Entry& entry = entries_[i];
+        index_.emplace(keyOf(entry.tile.datasetUuid, entry.tile.chunkX, entry.tile.chunkY), i);
+    }
+}
+
+double TerrainTileCache::tileCenterDistanceSquared(const Entry& entry, const TerrainCameraState& camera) const {
+    const double centerE = (entry.tile.minEasting + entry.tile.maxEasting) * 0.5;
+    const double centerN = (entry.tile.minNorthing + entry.tile.maxNorthing) * 0.5;
+    const double dx = centerE - camera.centerX;
+    const double dy = centerN - camera.centerY;
+    return dx * dx + dy * dy;
+}
+
+std::uint32_t TerrainTileCache::lodForSpacing(const double metersPerPixel, const double level0Spacing) {
+    if (!(metersPerPixel > 0.0) || !(level0Spacing > 0.0)) {
+        return 0;
+    }
+    // One height sample per screen pixel is the reference density; the view
+    // can go up to 2x coarser at level 0, then drops one LOD per factor-2
+    // zoom-out, deterministically from the camera metric alone.
+    const double ratio = metersPerPixel / level0Spacing;
+    if (ratio < 2.0) {
+        return 0;
+    }
+    const double level = std::floor(std::log2(ratio));
+    const double clamped = std::clamp(level, 0.0, static_cast<double>(kLodCount - 1));
+    return static_cast<std::uint32_t>(clamped);
+}
+
+TerrainTileCache::UpdateResult TerrainTileCache::update(const TerrainCameraState& camera) {
+    UpdateResult result;
+
+    const auto queueRelease = [&result](Entry& entry) {
+        if (entry.residency == Residency::Evicting && !entry.releaseQueued) {
+            entry.releaseQueued = true;
+            result.toRelease.push_back(&entry);
+        }
+    };
+
+    // 1. Tiles already evicted (scene removal or budget pressure) whose GPU
+    // release is still outstanding.
+    for (Entry& entry : entries_) {
+        queueRelease(entry);
+    }
+
+    // 2. Desired LOD per tile under the current camera metric.
+    for (Entry& entry : entries_) {
+        if (entry.residency == Residency::Evicting) {
+            continue;
+        }
+        const double extent = entry.tile.maxEasting - entry.tile.minEasting;
+        entry.desiredLod = lodForSpacing(camera.metersPerPixel, extent / kLevel0Samples);
+        // BLOCKER 6: a Resident tile at the wrong LOD needs an LOD replacement.
+        // Transition to LodReplacing so it becomes a load candidate while
+        // remaining drawable at its old LOD (no flicker).
+        if (entry.residency == Residency::Resident && entry.loadedLod != entry.desiredLod) {
+            entry.residency = Residency::LodReplacing;
+            entry.lodLoadInProgress = false;
+        }
+    }
+
+    // 3. Loads: stale tiles first (freshest content), then unloaded tiles
+    // and LOD-replacing tiles nearest the camera center. Bounded per update
+    // so a working-set change cannot stall the frame.
+    std::vector<std::size_t> candidates;
+    for (std::size_t i = 0; i < entries_.size(); ++i) {
+        const Entry& entry = entries_[i];
+        if (entry.residency == Residency::Unloaded || entry.residency == Residency::Stale) {
+            candidates.push_back(i);
+        } else if (entry.residency == Residency::LodReplacing && !entry.lodLoadInProgress) {
+            candidates.push_back(i);
+        }
+    }
+    std::sort(candidates.begin(), candidates.end(), [&](std::size_t a, std::size_t b) {
+        const auto priority = [](const Entry& e) {
+            if (e.residency == Residency::Stale) return 0;
+            if (e.residency == Residency::LodReplacing) return 1;
+            return 2; // Unloaded
+        };
+        const int pa = priority(entries_[a]);
+        const int pb = priority(entries_[b]);
+        if (pa != pb) {
+            return pa < pb;
+        }
+        return tileCenterDistanceSquared(entries_[a], camera)
+            < tileCenterDistanceSquared(entries_[b], camera);
+    });
+    const std::size_t loadingNow = std::min(candidates.size(), kMaxLoadsPerUpdate);
+    for (std::size_t i = 0; i < loadingNow; ++i) {
+        Entry& entry = entries_[candidates[i]];
+        if (entry.residency == Residency::LodReplacing) {
+            // LOD replacement: keep the old payload drawable at loadedLod;
+            // the pass loads at desiredLod and notifyLoaded atomically
+            // replaces the LOD on success.
+            entry.lodLoadInProgress = true;
+        } else {
+            // Initial load or stale reload: transition to Loading.
+            entry.residency = Residency::Loading;
+            entry.loadedLod = entry.desiredLod;
+        }
+        result.toLoad.push_back(&entry);
+    }
+
+    // 4. Budget pressure: when the resident set would exceed the bound, the
+    // farthest up-to-date tiles are evicted first. In-flight loads are never
+    // evicted — their completion is version-checked instead. LodReplacing
+    // tiles count toward the resident budget (they hold GPU payloads).
+    std::size_t usefulResident = 0;
+    for (const Entry& entry : entries_) {
+        if ((entry.residency == Residency::Resident || entry.residency == Residency::LodReplacing)
+            && entry.loadedLod == entry.desiredLod) {
+            ++usefulResident;
+        }
+    }
+    if (usefulResident > kMaxResidentTiles) {
+        std::vector<std::size_t> evictable;
+        for (std::size_t i = 0; i < entries_.size(); ++i) {
+            const Entry& entry = entries_[i];
+            if ((entry.residency == Residency::Resident || entry.residency == Residency::LodReplacing)
+                && entry.loadedLod == entry.desiredLod) {
+                evictable.push_back(i);
+            }
+        }
+        std::sort(evictable.begin(), evictable.end(), [&](std::size_t a, std::size_t b) {
+            return tileCenterDistanceSquared(entries_[a], camera)
+                > tileCenterDistanceSquared(entries_[b], camera);
+        });
+        std::size_t excess = usefulResident - kMaxResidentTiles;
+        for (const std::size_t index : evictable) {
+            if (excess == 0) {
+                break;
+            }
+            Entry& entry = entries_[index];
+            entry.residency = Residency::Evicting;
+            queueRelease(entry);
+            --excess;
+        }
+    }
+
+    return result;
+}
+
+void TerrainTileCache::notifyLoaded(
+    const std::string& datasetUuid, const std::int64_t chunkX, const std::int64_t chunkY,
+    const std::uint32_t lod, const bool success) {
+    const auto index = indexOf(datasetUuid, chunkX, chunkY);
+    if (!index.has_value()) {
+        throw std::out_of_range("notifyLoaded for an untracked terrain tile");
+    }
+    Entry& entry = entries_[*index];
+    if (entry.residency == Residency::LodReplacing) {
+        // LOD replacement completion: on success, atomically replace the LOD;
+        // on failure, retain the old resident payload (no flicker, no drop).
+        entry.lodLoadInProgress = false;
+        if (success) {
+            entry.loadedLod = lod;
+            entry.failedLoads = 0;
+            entry.residency = Residency::Resident;
+        } else {
+            ++entry.failedLoads;
+            // Keep old loadedLod and Resident state; the next update() will
+            // re-queue LOD replacement if the camera still wants a different LOD.
+            entry.residency = Residency::Resident;
+        }
+        return;
+    }
+    if (success) {
+        entry.loadedLod = lod;
+        entry.failedLoads = 0;
+        // A scene switch during the load may have staled the tile; content
+        // becomes resident only while the load is still current.
+        if (entry.residency == Residency::Loading) {
+            entry.residency = Residency::Resident;
+        }
+    } else {
+        ++entry.failedLoads;
+        entry.residency = Residency::Unloaded;
+    }
+}
+
+void TerrainTileCache::notifyReleased(
+    const std::string& datasetUuid, const std::int64_t chunkX, const std::int64_t chunkY) {
+    const auto index = indexOf(datasetUuid, chunkX, chunkY);
+    if (!index.has_value()) {
+        return; // already dropped
+    }
+    Entry& entry = entries_[*index];
+    if (entry.residency != Residency::Evicting) {
+        return;
+    }
+    entry.lodLoadInProgress = false;
+    if (presentInScene(entry)) {
+        // Budget eviction of a manifest tile: may reload on demand.
+        entry.residency = Residency::Unloaded;
+        entry.releaseQueued = false;
+        return;
+    }
+    // Removed with its scene: drop the tracked entry entirely.
+    entries_.erase(entries_.begin() + static_cast<std::ptrdiff_t>(*index));
+    rebuildIndex();
+}
+
+std::vector<const TerrainTileCache::Entry*> TerrainTileCache::residentTiles() const {
+    std::vector<const Entry*> resident;
+    for (const Entry& entry : entries_) {
+        // LodReplacing tiles are drawable at their old LOD while the new LOD
+        // load is in flight.
+        if (entry.residency == Residency::Resident || entry.residency == Residency::LodReplacing) {
+            resident.push_back(&entry);
+        }
+    }
+    return resident;
+}
+
+} // namespace infraforge::viewport

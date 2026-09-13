@@ -25,6 +25,14 @@ import { useCommandContext, useCommandShortcuts } from './editor/commands/useCom
 import { useShellUiStore } from './editor/shell/shellUiStore'
 import { useProblemDiagnostics } from './editor/problems/useProblemDiagnostics'
 
+import { ImportTerrainDialog } from './features/terrain/ImportTerrainDialog'
+import { registerTerrainCommands, unregisterTerrainCommands } from './features/terrain/terrainCommands'
+import { registerTerrainOutlinerProjection, unregisterTerrainOutlinerProjection } from './features/terrain/terrainOutlinerProjection'
+import { registerTerrainInspectorSection, unregisterTerrainInspectorSection } from './features/terrain/terrainInspectorSection'
+import { subscribeTerrainEvents, setTerrainScenePublisher } from './features/terrain/terrainEvents'
+import { fetchTerrainScene } from './features/terrain/terrainApi'
+import { useTerrainStore } from './features/terrain/terrainStore'
+
 function ViewportArea({ hostRef }: { hostRef: React.RefObject<HTMLDivElement | null> }) {
   const rendererStatus = useViewportStore((state) => state.status)
   const surfaceActive = viewportSurfaceActive(rendererStatus.state)
@@ -133,10 +141,16 @@ export function App() {
     registerBuiltinCommands({ getEngineClient: () => engineSessionRef.current?.client ?? null })
     registerProjectOverviewSection()
     registerProjectRootProjection()
+    registerTerrainCommands({ getEngineClient: () => engineSessionRef.current?.client ?? null })
+    registerTerrainOutlinerProjection()
+    registerTerrainInspectorSection({ getEngineClient: () => engineSessionRef.current?.client ?? null })
     return () => {
       unregisterBuiltinCommands()
       unregisterProjectOverviewSection()
       unregisterProjectRootProjection()
+      unregisterTerrainCommands()
+      unregisterTerrainOutlinerProjection()
+      unregisterTerrainInspectorSection()
     }
   }, [])
 
@@ -180,9 +194,25 @@ export function App() {
 
       const unsubscribe = subscribeProjectEvents(result.session.client)
       const unsubscribeShell = subscribeShellEvents(result.session.client)
+      const unsubscribeTerrain = subscribeTerrainEvents(result.session.client)
+
+      // Wire the terrain scene publisher: when terrain work settles, fetch
+      // the updated scene projection and forward it to the native viewport
+      // through the desktop shell IPC bridge.
+      setTerrainScenePublisher(() => {
+        void (async () => {
+          const scene = await fetchTerrainScene(result.session.client).catch(() => null)
+          if (scene) {
+            window.infraforgeDesktop?.setViewportScene?.(scene as Record<string, unknown>)
+          }
+        })()
+      })
+
       const disposeSession = () => {
         unsubscribe()
         unsubscribeShell()
+        unsubscribeTerrain()
+        setTerrainScenePublisher(null)
         result.session.dispose()
       }
 
@@ -240,6 +270,13 @@ export function App() {
       {openDialog === 'command-palette' ? (
         <CommandPalette
           context={commandContext}
+          onClose={() => closeDialog()}
+        />
+      ) : null}
+      {openDialog === 'import-terrain' && engineSession && projectOpen ? (
+        <ImportTerrainDialog
+          client={engineSession.client}
+          busy={busy}
           onClose={() => closeDialog()}
         />
       ) : null}

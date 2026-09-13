@@ -1,6 +1,7 @@
 import { useProjectStore } from './projectStore'
 import { useGeoStore } from '../geo/geoStore'
 import { useSelectionStore } from '../../editor/selection/selectionStore'
+import { useTerrainStore } from '../terrain/terrainStore'
 import type { EngineClient } from '../../lib/engineSession'
 import type { EventEnvelope } from '@infraforge/protocol'
 
@@ -25,6 +26,8 @@ export function applyProjectEvent(event: EventEnvelope) {
       // Project closed: canonical selections are no longer valid. Clear
       // selection so stale IDs do not resolve against a non-existent world.
       useSelectionStore.getState().clear()
+      // Clear terrain projection state: datasets belong to the closed project.
+      useTerrainStore.getState().reset()
       break
     case 'projectRevisionChanged':
       store.patchSummary({ revision: event.event.value.revision })

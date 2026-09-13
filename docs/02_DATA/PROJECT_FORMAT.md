@@ -65,7 +65,7 @@ Large raster, imagery, model, texture, and generated chunk/cache payloads are fi
 
 ## Cache rule
 
-`cache/` is non-canonical. Deleting it may cost rebuild time but must not remove user-authored semantic data.
+`cache/` is non-canonical. Deleting it may cost rebuild time but must not remove user-authored semantic data. Imported terrain rasters are NOT cache: `terrain/elevation/<uuid>.tif` is the project-owned canonical copy referenced by the `terrain_datasets` record (`docs/05_DOMAINS/TERRAIN.md`); only the derived tile files under `cache/terrain/` are rebuildable.
 
 ## Portability
 

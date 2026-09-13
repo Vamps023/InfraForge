@@ -5,6 +5,11 @@ export interface PickDirectoryOptions {
   buttonLabel?: string
 }
 
+export interface PickFileOptions {
+  title: string
+  filters?: Array<{ name: string; extensions: string[] }>
+}
+
 export interface ViewportStatusPayload {
   state: 'unavailable' | 'starting' | 'ready' | 'suspended' | 'recreating' | 'device_lost' | 'failed' | 'stopped'
   detail: string
@@ -25,6 +30,19 @@ const desktopApi = Object.freeze({
       title: String(options.title),
       buttonLabel: options.buttonLabel === undefined ? undefined : String(options.buttonLabel),
     }) as Promise<string | null>,
+  pickFile: (options: PickFileOptions) =>
+    ipcRenderer.invoke('dialog:pick-file', {
+      title: String(options.title),
+      filters: Array.isArray(options.filters)
+        ? options.filters.map((filter) => ({
+            name: String(filter.name),
+            extensions: filter.extensions.map((value) => String(value)),
+          }))
+        : [],
+    }) as Promise<string | null>,
+  setViewportScene: (scene: Record<string, unknown>) => {
+    ipcRenderer.send('viewport:scene', scene)
+  },
   setViewportBounds: (rect: { x: number; y: number; width: number; height: number }, dpiScale: number) => {
     ipcRenderer.send('viewport:set-bounds', { rect, dpiScale })
   },

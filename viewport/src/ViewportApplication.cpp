@@ -1,6 +1,7 @@
 #include "infraforge/viewport/ViewportApplication.hpp"
 
 #include "infraforge/viewport/platform/SurfaceFactory.hpp"
+#include "infraforge/viewport/platform/SurfaceInput.hpp"
 #include "infraforge/viewport/renderer/VulkanRenderer.hpp"
 #include "infraforge/runtime/Logging.hpp"
 
@@ -251,6 +252,11 @@ int runViewportApplication(const ApplicationArguments& arguments) {
                 status.validationEnabled);
         },
         arguments.validationEnabled);
+    // Native mouse input (wheel zoom, drag pan) feeds the render thread's
+    // camera through the bounded input queue; unregistered before teardown.
+    setSurfaceInputHandler([&renderer](const SurfaceInputEvent& event) {
+        renderer.postCameraInput(event);
+    });
     if (!renderer.start(surface->placement().width, surface->placement().height)) {
         // The renderer published its failure diagnostics (captured in
         // lastRendererStatus); keep serving the control protocol so the
@@ -306,6 +312,9 @@ int runViewportApplication(const ApplicationArguments& arguments) {
                     reportStatus(report->state, report->detail, report->gpuName,
                         report->vulkanVersion, report->validationEnabled);
                 }
+            } else if (auto* scene = std::get_if<SceneCommand>(&command)) {
+                // Engine-derived terrain scene hand-off to the render thread.
+                renderer.setTerrainScene(scene->scene);
             }
         }
     }
@@ -325,6 +334,7 @@ int runViewportApplication(const ApplicationArguments& arguments) {
 #endif
 
     stdinStopped.store(true, std::memory_order_relaxed);
+    setSurfaceInputHandler(nullptr);
     renderer.stop();
     surface->requestClose();
     if (stdinThread.joinable()) {

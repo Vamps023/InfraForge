@@ -1,10 +1,12 @@
 #pragma once
 
 #include "infraforge/domain/project/ProjectModel.hpp"
+#include "infraforge/domain/terrain/TerrainDataset.hpp"
 
 #include <filesystem>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace infraforge::ports {
 
@@ -27,6 +29,13 @@ public:
 
 private:
     StoreErrorCategory category_;
+};
+
+// Result of committing a new terrain dataset: the post-mutation project
+// record (revision advanced) plus the persisted dataset.
+struct TerrainDatasetInsertResult {
+    domain::project::ProjectRecord record;
+    domain::terrain::TerrainDataset dataset;
 };
 
 // Owns the SQLite connection and manifest of the currently open project.
@@ -63,6 +72,16 @@ public:
     // revision, and marks the session dirty until the next save.
     [[nodiscard]] virtual domain::project::ProjectRecord updateGeoreference(
         const domain::geo::GeoreferenceConfig& georeference) = 0;
+
+    // Canonical terrain datasets of the open project, ordered by creation.
+    [[nodiscard]] virtual std::vector<domain::terrain::TerrainDataset> terrainDatasets() const = 0;
+
+    // Persists a new terrain dataset and advances the project revision (a
+    // canonical mutation; the session becomes dirty until the next save).
+    // The dataset must already exist in project-owned storage; this call
+    // commits its canonical record in one transaction.
+    [[nodiscard]] virtual TerrainDatasetInsertResult insertTerrainDataset(
+        const domain::terrain::TerrainDataset& dataset) = 0;
 
     // Flushes and closes the active project session.
     virtual void close() = 0;

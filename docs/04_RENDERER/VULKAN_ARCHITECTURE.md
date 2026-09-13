@@ -51,15 +51,45 @@ The renderer handles swapchain acquisition and presentation through an explicit 
 - Shader compilation using `shaderc` from embedded GLSL sources with RAII staging buffers.
 - Per-monitor-v2 DPI awareness enabled before window creation to ensure 1:1 physical pixel presentation.
 
+### 4. Terrain pass and streaming (issue #6)
+
+- **Depth attachments**: the swapchain owns per-image depth buffers; the
+  render pass clears (color, depth) and both passes draw inside it —
+  terrain resolves terrain/terrain and terrain/grid occlusion through depth
+  testing.
+- **Terrain pass** (`TerrainPass`): depth-tested heightfield pipeline from
+  embedded GLSL; tile grid parameters are canonical doubles, converted
+  through the shared `RenderLocalFrame` in double precision with the float
+  reduction exactly at that boundary (northing flipped for the camera's
+  Y-down convention). Per-vertex normals derive from height gradients;
+  NoData quads are dropped (holes, not fabricated surfaces); vertical edge
+  skirts hide LOD seams.
+- **Streaming policy** (`TerrainTileCache`): GPU-independent residency
+  state machine over the world vocabulary (unloaded → loading → resident;
+  stale on dataset-revision drift; evicting → unloaded), deterministic
+  camera-metric LOD (`floor(log2(mpp / level0Spacing))` clamped to the
+  pyramid), bounded working set (≤ 64 resident tiles, farthest-first
+  eviction, ≤ 2 loads per frame). Tile decode validates the embedded
+  provenance (dataset id + revision) against the scene manifest — stale
+  files are rejected, never re-shown.
+- **Scene input**: the engine's `terrain.get_scene` projection reaches the
+  viewport as a `scene` control command through the desktop shell; the
+  renderer never queries SQLite and the shell/frontend never interpret
+  tile payloads.
+- **Camera input**: native mouse events (wheel zoom, drag pan) feed the
+  render-thread camera through a bounded queue; the first non-empty scene
+  frames the camera onto the terrain extent.
+
 ---
 
 ## Planned capabilities (WIP / future milestone implementation)
 
 The following renderer components are designed but remain Work In Progress (WIP) as subsequent product phases unlock:
 
-### Terrain pass (Phase 6)
-- Multi-resolution terrain heightmap mesh evaluation.
-- Elevation texturing, slope-dependent shading, and tile residency streaming.
+### Terrain appearance (later phases)
+- Elevation texturing and slope-dependent material shading on top of the
+  implemented terrain geometry pass.
+- A 3D orbit camera alongside the current orthographic pan/zoom control.
 
 ### Road & infrastructure passes (Phases 7–8)
 - Continuous road ribbon mesh generation from geometric alignments.

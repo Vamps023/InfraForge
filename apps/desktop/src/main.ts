@@ -198,6 +198,37 @@ app.whenReady().then(async () => {
     },
   )
 
+  // OS file dialog for terrain/DEM sources. The engine validates content;
+  // the shell only narrows the picker to raster extensions.
+  ipcMain.handle(
+    'dialog:pick-file',
+    async (event, options: { title?: unknown; filters?: unknown }) => {
+      const rawFilters = Array.isArray(options?.filters) ? options.filters : []
+      const filters = rawFilters
+        .filter((entry): entry is { name?: unknown; extensions?: unknown } => typeof entry === 'object' && entry !== null)
+        .map((entry) => ({
+          name: typeof entry.name === 'string' ? entry.name : 'Files',
+          extensions: Array.isArray(entry.extensions)
+            ? entry.extensions.filter((value): value is string => typeof value === 'string')
+            : [],
+        }))
+        .filter((entry) => entry.extensions.length > 0)
+      const dialogOptions = {
+        title: typeof options?.title === 'string' ? options.title : 'Select a file',
+        filters: filters.length > 0 ? filters : undefined,
+        properties: ['openFile', 'dontAddToRecent'] as Array<'openFile' | 'dontAddToRecent'>,
+      }
+      const ownerWindow = BrowserWindow.fromWebContents(event.sender)
+      const result = ownerWindow
+        ? await dialog.showOpenDialog(ownerWindow, dialogOptions)
+        : await dialog.showOpenDialog(dialogOptions)
+      if (result.canceled || result.filePaths.length !== 1) {
+        return null
+      }
+      return result.filePaths[0] ?? null
+    },
+  )
+
   // Native viewport hosting: the renderer measures its viewport-host
   // rectangle; the shell converts it to a physical screen placement, owns
   // the native viewport process, and forwards renderer status back.
@@ -238,6 +269,25 @@ app.whenReady().then(async () => {
     }
     viewportPageDesiresVisible.set(window, desired)
     applyViewportVisibilityPlan(window)
+  })
+
+  // Terrain scene projection forwarding (engine -> frontend -> viewport).
+  // The payload is validated as a bounded plain object and passed through;
+  // the viewport validates the tile files themselves.
+  ipcMain.on('viewport:scene', (_event, scene: unknown) => {
+    if (
+      viewportSupervisor === null ||
+      typeof scene !== 'object' ||
+      scene === null ||
+      Array.isArray(scene)
+    ) {
+      return
+    }
+    const record = scene as Record<string, unknown>
+    if (!Array.isArray(record.tiles)) {
+      return
+    }
+    viewportSupervisor.sendScene(record)
   })
 
   createMainWindow()

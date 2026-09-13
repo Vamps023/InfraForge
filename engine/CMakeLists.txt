@@ -3,11 +3,13 @@ find_package(protobuf CONFIG REQUIRED)
 find_package(unofficial-sqlite3 CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(PROJ CONFIG REQUIRED)
+find_package(GDAL CONFIG REQUIRED)
 
 set(INFRAFORGE_PROTOCOL_PROTOS
     ${PROJECT_SOURCE_DIR}/contracts/proto/infraforge/protocol/v1/foundation.proto
     ${PROJECT_SOURCE_DIR}/contracts/proto/infraforge/protocol/v1/geo.proto
     ${PROJECT_SOURCE_DIR}/contracts/proto/infraforge/protocol/v1/project.proto
+    ${PROJECT_SOURCE_DIR}/contracts/proto/infraforge/protocol/v1/terrain.proto
 )
 
 set(INFRAFORGE_PROTO_BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated)
@@ -17,6 +19,7 @@ file(MAKE_DIRECTORY ${INFRAFORGE_PROTO_BINARY_DIR})
 add_library(infraforge_runtime STATIC
     src/runtime/FileSystemUtf8.cpp
     src/runtime/Logging.cpp
+    src/runtime/Sha256.cpp
     src/runtime/Timestamp.cpp
     src/runtime/Uuid.cpp
 )
@@ -30,15 +33,22 @@ target_include_directories(infraforge_runtime PUBLIC
 add_library(infraforge_core STATIC
     src/application/CommandProcessor.cpp
     src/application/GeoService.cpp
+    src/application/JobSystem.cpp
     src/application/ProjectService.cpp
+    src/application/TerrainService.cpp
+    src/application/TerrainTileGenerator.cpp
+    src/application/WorldState.cpp
     src/domain/geo/GeoreferenceConfig.cpp
     src/domain/geo/GeoTransformService.cpp
     src/domain/geo/ProjectGeoreference.cpp
     src/domain/project/ProjectModel.cpp
+    src/domain/terrain/TerrainDataset.cpp
+    src/domain/terrain/TerrainSampler.cpp
     src/domain/world/ChunkGrid.cpp
     src/domain/world/ChunkResidency.cpp
     src/domain/world/Invalidation.cpp
     src/domain/world/SpatialIndex.cpp
+    src/persistence/GdalTerrainSource.cpp
     src/persistence/ProjectManifest.cpp
     src/persistence/SchemaMigrations.cpp
     src/persistence/SqliteConnection.cpp
@@ -59,6 +69,7 @@ target_link_libraries(infraforge_core PUBLIC
     unofficial::sqlite3::sqlite3
     nlohmann_json::nlohmann_json
     PROJ::proj
+    GDAL::GDAL
 )
 
 # The geospatial runtime locates its PROJ data directory (proj.db) through
@@ -67,7 +78,9 @@ target_link_libraries(infraforge_core PUBLIC
 # executable-relative share/proj.
 if(DEFINED VCPKG_INSTALLED_DIR AND DEFINED VCPKG_TARGET_TRIPLET)
     set(INFRAFORGE_PROJ_SHARE_DIR "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/share/proj")
-    target_compile_definitions(infraforge_core PRIVATE
+    # PUBLIC so the test fixtures can point GDAL's own PROJ context at the
+    # same proj.db the engine service uses (PROJ_DATA environment).
+    target_compile_definitions(infraforge_core PUBLIC
         INFRAFORGE_PROJ_DATA_DIR="${INFRAFORGE_PROJ_SHARE_DIR}")
 endif()
 
@@ -117,12 +130,15 @@ add_executable(infraforge-engine-tests
     tests/GeoPersistenceTests.cpp
     tests/GeoServiceTests.cpp
     tests/GeoTransformServiceTests.cpp
+    tests/JobSystemTests.cpp
     tests/LargeWorldIndexTests.cpp
     tests/ProjectModelTests.cpp
     tests/ProjectServiceTests.cpp
     tests/SpatialBoundsTests.cpp
     tests/SpatialIndexTests.cpp
     tests/SqliteProjectStoreTests.cpp
+    tests/TerrainDomainTests.cpp
+    tests/TerrainServiceTests.cpp
     tests/WebSocketServerTests.cpp
     src/network/CommandRouter.cpp
     src/network/WebSocketServer.cpp

@@ -132,4 +132,26 @@ describe('ResizeHandle keyboard semantics', () => {
     const handle = screen.getByRole('separator')
     expect(handle.getAttribute('aria-valuemax')).toBe(String(PANEL_MAX_SIZE.left))
   })
+
+  it('restores previous body userSelect on normal pointer-up', () => {
+    document.body.style.userSelect = 'text'
+    render(<ResizeHandle region="left" edge="right" ariaLabel="Resize left" />)
+    const handle = screen.getByRole('separator')
+    fireEvent.pointerDown(handle, { clientX: 100, clientY: 0 })
+    expect(document.body.style.userSelect).toBe('none')
+    fireEvent.pointerUp(window, { clientX: 120, clientY: 0 })
+    expect(document.body.style.userSelect).toBe('text')
+    document.body.style.userSelect = ''
+  })
+
+  it('restores previous body userSelect on unmount during drag', () => {
+    document.body.style.userSelect = 'text'
+    const { unmount } = render(<ResizeHandle region="left" edge="right" ariaLabel="Resize left" />)
+    const handle = screen.getByRole('separator')
+    fireEvent.pointerDown(handle, { clientX: 100, clientY: 0 })
+    expect(document.body.style.userSelect).toBe('none')
+    unmount()
+    expect(document.body.style.userSelect).toBe('text')
+    document.body.style.userSelect = ''
+  })
 })

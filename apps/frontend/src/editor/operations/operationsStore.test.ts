@@ -36,11 +36,11 @@ describe('operationsStore', () => {
 
   it('updates an existing operation by id (progress)', () => {
     useOperationsStore.getState().upsert(op('op:1', { progress: 0 }))
-    useOperationsStore.getState().upsert(op('op:1', { progress: 0.5, processed: 50, total: 100 }))
+    useOperationsStore.getState().upsert(op('op:1', { progress: 0.5, processed: 50n, total: 100n }))
     const stored = useOperationsStore.getState().operations[0]!
     expect(stored.progress).toBe(0.5)
-    expect(stored.processed).toBe(50)
-    expect(stored.total).toBe(100)
+    expect(stored.processed).toBe(50n)
+    expect(stored.total).toBe(100n)
   })
 
   it('patches an existing operation partially', () => {

@@ -38,11 +38,13 @@ export function BottomPanel() {
     <section className="bottom-panel">
       <div className="bottom-tabs" role="tablist" aria-label="Bottom panel tabs">
         <button
+          id="bottom-tab-problems"
           ref={(el) => { tabRefs.current['Problems'] = el }}
           className={activeBottomTab === 'Problems' ? 'bottom-tab active' : 'bottom-tab'}
           type="button"
           role="tab"
           aria-selected={activeBottomTab === 'Problems'}
+          aria-controls="bottom-tabpanel-problems"
           tabIndex={activeBottomTab === 'Problems' ? 0 : -1}
           onClick={() => setActiveBottomTab('Problems')}
           onKeyDown={(e) => onTabKeyDown(e, 'Problems')}
@@ -50,11 +52,13 @@ export function BottomPanel() {
           Problems{diagnostics.length > 0 ? ` (${diagnostics.length})` : ''}
         </button>
         <button
+          id="bottom-tab-operations"
           ref={(el) => { tabRefs.current['Operations'] = el }}
           className={activeBottomTab === 'Operations' ? 'bottom-tab active' : 'bottom-tab'}
           type="button"
           role="tab"
           aria-selected={activeBottomTab === 'Operations'}
+          aria-controls="bottom-tabpanel-operations"
           tabIndex={activeBottomTab === 'Operations' ? 0 : -1}
           onClick={() => setActiveBottomTab('Operations')}
           onKeyDown={(e) => onTabKeyDown(e, 'Operations')}
@@ -62,7 +66,13 @@ export function BottomPanel() {
           Operations{active.length > 0 ? ` (${active.length})` : ''}
         </button>
       </div>
-      <div className="bottom-content">
+      <div
+        className="bottom-content"
+        role="tabpanel"
+        id={activeBottomTab === 'Problems' ? 'bottom-tabpanel-problems' : 'bottom-tabpanel-operations'}
+        aria-labelledby={activeBottomTab === 'Problems' ? 'bottom-tab-problems' : 'bottom-tab-operations'}
+        tabIndex={0}
+      >
         {activeBottomTab === 'Problems' ? (
           diagnostics.length === 0 ? (
             <span className="bottom-empty">No diagnostics.</span>
@@ -107,7 +117,7 @@ export function BottomPanel() {
                           <span className="operation-progress">{Math.round(op.progress * 100)}%</span>
                         ) : null}
                         {op.processed !== undefined && op.total !== undefined ? (
-                          <span className="operation-count">{op.processed}/{op.total}</span>
+                          <span className="operation-count">{op.processed.toString()}/{op.total.toString()}</span>
                         ) : null}
                         {op.cancellable ? (
                           <button className="operation-cancel" type="button" disabled>

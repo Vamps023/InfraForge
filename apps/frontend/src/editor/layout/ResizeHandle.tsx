@@ -30,7 +30,11 @@ const NUDGE_LARGE = 32
 export function ResizeHandle({ region, edge, ariaLabel }: ResizeHandleProps) {
   const setPanelSize = useLayoutStore((state) => state.setPanelSize)
   const size = useLayoutStore((state) => state.panels[region].size)
-  const draggingRef = useRef<{ startX: number; startY: number; startSize: number } | null>(null)
+  // The drag state captures the pointer origin, the panel size at drag start,
+  // and the previous body userSelect value so cleanup can restore it exactly
+  // (rather than unconditionally resetting to '') — both on normal pointer-up
+  // and on unmount mid-drag.
+  const draggingRef = useRef<{ startX: number; startY: number; startSize: number; previousUserSelect: string } | null>(null)
 
   const onPointerMove = useCallback(
     (event: PointerEvent) => {
@@ -49,37 +53,42 @@ export function ResizeHandle({ region, edge, ariaLabel }: ResizeHandleProps) {
     [edge, region, setPanelSize],
   )
 
-  const onPointerUp = useCallback(() => {
+  const endDrag = useCallback(() => {
+    const drag = draggingRef.current
     draggingRef.current = null
     window.removeEventListener('pointermove', onPointerMove)
-    window.removeEventListener('pointerup', onPointerUp)
-    document.body.style.userSelect = ''
+    window.removeEventListener('pointerup', endDrag)
+    if (drag) {
+      document.body.style.userSelect = drag.previousUserSelect
+    }
   }, [onPointerMove])
 
   const onPointerDown = useCallback(
     (event: React.PointerEvent<HTMLDivElement>) => {
       event.preventDefault()
-      draggingRef.current = { startX: event.clientX, startY: event.clientY, startSize: size }
+      const previousUserSelect = document.body.style.userSelect
+      draggingRef.current = { startX: event.clientX, startY: event.clientY, startSize: size, previousUserSelect }
       window.addEventListener('pointermove', onPointerMove)
-      window.addEventListener('pointerup', onPointerUp)
+      window.addEventListener('pointerup', endDrag)
       document.body.style.userSelect = 'none'
     },
-    [onPointerMove, onPointerUp, size],
+    [onPointerMove, endDrag, size],
   )
 
   useEffect(() => {
     return () => {
       window.removeEventListener('pointermove', onPointerMove)
-      window.removeEventListener('pointerup', onPointerUp)
+      window.removeEventListener('pointerup', endDrag)
       // Restore body userSelect if the component unmounts during an active
       // drag. Without this, the application can be left with text selection
-      // permanently disabled.
+      // permanently disabled. Restore the previous value, not ''.
       if (draggingRef.current !== null) {
+        const drag = draggingRef.current
         draggingRef.current = null
-        document.body.style.userSelect = ''
+        document.body.style.userSelect = drag.previousUserSelect
       }
     }
-  }, [onPointerMove, onPointerUp])
+  }, [onPointerMove, endDrag])
 
   const onKeyDown = useCallback(
     (event: React.KeyboardEvent<HTMLDivElement>) => {

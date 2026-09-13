@@ -5,6 +5,7 @@ import { GeoreferencePanel } from './features/geo/GeoreferencePanel'
 import { NewProjectDialog } from './features/project/NewProjectDialog'
 import { refreshProjectSummary } from './features/project/projectApi'
 import { subscribeProjectEvents } from './features/project/projectEvents'
+import { subscribeShellEvents } from './editor/shell/shellEventProjector'
 import { useProjectStore } from './features/project/projectStore'
 import { useViewportHost } from './features/viewport/useViewportHost'
 import { useViewportStore, viewportSurfaceActive } from './features/viewport/viewportStore'
@@ -178,8 +179,10 @@ export function App() {
       }
 
       const unsubscribe = subscribeProjectEvents(result.session.client)
+      const unsubscribeShell = subscribeShellEvents(result.session.client)
       const disposeSession = () => {
         unsubscribe()
+        unsubscribeShell()
         result.session.dispose()
       }
 

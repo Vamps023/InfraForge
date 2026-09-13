@@ -104,6 +104,97 @@ message ProjectDirtyStateChangedEvent {
   uint64 revision = 2;
 }
 
+// Job lifecycle events (docs/03_PROTOCOL/EVENTS.md). Jobs represent real
+// backend operations executed by the application executor. The lifecycle is:
+// queued -> started -> (progress*) -> completed | failed | cancelled.
+// Terminal events are emitted exactly once. Progress fields are optional so
+// that a legitimate 0 value is distinct from "not supplied".
+
+enum JobState {
+  JOB_STATE_UNSPECIFIED = 0;
+  JOB_STATE_QUEUED = 1;
+  JOB_STATE_RUNNING = 2;
+  JOB_STATE_COMPLETED = 3;
+  JOB_STATE_FAILED = 4;
+  JOB_STATE_CANCELLED = 5;
+}
+
+message JobQueuedEvent {
+  string job_id = 1;
+  // Logical operation name, e.g. "project.create", "geo.set_georeference".
+  string operation = 2;
+  // Human-readable label for the operation.
+  string label = 3;
+  // Canonical object ID the operation targets, when applicable.
+  string target_id = 4;
+  // Whether the backend supports cancelling this job. False for all current
+  // operations; cancellation is not yet wired end-to-end.
+  bool cancellable = 5;
+}
+
+message JobStartedEvent {
+  string job_id = 1;
+}
+
+message JobProgressEvent {
+  string job_id = 1;
+  // Progress in [0,1] when available. Absent means indeterminate progress.
+  optional double progress = 2;
+  // Processed work units when available. uint64 preserved as bigint in TS.
+  optional uint64 processed = 3;
+  // Total work units when available. uint64 preserved as bigint in TS.
+  optional uint64 total = 4;
+  // Optional human-readable status message.
+  string message = 5;
+}
+
+message JobCompletedEvent {
+  string job_id = 1;
+}
+
+message JobFailedEvent {
+  string job_id = 1;
+  // Stable error code string (maps to CommandErrorCode name).
+  string error_code = 2;
+  string error_message = 3;
+}
+
+message JobCancelledEvent {
+  string job_id = 1;
+}
+
+// Diagnostic lifecycle events (docs/03_PROTOCOL/EVENTS.md). Diagnostics
+// represent real backend-observed conditions. Lifecycle: added -> removed
+// | cleared. A diagnostic is identified by a stable ID within a source scope.
+// Resolved diagnostics are removed via diagnostic.removed or diagnostic.cleared
+// so they do not remain forever.
+
+enum DiagnosticSeverity {
+  DIAGNOSTIC_SEVERITY_UNSPECIFIED = 0;
+  DIAGNOSTIC_SEVERITY_INFO = 1;
+  DIAGNOSTIC_SEVERITY_WARNING = 2;
+  DIAGNOSTIC_SEVERITY_ERROR = 3;
+}
+
+message DiagnosticAddedEvent {
+  string diagnostic_id = 1;
+  string source = 2;
+  DiagnosticSeverity severity = 3;
+  string message = 4;
+  // Canonical object ID the diagnostic targets, when available.
+  string target_id = 5;
+}
+
+message DiagnosticRemovedEvent {
+  string diagnostic_id = 1;
+}
+
+message DiagnosticClearedEvent {
+  // When non-empty, only diagnostics from this source are cleared.
+  // When empty, all diagnostics are cleared (e.g. project closed).
+  string source = 1;
+}
+
 message CommandEnvelope {
   oneof command {
     CreateProjectCommand create_project = 1;
@@ -136,5 +227,14 @@ message EventEnvelope {
     ProjectRevisionChangedEvent project_revision_changed = 4;
     ProjectDirtyStateChangedEvent project_dirty_state_changed = 5;
     GeoreferenceChangedEvent georeference_changed = 6;
+    JobQueuedEvent job_queued = 7;
+    JobStartedEvent job_started = 8;
+    JobProgressEvent job_progress = 9;
+    JobCompletedEvent job_completed = 10;
+    JobFailedEvent job_failed = 11;
+    JobCancelledEvent job_cancelled = 12;
+    DiagnosticAddedEvent diagnostic_added = 13;
+    DiagnosticRemovedEvent diagnostic_removed = 14;
+    DiagnosticClearedEvent diagnostic_cleared = 15;
   }
 }

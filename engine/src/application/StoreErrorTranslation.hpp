@@ -18,6 +18,8 @@ namespace infraforge::application {
         throw CommandFailure(CommandFailureCode::SchemaVersionUnsupported, error.what());
     case ports::StoreErrorCategory::PersistenceFailure:
         throw CommandFailure(CommandFailureCode::PersistenceFailure, error.what());
+    case ports::StoreErrorCategory::NotFound:
+        throw CommandFailure(CommandFailureCode::NotFound, error.what());
     }
     throw CommandFailure(CommandFailureCode::Internal, error.what());
 }

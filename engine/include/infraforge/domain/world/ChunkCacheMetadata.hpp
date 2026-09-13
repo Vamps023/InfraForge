@@ -23,12 +23,17 @@ struct ChunkCacheMetadata {
     // the content. Generator changes mark old output stale even when the
     // canonical inputs are unchanged.
     std::uint64_t generatorRevision{0};
-    // Canonical-state revision the content was derived from. For
-    // chunk-scoped content this must be the per-chunk generation
-    // (SpatialIndex::lastAffectingRevision(chunk)) captured at generation
-    // time — never a global project/index revision, which every unrelated
-    // mutation advances and which would therefore drag the whole world
-    // back to stale on each local edit.
+    // Canonical-state revision the content was derived from. Chunk-scoped
+    // generated content records the dependency-scoped per-chunk generation
+    // SpatialIndex::lastAffectingRevision(chunk, dependencyMask) captured
+    // at generation time, where the mask is exactly the invalidation
+    // classes this content depends on: a Material-only edit then never
+    // stales a Terrain-only cache in the same chunk. The dependency-less
+    // overload lastAffectingRevision(chunk) (latest across all classes)
+    // is for consumers that count any invalidation class, such as
+    // renderer residency staleness. Never use the global
+    // SpatialIndex::revision() here: every unrelated mutation advances it,
+    // which would drag the whole world back to stale on each local edit.
     std::uint64_t sourceRevision{0};
 
     friend bool operator==(const ChunkCacheMetadata&, const ChunkCacheMetadata&) = default;

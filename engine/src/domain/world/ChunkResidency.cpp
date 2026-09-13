@@ -4,7 +4,6 @@
 
 #include <stdexcept>
 #include <string>
-#include <tuple>
 
 namespace infraforge::domain::world {
 

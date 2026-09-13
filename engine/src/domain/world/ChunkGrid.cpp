@@ -114,16 +114,31 @@ SpatialBounds ChunkGrid::chunkBounds(const ChunkCoord chunk) const {
 }
 
 std::int64_t ChunkGrid::axisIndex(const double value) const {
-    const double scaled = std::floor(value / config_.chunkSize);
+    // Naive floor division is not boundary-exact for non-binary chunk
+    // sizes: a coordinate constructed as k * chunkSize can re-divide to
+    // k +/- one quotient ULP (e.g. -11.000000000000002), sending floor to
+    // the wrong cell. Classify against the grid's own reconstructed
+    // boundary products with exact double comparisons instead — no
+    // epsilon, so a value one representable step away from a boundary
+    // keeps its true side. Within the supported range the naive quotient
+    // is at most one cell off, so a single correction is sufficient.
+    double cell = std::floor(value / config_.chunkSize);
+
+    if (value < cell * config_.chunkSize) {
+        cell -= 1.0;
+    } else if (value >= (cell + 1.0) * config_.chunkSize) {
+        cell += 1.0;
+    }
+
     // The negated comparison also rejects NaN, and infinity on either side.
-    if (!(scaled >= -maxChunkIndex && scaled <= maxChunkIndex)) {
+    if (!(cell >= -maxChunkIndex && cell <= maxChunkIndex)) {
         throw WorldPartitionError{
             WorldPartitionErrorCode::CoordinateOutOfRange,
             "coordinate " + std::to_string(value)
-            + " cannot be mapped to an exactly representable chunk index"};
+                + " cannot be mapped to an exactly representable chunk index"};
     }
-    // scaled is an integer with |scaled| <= 2^53, so the cast is exact.
-    return static_cast<std::int64_t>(scaled);
+    // cell is an integer with |cell| <= 2^53 - 1, so the cast is exact.
+    return static_cast<std::int64_t>(cell);
 }
 
 } // namespace infraforge::domain::world

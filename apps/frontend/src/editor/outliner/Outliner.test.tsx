@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { render, screen, act } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { Outliner } from './Outliner'
 import {
   outlinerProjectionRegistry,
@@ -165,5 +166,78 @@ describe('Outliner reactivity', () => {
     // The child now appears in the search results (with ancestor path).
     expect(screen.getByText('parent.child')).toBeInTheDocument()
     expect(screen.getByText('parent')).toBeInTheDocument()
+  })
+
+  it('tree rows are focusable (tabindex)', () => {
+    outlinerProjectionRegistry.register(makeProjection('infra', [node('a', null)]))
+    render(<Outliner />)
+    const row = screen.getByText('a').closest('[role="treeitem"]')!
+    expect(row).toHaveAttribute('tabindex')
+  })
+
+  it('ArrowDown moves focus to the next tree row', async () => {
+    outlinerProjectionRegistry.register(
+      makeProjection('infra', [node('a', null), node('b', null)]),
+    )
+    render(<Outliner />)
+    const rows = screen.getAllByRole('treeitem')
+    await userEvent.click(rows[0]!)
+    await userEvent.keyboard('{ArrowDown}')
+    expect(rows[1]).toHaveFocus()
+  })
+
+  it('ArrowUp moves focus to the previous tree row', async () => {
+    outlinerProjectionRegistry.register(
+      makeProjection('infra', [node('a', null), node('b', null)]),
+    )
+    render(<Outliner />)
+    const rows = screen.getAllByRole('treeitem')
+    await userEvent.click(rows[1]!)
+    await userEvent.keyboard('{ArrowUp}')
+    expect(rows[0]).toHaveFocus()
+  })
+
+  it('Enter selects the focused tree row', async () => {
+    outlinerProjectionRegistry.register(makeProjection('infra', [node('a', null)]))
+    render(<Outliner />)
+    const row = screen.getAllByRole('treeitem')[0]!
+    await userEvent.click(row)
+    await userEvent.keyboard('{Enter}')
+    expect(useSelectionStore.getState().selectedIds).toEqual(['a'])
+  })
+
+  it('ArrowRight expands a collapsed parent', async () => {
+    outlinerProjectionRegistry.register(
+      makeProjection('infra', [
+        node('parent', null, true),
+        node('parent.child', 'parent'),
+      ]),
+    )
+    render(<Outliner />)
+    // Parent is collapsed; child is not visible.
+    expect(screen.queryByText('parent.child')).not.toBeInTheDocument()
+    const parentRow = screen.getByText('parent').closest('[role="treeitem"]')!
+    await userEvent.click(parentRow)
+    await userEvent.keyboard('{ArrowRight}')
+    expect(screen.getByText('parent.child')).toBeInTheDocument()
+  })
+
+  it('ArrowLeft collapses an expanded parent', async () => {
+    outlinerProjectionRegistry.register(
+      makeProjection('infra', [
+        node('parent', null, true),
+        node('parent.child', 'parent'),
+      ]),
+    )
+    render(<Outliner />)
+    const parentRow = screen.getByText('parent').closest('[role="treeitem"]')!
+    // First expand.
+    await userEvent.click(parentRow)
+    await userEvent.keyboard('{ArrowRight}')
+    expect(screen.getByText('parent.child')).toBeInTheDocument()
+    // Then collapse.
+    await userEvent.click(parentRow)
+    await userEvent.keyboard('{ArrowLeft}')
+    expect(screen.queryByText('parent.child')).not.toBeInTheDocument()
   })
 })

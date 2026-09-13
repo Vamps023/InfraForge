@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen, within, act } from '@testing-library/react'
+import { render, screen, within, act, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { AppMenu } from './AppMenu'
 import { Toolbar } from './Toolbar'
@@ -132,6 +132,58 @@ describe('AppMenu reactivity', () => {
     const dropdown = screen.getByRole('menu')
     const saveEntry = within(dropdown).getByText('Save Project').closest('button')!
     expect(saveEntry).toBeDisabled()
+  })
+})
+
+describe('AppMenu keyboard navigation', () => {
+  it('Escape closes the open dropdown', async () => {
+    act(() => {
+      commandRegistry.register(makeCommand({ id: 'a', category: 'Project', label: 'Alpha' }))
+      commandRegistry.register(makeCommand({ id: 'b', category: 'Project', label: 'Beta' }))
+    })
+    render(<AppMenu context={ctx(readyContext())} />)
+    await userEvent.click(screen.getByText('Project'))
+    expect(screen.getByRole('menu')).toBeInTheDocument()
+    // Focus a menu item so keyboard events bubble through the dropdown.
+    const dropdown = screen.getByRole('menu')
+    const items = within(dropdown).getAllByRole('menuitem')
+    await userEvent.click(items[0]!)
+    await userEvent.keyboard('{Escape}')
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument()
+  })
+
+  it('ArrowDown moves focus to the next menu item', async () => {
+    act(() => {
+      commandRegistry.register(makeCommand({ id: 'a', category: 'Project', label: 'Alpha' }))
+      commandRegistry.register(makeCommand({ id: 'b', category: 'Project', label: 'Beta' }))
+    })
+    render(<AppMenu context={ctx(readyContext())} />)
+    await userEvent.click(screen.getByText('Project'))
+    const dropdown = screen.getByRole('menu')
+    const items = within(dropdown).getAllByRole('menuitem')
+    // Focus the first item so the dropdown's onKeyDown receives the event.
+    act(() => {
+      items[0]!.focus()
+    })
+    fireEvent.keyDown(dropdown, { key: 'ArrowDown' })
+    expect(items[1]).toHaveFocus()
+  })
+
+  it('ArrowUp moves focus to the previous menu item', async () => {
+    act(() => {
+      commandRegistry.register(makeCommand({ id: 'a', category: 'Project', label: 'Alpha' }))
+      commandRegistry.register(makeCommand({ id: 'b', category: 'Project', label: 'Beta' }))
+    })
+    render(<AppMenu context={ctx(readyContext())} />)
+    await userEvent.click(screen.getByText('Project'))
+    const dropdown = screen.getByRole('menu')
+    const items = within(dropdown).getAllByRole('menuitem')
+    // Focus the second item, then ArrowUp should move to the first.
+    act(() => {
+      items[1]!.focus()
+    })
+    fireEvent.keyDown(dropdown, { key: 'ArrowUp' })
+    expect(items[0]).toHaveFocus()
   })
 })
 

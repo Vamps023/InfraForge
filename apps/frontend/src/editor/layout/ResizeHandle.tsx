@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react'
-import { useLayoutStore, PANEL_DEFAULT_SIZE, type PanelRegion } from './layoutStore'
+import { useLayoutStore, PANEL_DEFAULT_SIZE, PANEL_MIN_SIZE, PANEL_MAX_SIZE, type PanelRegion } from './layoutStore'
 
 // Accessible resize handle for a dockable panel. Pointer drag updates the
 // panel size through the layout store; the store clamps to minimums and
@@ -71,6 +71,13 @@ export function ResizeHandle({ region, edge, ariaLabel }: ResizeHandleProps) {
     return () => {
       window.removeEventListener('pointermove', onPointerMove)
       window.removeEventListener('pointerup', onPointerUp)
+      // Restore body userSelect if the component unmounts during an active
+      // drag. Without this, the application can be left with text selection
+      // permanently disabled.
+      if (draggingRef.current !== null) {
+        draggingRef.current = null
+        document.body.style.userSelect = ''
+      }
     }
   }, [onPointerMove, onPointerUp])
 
@@ -115,7 +122,8 @@ export function ResizeHandle({ region, edge, ariaLabel }: ResizeHandleProps) {
       role="separator"
       aria-orientation={orientation}
       aria-label={ariaLabel}
-      aria-valuemin={0}
+      aria-valuemin={PANEL_MIN_SIZE[region]}
+      aria-valuemax={PANEL_MAX_SIZE[region]}
       aria-valuenow={Math.round(size)}
       tabIndex={0}
       className={`resize-handle resize-${region}`}

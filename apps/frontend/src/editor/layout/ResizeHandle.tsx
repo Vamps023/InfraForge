@@ -1,15 +1,21 @@
 import { useCallback, useEffect, useRef } from 'react'
-import { useLayoutStore, type PanelRegion } from './layoutStore'
+import { useLayoutStore, PANEL_DEFAULT_SIZE, type PanelRegion } from './layoutStore'
 
 // Accessible resize handle for a dockable panel. Pointer drag updates the
 // panel size through the layout store; the store clamps to minimums and
 // persists the result. The handle is keyboard-operable: arrow keys nudge
-// the edge by 8px, Home resets to default, and Shift+arrow nudges by 32px.
+// the edge by 8px, Home resets to the region default, and Shift+arrow
+// nudges by 32px.
 //
 // `edge` describes which side the handle sits on so the drag direction maps
 // correctly: a left panel's handle is on its right edge (drag right grows),
 // a right panel's handle is on its left edge (drag left grows), and the
 // bottom panel's handle is on its top edge (drag up grows).
+//
+// Keyboard semantics make spatial sense for each panel:
+//   - left panel: ArrowRight grows, ArrowLeft shrinks
+//   - right panel: ArrowLeft grows, ArrowRight shrinks
+//   - bottom panel: ArrowUp grows, ArrowDown shrinks
 export type PanelEdge = 'right' | 'left' | 'top'
 
 interface ResizeHandleProps {
@@ -70,28 +76,33 @@ export function ResizeHandle({ region, edge, ariaLabel }: ResizeHandleProps) {
 
   const onKeyDown = useCallback(
     (event: React.KeyboardEvent<HTMLDivElement>) => {
-      const grow = (amount: number) => {
-        const dir = edge === 'right' ? 1 : edge === 'left' ? 1 : 1
-        setPanelSize(region, size + amount * dir)
-      }
-      const shrink = (amount: number) => {
-        const dir = edge === 'right' ? -1 : edge === 'left' ? -1 : -1
-        setPanelSize(region, size + amount * dir)
-      }
+      // Grow/shrink directions are spatial and depend on the edge.
+      const growKey =
+        edge === 'right'
+          ? 'ArrowRight'
+          : edge === 'left'
+            ? 'ArrowLeft'
+            : 'ArrowUp'
+      const shrinkKey =
+        edge === 'right'
+          ? 'ArrowLeft'
+          : edge === 'left'
+            ? 'ArrowRight'
+            : 'ArrowDown'
+      const amount = event.shiftKey ? NUDGE_LARGE : NUDGE
       switch (event.key) {
-        case 'ArrowRight':
-        case 'ArrowDown':
+        case growKey:
           event.preventDefault()
-          grow(event.shiftKey ? NUDGE_LARGE : NUDGE)
+          setPanelSize(region, size + amount)
           break
-        case 'ArrowLeft':
-        case 'ArrowUp':
+        case shrinkKey:
           event.preventDefault()
-          shrink(event.shiftKey ? NUDGE_LARGE : NUDGE)
+          setPanelSize(region, size - amount)
           break
         case 'Home':
           event.preventDefault()
-          setPanelSize(region, 250)
+          // Reset to the region-specific default, not a hardcoded constant.
+          setPanelSize(region, PANEL_DEFAULT_SIZE[region])
           break
       }
     },
@@ -104,6 +115,8 @@ export function ResizeHandle({ region, edge, ariaLabel }: ResizeHandleProps) {
       role="separator"
       aria-orientation={orientation}
       aria-label={ariaLabel}
+      aria-valuemin={0}
+      aria-valuenow={Math.round(size)}
       tabIndex={0}
       className={`resize-handle resize-${region}`}
       onPointerDown={onPointerDown}

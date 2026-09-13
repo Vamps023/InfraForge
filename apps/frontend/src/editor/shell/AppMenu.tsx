@@ -1,18 +1,32 @@
 import { useMemo, useState } from 'react'
 import { ChevronDown } from 'lucide-react'
 import {
-  commandRegistry,
+  executeCommand,
   resolveCommandAvailability,
+  useCommandRegistrySnapshot,
   type CommandContext,
   type CommandDefinition,
-} from '../commands/commandRegistry'
+} from '../commands/useCommands'
 
-// Application menu. References registered commands by ID; execution logic is
-// never duplicated here. The menu groups commands by category and renders
-// the enabled state from the centralized availability resolver.
+// Application menu. References registered commands by ID; execution goes
+// through the central executeCommand path so gating is consistent with
+// toolbar/shortcuts. The menu reactively subscribes to the command registry
+// via useSyncExternalStore so it updates when commands are registered or
+// unregistered after mount.
 export function AppMenu({ context }: { context: CommandContext }) {
   const [openCategory, setOpenCategory] = useState<string | null>(null)
-  const categories = useMemo(() => uniqueCategories(), [])
+  const commands = useCommandRegistrySnapshot()
+  const categories = useMemo(() => {
+    const seen = new Set<string>()
+    for (const command of commands) {
+      const surfaces = command.surfaces ?? ['menu']
+      if (surfaces.includes('menu')) {
+        seen.add(command.category)
+      }
+    }
+    return Array.from(seen)
+  }, [commands])
+
   return (
     <nav className="app-menu" aria-label="Application menu">
       {categories.map((category) => (
@@ -28,9 +42,19 @@ export function AppMenu({ context }: { context: CommandContext }) {
           </button>
           {openCategory === category ? (
             <div className="menu-dropdown" role="menu">
-              {commandRegistry.byCategory(category).map((command) => (
-                <MenuEntry key={command.id} command={command} context={context} onClose={() => setOpenCategory(null)} />
-              ))}
+              {commands
+                .filter((command) => {
+                  const surfaces = command.surfaces ?? ['menu']
+                  return command.category === category && surfaces.includes('menu')
+                })
+                .map((command) => (
+                  <MenuEntry
+                    key={command.id}
+                    command={command}
+                    context={context}
+                    onClose={() => setOpenCategory(null)}
+                  />
+                ))}
             </div>
           ) : null}
         </div>
@@ -58,7 +82,8 @@ function MenuEntry({
       title={availability.disabledReason ?? command.description}
       onClick={() => {
         if (availability.enabled) {
-          void command.execute(context)
+          // Central execution path — same gating as toolbar/shortcuts.
+          void executeCommand(command.id, context)
           onClose()
         }
       }}
@@ -67,12 +92,4 @@ function MenuEntry({
       {command.shortcut ? <span className="menu-shortcut">{command.shortcut.display}</span> : null}
     </button>
   )
-}
-
-function uniqueCategories(): string[] {
-  const seen = new Set<string>()
-  for (const command of commandRegistry.all()) {
-    seen.add(command.category)
-  }
-  return Array.from(seen)
 }

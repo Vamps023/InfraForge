@@ -154,13 +154,120 @@ describe('shared command identity across surfaces', () => {
 describe('deriveAvailability', () => {
   it('derives ready engine + open project from the projections', () => {
     const status: EngineSessionStatus = { state: 'ready', message: 'ready' }
-    const availability = deriveAvailability(status, {} as never)
+    const availability = deriveAvailability(status, {} as never, { rev: 1 } as never, null, 'ready')
     expect(availability.engine).toBe('ready')
+    expect(availability.project).toBe('project-open')
   })
 
   it('reports no-project when the project store has no summary', () => {
     const status: EngineSessionStatus = { state: 'ready', message: 'ready' }
-    const availability = deriveAvailability(status, {} as never)
+    const availability = deriveAvailability(status, {} as never, null, null, 'ready')
     expect(availability.project).toBe('no-project')
+  })
+
+  it('reports busy when an operation is in progress', () => {
+    const status: EngineSessionStatus = { state: 'ready', message: 'ready' }
+    const availability = deriveAvailability(status, {} as never, { rev: 1 } as never, 'saving', 'ready')
+    expect(availability.project).toBe('busy')
+  })
+
+  it('reports viewport inactive when the viewport is not ready', () => {
+    const status: EngineSessionStatus = { state: 'ready', message: 'ready' }
+    const availability = deriveAvailability(status, {} as never, null, null, 'failed')
+    expect(availability.viewportActive).toBe(false)
+  })
+})
+
+describe('commandRegistry shortcut conflicts', () => {
+  it('rejects two commands claiming the same key+modifier combination', () => {
+    commandRegistry.register(
+      makeCommand({ id: 'a', shortcut: { key: 's', ctrlOrCmd: true, display: 'Ctrl+S' } }),
+    )
+    expect(() =>
+      commandRegistry.register(
+        makeCommand({ id: 'b', shortcut: { key: 's', ctrlOrCmd: true, display: 'Ctrl+S' } }),
+      ),
+    ).toThrowError(/Shortcut conflict/)
+  })
+
+  it('allows different keys with the same modifiers', () => {
+    commandRegistry.register(
+      makeCommand({ id: 'a', shortcut: { key: 's', ctrlOrCmd: true, display: 'Ctrl+S' } }),
+    )
+    expect(() =>
+      commandRegistry.register(
+        makeCommand({ id: 'b', shortcut: { key: 'o', ctrlOrCmd: true, display: 'Ctrl+O' } }),
+      ),
+    ).not.toThrow()
+  })
+
+  it('allows the same key with different modifiers', () => {
+    commandRegistry.register(
+      makeCommand({ id: 'a', shortcut: { key: 's', ctrlOrCmd: true, display: 'Ctrl+S' } }),
+    )
+    expect(() =>
+      commandRegistry.register(
+        makeCommand({ id: 'b', shortcut: { key: 's', ctrlOrCmd: true, shift: true, display: 'Ctrl+Shift+S' } }),
+      ),
+    ).not.toThrow()
+  })
+})
+
+describe('commandRegistry surfaces', () => {
+  it('bySurface filters commands by their declared surfaces', () => {
+    commandRegistry.register(makeCommand({ id: 'menu-only', category: 'X' }))
+    commandRegistry.register(
+      makeCommand({ id: 'toolbar-cmd', category: 'X', surfaces: ['menu', 'toolbar'] }),
+    )
+    commandRegistry.register(
+      makeCommand({ id: 'shortcut-only', category: 'X', surfaces: ['shortcut'] }),
+    )
+    expect(commandRegistry.bySurface('toolbar').map((c) => c.id)).toEqual(['toolbar-cmd'])
+    expect(commandRegistry.bySurface('shortcut').map((c) => c.id)).toEqual(['shortcut-only'])
+    // Default surface is 'menu' when not declared.
+    expect(commandRegistry.bySurface('menu').map((c) => c.id)).toEqual(['menu-only', 'toolbar-cmd'])
+  })
+})
+
+describe('commandRegistry observable subscription', () => {
+  it('subscribe is notified on register', () => {
+    const listener = vi.fn()
+    const unsub = commandRegistry.subscribe(listener)
+    commandRegistry.register(makeCommand({ id: 'obs-1' }))
+    expect(listener).toHaveBeenCalledTimes(1)
+    unsub()
+  })
+
+  it('subscribe is notified on unregister', () => {
+    commandRegistry.register(makeCommand({ id: 'obs-2' }))
+    const listener = vi.fn()
+    const unsub = commandRegistry.subscribe(listener)
+    commandRegistry.unregister('obs-2')
+    expect(listener).toHaveBeenCalledTimes(1)
+    unsub()
+  })
+
+  it('getSnapshot is stable when nothing changes', () => {
+    commandRegistry.register(makeCommand({ id: 'snap-1' }))
+    const a = commandRegistry.getSnapshot()
+    const b = commandRegistry.getSnapshot()
+    expect(a).toBe(b)
+  })
+
+  it('getSnapshot changes after a mutation', () => {
+    commandRegistry.register(makeCommand({ id: 'snap-2' }))
+    const before = commandRegistry.getSnapshot()
+    commandRegistry.register(makeCommand({ id: 'snap-3' }))
+    const after = commandRegistry.getSnapshot()
+    expect(after).not.toBe(before)
+    expect(after.map((c) => c.id)).toContain('snap-3')
+  })
+
+  it('unsubscribe stops notifications', () => {
+    const listener = vi.fn()
+    const unsub = commandRegistry.subscribe(listener)
+    unsub()
+    commandRegistry.register(makeCommand({ id: 'obs-3' }))
+    expect(listener).not.toHaveBeenCalled()
   })
 })

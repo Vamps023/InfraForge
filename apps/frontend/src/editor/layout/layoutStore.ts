@@ -43,10 +43,31 @@ export function defaultPreferences(): LayoutPreferences {
   }
 }
 
-// Pure: clamps a size to the minimum for the region.
+// Pure: clamps a size to the minimum for the region and rejects invalid
+// numeric values (NaN, Infinity, -Infinity, absurdly large numbers) so
+// corrupted localStorage cannot make the editor unusable. A practical
+// maximum is enforced so a corrupt preference cannot consume the whole
+// window; the viewport re-reports its bounds on every layout change anyway,
+// so clamping at persistence time is safe.
+export const PANEL_MAX_SIZE: Record<PanelRegion, number> = {
+  left: 2400,
+  right: 2400,
+  bottom: 1600,
+}
+
 export function clampPanelSize(region: PanelRegion, size: number): number {
+  if (!Number.isFinite(size)) {
+    return PANEL_DEFAULT_SIZE[region]
+  }
   const min = PANEL_MIN_SIZE[region]
-  return size < min ? min : size
+  const max = PANEL_MAX_SIZE[region]
+  if (size < min) {
+    return min
+  }
+  if (size > max) {
+    return max
+  }
+  return size
 }
 
 function loadPreferences(): LayoutPreferences {
@@ -78,7 +99,7 @@ function normalizePreferences(parsed: Partial<LayoutPreferences> | undefined): L
     }
     return {
       visible: typeof p.visible === 'boolean' ? p.visible : fallback.panels[r].visible,
-      size: clampPanelSize(r, typeof p.size === 'number' ? p.size : fallback.panels[r].size),
+      size: clampPanelSize(r, typeof p.size === 'number' && Number.isFinite(p.size) ? p.size : fallback.panels[r].size),
     }
   }
   return {

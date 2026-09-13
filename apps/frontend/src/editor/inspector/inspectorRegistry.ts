@@ -7,10 +7,9 @@ import type { CanonicalId } from '../selection/selectionStore'
 // sections and the inspector composes the ones that apply to the current
 // selection.
 //
-// A section declares which canonical IDs/object types it can inspect. The
-// inspector resolves sections by asking each registered section whether it
-// applies to the current selection, then renders the applicable sections in
-// registration order.
+// The registry is observable: the Inspector subscribes via
+// useSyncExternalStore and re-renders when sections are registered or
+// unregistered after mount — no stale caches.
 
 export interface InspectorSectionContext {
   // All currently selected canonical IDs.
@@ -35,33 +34,59 @@ export interface InspectorSection {
   render: (context: InspectorSectionContext) => ReactNode
 }
 
-interface InspectorSectionRegistry {
-  sections: Map<string, InspectorSection>
+const sections = new Map<string, InspectorSection>()
+const listeners = new Set<() => void>()
+let snapshot: InspectorSection[] | null = null
+
+function notify(): void {
+  snapshot = null
+  for (const listener of listeners) {
+    listener()
+  }
+}
+
+export interface InspectorSectionRegistry {
   register: (section: InspectorSection) => void
   unregister: (id: string) => void
   all: () => InspectorSection[]
   resolve: (context: InspectorSectionContext) => InspectorSection[]
+  subscribe: (listener: () => void) => () => void
+  getSnapshot: () => InspectorSection[]
 }
 
-const inspectorRegistry: InspectorSectionRegistry = {
-  sections: new Map<string, InspectorSection>(),
+export const inspectorSectionRegistry: InspectorSectionRegistry = {
   register(section) {
-    if (inspectorRegistry.sections.has(section.id)) {
+    if (sections.has(section.id)) {
       throw new Error(`Duplicate inspector section id: ${section.id}`)
     }
-    inspectorRegistry.sections.set(section.id, section)
+    sections.set(section.id, section)
+    notify()
   },
   unregister(id) {
-    inspectorRegistry.sections.delete(id)
+    if (sections.delete(id)) {
+      notify()
+    }
   },
   all() {
-    return Array.from(inspectorRegistry.sections.values()).sort(
+    return Array.from(sections.values()).sort(
       (a, b) => (a.order ?? 100) - (b.order ?? 100),
     )
   },
   resolve(context) {
-    return inspectorRegistry.all().filter((section) => section.applies(context))
+    return inspectorSectionRegistry.all().filter((section) => section.applies(context))
+  },
+  subscribe(listener) {
+    listeners.add(listener)
+    return () => {
+      listeners.delete(listener)
+    }
+  },
+  getSnapshot() {
+    if (snapshot === null) {
+      snapshot = Array.from(sections.values()).sort(
+        (a, b) => (a.order ?? 100) - (b.order ?? 100),
+      )
+    }
+    return snapshot
   },
 }
-
-export const inspectorSectionRegistry = inspectorRegistry

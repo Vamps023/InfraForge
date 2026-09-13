@@ -1,5 +1,6 @@
 import {
   commandRegistry,
+  shortcutDisplayLabel,
   type CommandDefinition,
 } from './commandRegistry'
 import { useShellUiStore } from '../shell/shellUiStore'
@@ -19,6 +20,11 @@ export interface BuiltinCommandDeps {
   getEngineClient: () => EngineClient | null
 }
 
+function shortcut(key: string) {
+  const base = { key, ctrlOrCmd: true }
+  return { ...base, display: shortcutDisplayLabel(base) }
+}
+
 export function registerBuiltinCommands(deps: BuiltinCommandDeps): void {
   const defs: CommandDefinition[] = [
     {
@@ -27,8 +33,13 @@ export function registerBuiltinCommands(deps: BuiltinCommandDeps): void {
       description: 'Create a new InfraForge project.',
       category: 'Project',
       group: 'project',
-      shortcut: { key: 'n', ctrlOrCmd: true, display: 'Ctrl+N' },
+      surfaces: ['menu', 'toolbar', 'shortcut', 'palette'],
+      shortcut: shortcut('n'),
       requiresEngine: true,
+      // New Project must not start while another lifecycle operation is
+      // running — the project API is not designed to serialize concurrent
+      // create/open/save/close operations.
+      requiresNotBusy: true,
       execute: () => {
         useShellUiStore.getState().openDialogCommand('new-project')
       },
@@ -39,8 +50,10 @@ export function registerBuiltinCommands(deps: BuiltinCommandDeps): void {
       description: 'Open an existing InfraForge project directory.',
       category: 'Project',
       group: 'project',
-      shortcut: { key: 'o', ctrlOrCmd: true, display: 'Ctrl+O' },
+      surfaces: ['menu', 'toolbar', 'shortcut', 'palette'],
+      shortcut: shortcut('o'),
       requiresEngine: true,
+      requiresNotBusy: true,
       execute: async () => {
         const client = deps.getEngineClient()
         if (!client) {
@@ -70,7 +83,8 @@ export function registerBuiltinCommands(deps: BuiltinCommandDeps): void {
       description: 'Save the open project to its database.',
       category: 'Project',
       group: 'project',
-      shortcut: { key: 's', ctrlOrCmd: true, display: 'Ctrl+S' },
+      surfaces: ['menu', 'toolbar', 'shortcut', 'palette'],
+      shortcut: shortcut('s'),
       requiresEngine: true,
       requiresProject: true,
       execute: async () => {
@@ -87,6 +101,7 @@ export function registerBuiltinCommands(deps: BuiltinCommandDeps): void {
       description: 'Close the open project session.',
       category: 'Project',
       group: 'project',
+      surfaces: ['menu', 'shortcut', 'palette'],
       requiresEngine: true,
       requiresProject: true,
       execute: async () => {
@@ -103,6 +118,7 @@ export function registerBuiltinCommands(deps: BuiltinCommandDeps): void {
       description: 'Open the canonical georeference settings panel.',
       category: 'Project',
       group: 'project',
+      surfaces: ['menu', 'palette'],
       requiresEngine: true,
       requiresProject: true,
       execute: () => {
@@ -115,6 +131,7 @@ export function registerBuiltinCommands(deps: BuiltinCommandDeps): void {
       description: 'Show or hide the outliner panel.',
       category: 'View',
       group: 'panels',
+      surfaces: ['menu', 'palette'],
       execute: () => {
         const store = useLayoutStore.getState()
         store.setPanelVisible('left', !store.panels.left.visible)
@@ -126,6 +143,7 @@ export function registerBuiltinCommands(deps: BuiltinCommandDeps): void {
       description: 'Show or hide the inspector panel.',
       category: 'View',
       group: 'panels',
+      surfaces: ['menu', 'palette'],
       execute: () => {
         const store = useLayoutStore.getState()
         store.setPanelVisible('right', !store.panels.right.visible)
@@ -137,6 +155,7 @@ export function registerBuiltinCommands(deps: BuiltinCommandDeps): void {
       description: 'Show or hide the bottom panel.',
       category: 'View',
       group: 'panels',
+      surfaces: ['menu', 'palette'],
       execute: () => {
         const store = useLayoutStore.getState()
         store.setPanelVisible('bottom', !store.panels.bottom.visible)

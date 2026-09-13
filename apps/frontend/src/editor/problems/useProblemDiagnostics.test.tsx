@@ -99,31 +99,43 @@ describe('useProblemDiagnostics viewport lifecycle', () => {
     expect(viewportDiags).toHaveLength(1)
   })
 
-  it('engine errors follow predictable source replacement', () => {
+  it('project command errors follow predictable source replacement', () => {
     renderHook()
 
     act(() => {
-      useProjectStore.getState().setLastError({ code: '1', message: 'engine error A' })
+      useProjectStore.getState().setLastError({ code: '1', message: 'project error A' })
     })
-    let engineDiags = useProblemsStore
+    let projectDiags = useProblemsStore
       .getState()
-      .diagnostics.filter((d) => d.source === 'engine')
-    expect(engineDiags).toHaveLength(1)
-    expect(engineDiags[0]!.message).toBe('engine error A')
+      .diagnostics.filter((d) => d.source === 'project')
+    expect(projectDiags).toHaveLength(1)
+    expect(projectDiags[0]!.id).toBe(PROBLEM_DIAGNOSTIC_IDS.projectCommand)
+    expect(projectDiags[0]!.message).toBe('project error A')
 
     act(() => {
-      useProjectStore.getState().setLastError({ code: '2', message: 'engine error B' })
+      useProjectStore.getState().setLastError({ code: '2', message: 'project error B' })
     })
-    engineDiags = useProblemsStore
+    projectDiags = useProblemsStore
       .getState()
-      .diagnostics.filter((d) => d.source === 'engine')
-    expect(engineDiags).toHaveLength(1)
-    expect(engineDiags[0]!.message).toBe('engine error B')
+      .diagnostics.filter((d) => d.source === 'project')
+    expect(projectDiags).toHaveLength(1)
+    expect(projectDiags[0]!.message).toBe('project error B')
 
     act(() => {
       useProjectStore.getState().setLastError(null)
     })
-    engineDiags = useProblemsStore
+    projectDiags = useProblemsStore
+      .getState()
+      .diagnostics.filter((d) => d.source === 'project')
+    expect(projectDiags).toHaveLength(0)
+  })
+
+  it('does not classify project command errors as engine source', () => {
+    renderHook()
+    act(() => {
+      useProjectStore.getState().setLastError({ code: '1', message: 'project error' })
+    })
+    const engineDiags = useProblemsStore
       .getState()
       .diagnostics.filter((d) => d.source === 'engine')
     expect(engineDiags).toHaveLength(0)

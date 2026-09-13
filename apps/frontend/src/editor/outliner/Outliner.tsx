@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { ChevronDown, ChevronRight, Search } from 'lucide-react'
 import { outlinerProjectionRegistry, type OutlinerNode, type OutlinerProjection } from './outlinerProjection'
 import { buildVisibleRows } from './outlinerTree'
@@ -9,6 +9,17 @@ import { useProjectStore } from '../../features/project/projectStore'
 // projections, never canonical objects — ADR-0009), composes them into one
 // tree, tracks expansion state by canonical ID, and virtualizes the visible
 // row list so large projects never render thousands of DOM rows.
+//
+// Roving-focus model:
+//   - Keyboard focus is tracked via `focusedNodeId`, separate from selection.
+//   - Exactly one rendered treeitem has tabIndex=0 (the roving focus target);
+//     all others have tabIndex=-1. This lets a keyboard user Tab into the
+//     tree at the focused row, then use Arrow keys to move within the tree.
+//   - When `focusedNodeId` is null, it is derived from selection (if the
+//     selected node is visible) or defaults to the first visible row.
+//   - When an Arrow key targets a row outside the mounted virtualization
+//     slice, the scroll container is scrolled so the target row becomes
+//     mounted, then focus is moved to it after the render commits.
 //
 // Reactivity model:
 //   - Registry membership is observed via useSyncExternalStore, so
@@ -120,6 +131,7 @@ export function Outliner() {
   const { expanded, toggle } = useOutlinerView()
   const nodes = useComposedNodes()
   const selectedIds = useSelectionStore((state) => state.selectedIds)
+  const primaryId = useSelectionStore((state) => state.primaryId)
   const select = useSelectionStore((state) => state.select)
   const clear = useSelectionStore((state) => state.clear)
   const projectSummary = useProjectStore((state) => state.summary)
@@ -128,6 +140,14 @@ export function Outliner() {
   const [scrollTop, setScrollTop] = useState(0)
   const [viewportHeight, setViewportHeight] = useState(0)
   const scrollRef = useRef<HTMLDivElement | null>(null)
+
+  // Roving focus: the node ID that currently holds tabIndex=0. This is
+  // separate from selection. When null, it is derived from selection or
+  // defaults to the first visible row.
+  const [focusedNodeId, setFocusedNodeId] = useState<CanonicalId | null>(null)
+  // When a scroll-to-row is pending (target outside the mounted slice),
+  // we store the target index and focus it after the render commits.
+  const [pendingFocusIndex, setPendingFocusIndex] = useState<number | null>(null)
 
   const isSearching = query.trim() !== ''
   const visibleRows = useMemo(() => {
@@ -163,6 +183,7 @@ export function Outliner() {
 
   const onRowClick = (event: React.MouseEvent, node: OutlinerNode) => {
     event.stopPropagation()
+    setFocusedNodeId(node.id)
     if (event.shiftKey || event.ctrlKey || event.metaKey) {
       select([node.id], 'toggle')
     } else {
@@ -176,22 +197,90 @@ export function Outliner() {
 
   const rowRefs = useRef<Record<string, HTMLDivElement | null>>({})
 
-  const onTreeKeyDown = (event: React.KeyboardEvent) => {
-    if (visibleRows.length === 0) {
-      return
+  // Resolve the effective focus target: if focusedNodeId is set and visible,
+  // use it. Otherwise derive from the primary selected ID if visible, else
+  // default to the first visible row.
+  const effectiveFocusedId = useMemo<CanonicalId | null>(() => {
+    if (focusedNodeId !== null && visibleRows.some((n) => n.id === focusedNodeId)) {
+      return focusedNodeId
     }
-    const activeId = (document.activeElement as HTMLElement | null)?.dataset?.nodeId
-    const currentIndex = activeId ? visibleRows.findIndex((n) => n.id === activeId) : -1
+    if (primaryId !== null && visibleRows.some((n) => n.id === primaryId)) {
+      return primaryId
+    }
+    return visibleRows.length > 0 ? visibleRows[0]!.id : null
+  }, [focusedNodeId, primaryId, visibleRows])
+
+  const effectiveFocusIndex = useMemo<number>(() => {
+    if (effectiveFocusedId === null) return -1
+    return visibleRows.findIndex((n) => n.id === effectiveFocusedId)
+  }, [effectiveFocusedId, visibleRows])
+
+  // After a scroll-to-row renders the target slice, focus the target row.
+  useEffect(() => {
+    if (pendingFocusIndex === null) return
+    // Check if the pending row is now mounted.
+    if (pendingFocusIndex >= startIndex && pendingFocusIndex < endIndex) {
+      const node = visibleRows[pendingFocusIndex]
+      if (node) {
+        const el = rowRefs.current[node.id]
+        if (el) {
+          el.focus()
+          setFocusedNodeId(node.id)
+        }
+      }
+      setPendingFocusIndex(null)
+    }
+  }, [pendingFocusIndex, startIndex, endIndex, visibleRows])
+
+  // Scroll the container so that the row at `index` becomes visible and
+  // mounted. Called when an Arrow key targets a row outside the slice.
+  const scrollToRow = useCallback((index: number) => {
+    const element = scrollRef.current
+    if (!element) return
+    const rowTop = index * ROW_HEIGHT
+    const rowBottom = rowTop + ROW_HEIGHT
+    const viewTop = element.scrollTop
+    const viewBottom = element.scrollTop + element.clientHeight
+    if (rowTop < viewTop) {
+      element.scrollTop = rowTop
+    } else if (rowBottom > viewBottom) {
+      element.scrollTop = rowBottom - element.clientHeight
+    }
+    // Update scrollTop state so the virtualization slice recomputes.
+    setScrollTop(element.scrollTop)
+  }, [])
+
+  const onTreeKeyDown = (event: React.KeyboardEvent) => {
+    if (visibleRows.length === 0) return
+    const currentIndex = effectiveFocusIndex
     if (event.key === 'ArrowDown') {
       event.preventDefault()
       const nextIndex = Math.min(currentIndex + 1, visibleRows.length - 1)
-      rowRefs.current[visibleRows[nextIndex]!.id]?.focus()
+      if (nextIndex === currentIndex) return
+      const nextNode = visibleRows[nextIndex]!
+      setFocusedNodeId(nextNode.id)
+      // If the target is outside the mounted slice, scroll to it and
+      // focus after render; otherwise focus immediately.
+      if (nextIndex < startIndex || nextIndex >= endIndex) {
+        scrollToRow(nextIndex)
+        setPendingFocusIndex(nextIndex)
+      } else {
+        rowRefs.current[nextNode.id]?.focus()
+      }
       return
     }
     if (event.key === 'ArrowUp') {
       event.preventDefault()
       const nextIndex = Math.max(currentIndex - 1, 0)
-      rowRefs.current[visibleRows[nextIndex]!.id]?.focus()
+      if (nextIndex === currentIndex) return
+      const nextNode = visibleRows[nextIndex]!
+      setFocusedNodeId(nextNode.id)
+      if (nextIndex < startIndex || nextIndex >= endIndex) {
+        scrollToRow(nextIndex)
+        setPendingFocusIndex(nextIndex)
+      } else {
+        rowRefs.current[nextNode.id]?.focus()
+      }
       return
     }
     if (event.key === 'Enter' && currentIndex >= 0) {
@@ -260,6 +349,7 @@ export function Outliner() {
               const absoluteIndex = startIndex + localIndex
               const top = absoluteIndex * ROW_HEIGHT
               const selected = selectedIds.includes(node.id)
+              const isFocused = node.id === effectiveFocusedId
               return (
                 <div
                   key={node.id}
@@ -268,15 +358,18 @@ export function Outliner() {
                   data-node-id={node.id}
                   aria-selected={selected}
                   aria-expanded={node.hasChildren ? expanded.has(node.id) : undefined}
-                  tabIndex={selected ? 0 : -1}
+                  aria-level={node.depth + 1}
+                  tabIndex={isFocused ? 0 : -1}
                   className={`outliner-row${selected ? ' selected' : ''}`}
                   style={{ position: 'absolute', top, height: ROW_HEIGHT, paddingLeft: 8 + node.depth * 14 }}
                   onClick={(event) => onRowClick(event, node)}
+                  onFocus={() => setFocusedNodeId(node.id)}
                 >
                   {node.hasChildren ? (
                     <button
                       className="outliner-disclosure"
                       type="button"
+                      tabIndex={-1}
                       aria-label={expanded.has(node.id) ? 'Collapse' : 'Expand'}
                       onClick={(event) => {
                         event.stopPropagation()

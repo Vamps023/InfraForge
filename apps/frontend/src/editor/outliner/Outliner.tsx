@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { ChevronDown, ChevronRight, Search } from 'lucide-react'
-import { outlinerProjectionRegistry, type OutlinerNode } from './outlinerProjection'
+import { outlinerProjectionRegistry, type OutlinerNode, type OutlinerProjection } from './outlinerProjection'
 import { buildVisibleRows } from './outlinerTree'
 import { useSelectionStore, type CanonicalId } from '../selection/selectionStore'
 
@@ -9,6 +9,13 @@ import { useSelectionStore, type CanonicalId } from '../selection/selectionStore
 // tree, tracks expansion state by canonical ID, and virtualizes the visible
 // row list so large projects never render thousands of DOM rows.
 //
+// Reactivity model:
+//   - Registry membership is observed via useSyncExternalStore, so
+//     registering/unregistering a projection after mount updates the tree.
+//   - Each projection's `subscribe` is wired in an effect keyed on the
+//     current projection list, so projection-emitted updates recompute node
+//     data and subscriptions are cleaned up correctly (no stale
+//     subscriptions, no leaks, no duplicate subscriptions).
 // Selection resolves canonical IDs through the shared selection store; the
 // outliner never substitutes its own object identity.
 
@@ -18,6 +25,7 @@ const OVERSCAN = 6
 interface OutlinerViewState {
   expanded: Set<CanonicalId>
   toggle: (id: CanonicalId) => void
+  setExpanded: (next: Set<CanonicalId>) => void
 }
 
 function useOutlinerView(): OutlinerViewState {
@@ -33,30 +41,80 @@ function useOutlinerView(): OutlinerViewState {
       return next
     })
   }
-  return { expanded, toggle }
+  return { expanded, toggle, setExpanded }
 }
 
-// Composes all registered projections into a flat node list, then computes
-// the visible rows by walking roots and expanding only expanded parents.
+// Composes all registered projections into a flat node list. Reactively
+// subscribes to the registry (membership changes) and to each projection
+// (data changes). The node list recomputes whenever either changes.
 function useComposedNodes(): OutlinerNode[] {
-  const [, force] = useState(0)
+  const projections = useSyncExternalStore(
+    outlinerProjectionRegistry.subscribe,
+    outlinerProjectionRegistry.getSnapshot,
+  )
+  // A version counter bumped by any projection's change notification. This
+  // is the only "force" mechanism and it is local to this hook, not a
+  // global mutable hack.
+  const [, setVersion] = useState(0)
   useEffect(() => {
-    const unsubs = outlinerProjectionRegistry.all().map((projection) =>
-      projection.subscribe(() => force((n) => n + 1)),
+    const unsubs = projections.map((projection) =>
+      projection.subscribe(() => setVersion((n) => n + 1)),
     )
     return () => {
       for (const unsub of unsubs) {
         unsub()
       }
     }
-  }, [])
+  }, [projections])
   return useMemo(() => {
+    // Read triggered by either projection list change or version bump.
     const all: OutlinerNode[] = []
-    for (const projection of outlinerProjectionRegistry.all()) {
+    for (const projection of projections) {
       all.push(...projection.getNodes())
     }
     return all
-  }, [])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projections])
+}
+
+// Builds a search result that includes matching nodes plus their ancestor
+// paths so hierarchy remains understandable. Does not mutate permanent
+// expansion state; the search view is computed from the full node list.
+function buildSearchRows(
+  nodes: OutlinerNode[],
+  query: string,
+): OutlinerNode[] {
+  const byId = new Map<CanonicalId, OutlinerNode>()
+  for (const node of nodes) {
+    byId.set(node.id, node)
+  }
+  const lower = query.toLowerCase()
+  const matched = new Set<CanonicalId>()
+  for (const node of nodes) {
+    if (node.label.toLowerCase().includes(lower)) {
+      matched.add(node.id)
+    }
+  }
+  // Include ancestors so the hierarchy path to each match is visible.
+  for (const node of nodes) {
+    if (!matched.has(node.id)) {
+      continue
+    }
+    let parentId = node.parentId
+    while (parentId !== null) {
+      if (matched.has(parentId)) {
+        break
+      }
+      matched.add(parentId)
+      const parent = byId.get(parentId)
+      if (!parent) {
+        break
+      }
+      parentId = parent.parentId
+    }
+  }
+  // Preserve original projection order; only filter by membership.
+  return nodes.filter((node) => matched.has(node.id))
 }
 
 export function Outliner() {
@@ -70,22 +128,22 @@ export function Outliner() {
   const [viewportHeight, setViewportHeight] = useState(0)
   const scrollRef = useRef<HTMLDivElement | null>(null)
 
-  const visibleRows = useMemo(() => buildVisibleRows(nodes, expanded), [nodes, expanded])
-  const filteredRows = useMemo(() => {
-    if (query.trim() === '') {
-      return visibleRows
+  const isSearching = query.trim() !== ''
+  const visibleRows = useMemo(() => {
+    if (isSearching) {
+      // Search across all projected nodes regardless of expansion state.
+      return buildSearchRows(nodes, query.trim())
     }
-    const lower = query.toLowerCase()
-    return visibleRows.filter((row) => row.label.toLowerCase().includes(lower))
-  }, [visibleRows, query])
+    return buildVisibleRows(nodes, expanded)
+  }, [nodes, expanded, isSearching, query])
 
-  const totalHeight = filteredRows.length * ROW_HEIGHT
+  const totalHeight = visibleRows.length * ROW_HEIGHT
   const startIndex = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN)
   const endIndex = Math.min(
-    filteredRows.length,
+    visibleRows.length,
     Math.ceil((scrollTop + viewportHeight) / ROW_HEIGHT) + OVERSCAN,
   )
-  const visibleSlice = filteredRows.slice(startIndex, endIndex)
+  const visibleSlice = visibleRows.slice(startIndex, endIndex)
 
   useEffect(() => {
     const element = scrollRef.current
@@ -115,7 +173,7 @@ export function Outliner() {
     clear()
   }
 
-  const hasProjections = outlinerProjectionRegistry.all().length > 0
+  const hasProjections = nodes.length > 0 || isSearching
 
   return (
     <aside className="panel outliner-panel" aria-label="Outliner">
@@ -140,17 +198,21 @@ export function Outliner() {
         role="tree"
         aria-label="World entities"
       >
-        {filteredRows.length === 0 ? (
+        {visibleRows.length === 0 ? (
           <div className="panel-empty">
             {hasProjections
-              ? 'No entities match the current filter.'
+              ? isSearching
+                ? 'No entities match the current filter.'
+                : 'No entities in this project.'
               : 'Open a project to inspect world entities.'}
           </div>
         ) : (
           <div style={{ position: 'relative', height: totalHeight }}>
-            {visibleSlice.map((node) => {
-              const index = filteredRows.indexOf(node)
-              const top = index * ROW_HEIGHT
+            {visibleSlice.map((node, localIndex) => {
+              // Absolute index in the visible (virtualized) list — no O(n)
+              // indexOf lookup per row.
+              const absoluteIndex = startIndex + localIndex
+              const top = absoluteIndex * ROW_HEIGHT
               const selected = selectedIds.includes(node.id)
               return (
                 <div

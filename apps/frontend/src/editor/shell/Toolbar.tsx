@@ -1,16 +1,22 @@
 import {
-  commandRegistry,
+  executeCommand,
   resolveCommandAvailability,
+  useCommandRegistrySnapshot,
   type CommandContext,
-} from '../commands/commandRegistry'
+} from '../commands/useCommands'
 
-// Toolbar. References registered commands by ID; execution logic is never
-// duplicated here. Only commands tagged with the 'toolbar' group render here
-// (so the toolbar stays curated while the menu/palette can show everything).
+// Toolbar. References registered commands by ID; execution goes through the
+// central executeCommand path so gating is consistent with menu/shortcuts.
+// Only commands whose `surfaces` include 'toolbar' render here. `surfaces`
+// is the explicit placement concept; `category`/`group` remain for logical
+// organization and are never misused as UI placement.
 export function Toolbar({ context }: { context: CommandContext }) {
-  const toolbarCommands = commandRegistry
-    .all()
-    .filter((command) => command.group === 'toolbar')
+  const commands = useCommandRegistrySnapshot()
+  const toolbarCommands = commands.filter((command) => {
+    const surfaces = command.surfaces ?? ['menu']
+    return surfaces.includes('toolbar')
+  })
+
   return (
     <div className="toolbar" aria-label="Editor toolbar">
       {toolbarCommands.map((command) => {
@@ -24,7 +30,8 @@ export function Toolbar({ context }: { context: CommandContext }) {
             title={availability.disabledReason ?? command.description ?? command.label}
             onClick={() => {
               if (availability.enabled) {
-                void command.execute(context)
+                // Central execution path — same gating as menu/shortcuts.
+                void executeCommand(command.id, context)
               }
             }}
           >

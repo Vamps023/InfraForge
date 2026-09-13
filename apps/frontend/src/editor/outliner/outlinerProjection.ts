@@ -43,29 +43,61 @@ export interface OutlinerProjection {
   subscribe: (listener: () => void) => () => void
 }
 
-// Registry of outliner projections. Domains register a projection; the
-// outliner composes all registered projections into one tree.
-interface OutlinerProjectionRegistry {
-  projections: Map<string, OutlinerProjection>
+// Observable registry of outliner projections. Domains register a
+// projection; the outliner composes all registered projections into one
+// tree. The registry is observable so the Outliner reactively re-renders
+// when projections are registered or unregistered after mount, and when
+// any projection emits a change — no stale useMemo([]) caches or manual
+// force-render hacks.
+const projections = new Map<string, OutlinerProjection>()
+const listeners = new Set<() => void>()
+let snapshot: OutlinerProjection[] | null = null
+
+function notify(): void {
+  snapshot = null
+  for (const listener of listeners) {
+    listener()
+  }
+}
+
+export interface OutlinerProjectionRegistry {
   register: (projection: OutlinerProjection) => void
   unregister: (id: string) => void
+  get: (id: string) => OutlinerProjection | undefined
   all: () => OutlinerProjection[]
+  subscribe: (listener: () => void) => () => void
+  getSnapshot: () => OutlinerProjection[]
 }
 
-const outlinerRegistry: OutlinerProjectionRegistry = {
-  projections: new Map<string, OutlinerProjection>(),
+export const outlinerProjectionRegistry: OutlinerProjectionRegistry = {
   register(projection) {
-    if (outlinerRegistry.projections.has(projection.id)) {
+    if (projections.has(projection.id)) {
       throw new Error(`Duplicate outliner projection id: ${projection.id}`)
     }
-    outlinerRegistry.projections.set(projection.id, projection)
+    projections.set(projection.id, projection)
+    notify()
   },
   unregister(id) {
-    outlinerRegistry.projections.delete(id)
+    if (projections.delete(id)) {
+      notify()
+    }
+  },
+  get(id) {
+    return projections.get(id)
   },
   all() {
-    return Array.from(outlinerRegistry.projections.values())
+    return Array.from(projections.values())
+  },
+  subscribe(listener) {
+    listeners.add(listener)
+    return () => {
+      listeners.delete(listener)
+    }
+  },
+  getSnapshot() {
+    if (snapshot === null) {
+      snapshot = Array.from(projections.values())
+    }
+    return snapshot
   },
 }
-
-export const outlinerProjectionRegistry = outlinerRegistry

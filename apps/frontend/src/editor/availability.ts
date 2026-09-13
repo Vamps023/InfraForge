@@ -1,11 +1,15 @@
 import type { EngineSessionStatus, EngineSession } from '../lib/engineSession'
-import { useProjectStore } from '../features/project/projectStore'
-import { useViewportStore, viewportSurfaceActive } from '../features/viewport/viewportStore'
+import { viewportSurfaceActive, type ViewportState } from '../features/viewport/viewportStore'
 
 // Centralized engine/project availability predicates for the editor shell.
 // Commands and shell components query these instead of independently
 // re-deriving engine/project state scattered across components. The policy
 // is owned here so gating rules change in one place.
+//
+// `deriveAvailability` is pure: it takes all inputs as parameters and never
+// reads global Zustand stores via getState(). Callers (hooks) subscribe to
+// the stores reactively and pass the values in, so the derived context is
+// always fresh.
 
 export type EngineAvailabilityState =
   | 'starting'
@@ -30,22 +34,26 @@ export function engineAvailabilityFromStatus(status: EngineSessionStatus): Engin
   return status.state
 }
 
+// Pure derivation. All inputs are explicit parameters — no hidden getState()
+// reads. Callers subscribe to the relevant stores reactively and pass the
+// values here so the context updates immediately on any state change.
 export function deriveAvailability(
   engineStatus: EngineSessionStatus,
   engineSession: EngineSession | null,
+  projectSummary: unknown | null,
+  projectOperation: unknown | null,
+  viewportState: ViewportState,
 ): AvailabilityContext {
   const engine = engineAvailabilityFromStatus(engineStatus)
   // ready requires both the status projection and a live session client.
   const engineReady = engine === 'ready' && engineSession !== null
-  const summary = useProjectStore.getState().summary
-  const operation = useProjectStore.getState().operation
   const project: ProjectAvailabilityState =
-    summary === null
+    projectSummary === null
       ? 'no-project'
-      : operation !== null
+      : projectOperation !== null
         ? 'busy'
         : 'project-open'
-  const viewportActive = viewportSurfaceActive(useViewportStore.getState().status.state)
+  const viewportActive = viewportSurfaceActive(viewportState)
   return {
     engine: engineReady ? 'ready' : engine,
     engineMessage: engineStatus.message,
@@ -65,7 +73,12 @@ export interface CommandAvailability {
 
 export function evaluateAvailability(
   context: AvailabilityContext,
-  requirements: { requiresEngine?: boolean; requiresProject?: boolean; requiresViewport?: boolean },
+  requirements: {
+    requiresEngine?: boolean
+    requiresProject?: boolean
+    requiresViewport?: boolean
+    requiresNotBusy?: boolean
+  },
 ): CommandAvailability {
   if (requirements.requiresEngine && context.engine !== 'ready') {
     return { enabled: false, disabledReason: 'Native engine is not ready.' }
@@ -73,7 +86,10 @@ export function evaluateAvailability(
   if (requirements.requiresProject && context.project === 'no-project') {
     return { enabled: false, disabledReason: 'No project is open.' }
   }
-  if (requirements.requiresProject && context.project === 'busy') {
+  if (
+    (requirements.requiresProject || requirements.requiresNotBusy) &&
+    context.project === 'busy'
+  ) {
     return { enabled: false, disabledReason: 'A project operation is in progress.' }
   }
   if (requirements.requiresViewport && !context.viewportActive) {

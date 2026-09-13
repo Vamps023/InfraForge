@@ -29,6 +29,10 @@ function noEngineCtx(): { availability: AvailabilityContext } {
   return { availability: { ...readyCtx().availability, engine: 'starting', engineMessage: 'starting' } }
 }
 
+function busyCtx(): { availability: AvailabilityContext } {
+  return { availability: { ...readyCtx().availability, project: 'busy' } }
+}
+
 beforeEach(() => {
   unregisterBuiltinCommands()
   for (const command of commandRegistry.all()) {
@@ -83,6 +87,26 @@ describe('builtin commands gating', () => {
   it('panel.toggle-outliner does not require engine or project', async () => {
     const ran = await executeCommand('panel.toggle-outliner', noEngineCtx())
     expect(ran).toBe(true)
+  })
+
+  it('project.new is disabled while a project operation is busy', async () => {
+    expect(await executeCommand('project.new', busyCtx())).toBe(false)
+  })
+
+  it('project.open is disabled while a project operation is busy', async () => {
+    expect(await executeCommand('project.open', busyCtx())).toBe(false)
+  })
+
+  it('project.save is disabled while a project operation is busy', async () => {
+    expect(await executeCommand('project.save', busyCtx())).toBe(false)
+  })
+
+  it('project.close is disabled while a project operation is busy', async () => {
+    expect(await executeCommand('project.close', busyCtx())).toBe(false)
+  })
+
+  it('project.georeference is disabled while a project operation is busy', async () => {
+    expect(await executeCommand('project.georeference', busyCtx())).toBe(false)
   })
 })
 

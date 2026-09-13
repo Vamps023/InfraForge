@@ -1,5 +1,6 @@
 import { useProjectStore } from './projectStore'
 import { useGeoStore } from '../geo/geoStore'
+import { useSelectionStore } from '../../editor/selection/selectionStore'
 import type { EngineClient } from '../../lib/engineSession'
 import type { EventEnvelope } from '@infraforge/protocol'
 
@@ -13,10 +14,17 @@ export function applyProjectEvent(event: EventEnvelope) {
       if (event.event.value.summary) {
         store.setSummary(event.event.value.summary)
       }
+      // A different project opened: canonical selections from the previous
+      // project must not survive into the new one. Clear selection here so
+      // the outliner/inspector resolve against the new canonical world.
+      useSelectionStore.getState().clear()
       break
     case 'projectClosed':
       store.clearProject()
       useGeoStore.getState().reset()
+      // Project closed: canonical selections are no longer valid. Clear
+      // selection so stale IDs do not resolve against a non-existent world.
+      useSelectionStore.getState().clear()
       break
     case 'projectRevisionChanged':
       store.patchSummary({ revision: event.event.value.revision })

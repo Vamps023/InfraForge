@@ -11,34 +11,56 @@ SQLite is the canonical structured-data store for a project.
 
 ### Migration record
 
-| ID | Name | Content |
-|---|---|---|
-| 1 | `core project foundation` | `project_state` + `georeference` singleton rows (schema v1). |
-| 2 | `georeference origin height` | `ALTER TABLE georeference ADD COLUMN origin_height REAL NOT NULL DEFAULT 0` — extends the canonical georeference with the vertical origin component; v1 databases read 0. |
+| ID | Name | Status | Content |
+|---|---|---|---|
+| 1 | `core project foundation` | Active (v1) | `project_state` + `georeference` singleton rows (schema v1). |
+| 2 | `georeference origin height` | Active (v2) | `ALTER TABLE georeference ADD COLUMN origin_height REAL NOT NULL DEFAULT 0` — extends the canonical georeference with the vertical origin component; v1 databases read 0. |
 
-## Core tables
+## 1. Active schema tables (implemented & verified)
 
-The initial schema is organized by domain, not by UI screens.
+These tables exist in production database files (`project.db`) under schema version 2:
 
-### Project/core
+### `schema_migrations`
+Tracks ordered schema migration IDs and application timestamps:
+- `migration_id` (INTEGER PRIMARY KEY)
+- `name` (TEXT NOT NULL)
+- `applied_at` (TEXT NOT NULL ISO-8601)
 
-- `project_state` — singleton project revision and core state.
-- `schema_migrations` — applied schema migration IDs.
-- `layers` — semantic/editor grouping.
-- `entity_metadata` — optional shared name/tags/visibility metadata when cross-domain ownership requires it.
+### `project_state`
+Singleton row (`id = 1`) tracking project identity, revision counter, and timestamps:
+- `id` (INTEGER PRIMARY KEY CHECK (id = 1))
+- `project_id` (TEXT NOT NULL) — 128-bit canonical UUID string
+- `display_name` (TEXT NOT NULL)
+- `traffic_side` (TEXT NOT NULL CHECK (traffic_side IN ('left', 'right')))
+- `revision` (INTEGER NOT NULL DEFAULT 1) — monotonically increasing mutation counter
+- `saved_revision` (INTEGER NOT NULL DEFAULT 1) — revision covered by the latest save
+- `created_at` (TEXT NOT NULL)
+- `modified_at` (TEXT NOT NULL)
 
-### Geospatial
+### `georeference`
+Singleton row (`id = 1`) storing the canonical project geospatial reference:
+- `id` (INTEGER PRIMARY KEY CHECK (id = 1))
+- `horizontal_crs` (TEXT NOT NULL) — authority identifier or WKT2 definition
+- `linear_unit` (TEXT NOT NULL) — e.g. `metre`, `US survey foot`
+- `axis_convention` (TEXT NOT NULL CHECK (axis_convention = 'EASTING_NORTHING_UP'))
+- `origin_easting` (REAL NOT NULL)
+- `origin_northing` (REAL NOT NULL)
+- `origin_height` (REAL NOT NULL DEFAULT 0) — added in migration 2
+- `vertical_crs` (TEXT NULL) — optional vertical datum/CRS identifier
 
-- `georeference` — canonical project CRS/origin/axis/unit configuration
-  (singleton row `id = 1`): `horizontal_crs`, `linear_unit`,
-  `axis_convention`, `origin_easting`, `origin_northing`, `origin_height`
-  (migration 2), `vertical_crs`.
-- `spatial_bounds` — derived/query-oriented bounds keyed by stable entity IDs where persisted indexing is beneficial.
+---
 
-### Roads
+## 2. Planned domain tables (WIP / future milestone migrations)
 
+In accordance with `docs/ADR/0010-no-placeholder-production-paths.md`, database tables are **not** created ahead of time as empty placeholder schemas. The following tables represent the planned domain schema designs and will be introduced via forward-only schema migrations as their production domains are built:
+
+### Spatial bounds & layers (Phase 5)
+- `layers` — semantic and editor grouping.
+- `spatial_bounds` — SQLite R-tree or bounding records for spatial partitioning.
+
+### Roads & lanes (Phases 7–8)
 - `roads`
-- `road_geometry_segments`
+- `road_geometry_segments` (clothoids, arcs, lines)
 - `road_elevation_segments`
 - `road_superelevation_segments`
 - `lane_sections`
@@ -47,35 +69,32 @@ The initial schema is organized by domain, not by UI screens.
 - `road_markings`
 - `road_connections`
 
-### Junctions
-
+### Junctions (Phase 8)
 - `junctions`
 - `junction_connections`
 - `junction_lane_links`
 
-### Infrastructure
-
-- `infrastructure_objects`
+### Infrastructure (Phase 11)
+- `infrastructure_objects` (signals, signs, barriers, gantries)
 - `infrastructure_bindings`
 - `signal_controllers`
 - `signal_controller_phases`
 
-### Terrain/environment/assets
-
+### Terrain & assets (Phases 6 & 10)
 - `terrain_datasets`
 - `terrain_tiles`
 - `assets`
 - `asset_instances`
 - `environment_rules`
 
-### Scenario/simulation
-
+### Scenario & simulation (Phase 12)
 - `scenarios`
 - `scenario_entities`
 - `scenario_events`
 - `simulation_settings`
 
-Rail tables are introduced with the rail domain migration rather than pre-creating unused placeholder tables.
+### Rail (Phase 13)
+- Rail tables are introduced with the rail domain migration rather than pre-creating unused placeholder tables.
 
 ## Indexing
 

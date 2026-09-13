@@ -174,6 +174,49 @@ export function Outliner() {
     clear()
   }
 
+  const rowRefs = useRef<Record<string, HTMLDivElement | null>>({})
+
+  const onTreeKeyDown = (event: React.KeyboardEvent) => {
+    if (visibleRows.length === 0) {
+      return
+    }
+    const activeId = (document.activeElement as HTMLElement | null)?.dataset?.nodeId
+    const currentIndex = activeId ? visibleRows.findIndex((n) => n.id === activeId) : -1
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      const nextIndex = Math.min(currentIndex + 1, visibleRows.length - 1)
+      rowRefs.current[visibleRows[nextIndex]!.id]?.focus()
+      return
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      const nextIndex = Math.max(currentIndex - 1, 0)
+      rowRefs.current[visibleRows[nextIndex]!.id]?.focus()
+      return
+    }
+    if (event.key === 'Enter' && currentIndex >= 0) {
+      event.preventDefault()
+      select([visibleRows[currentIndex]!.id], 'replace')
+      return
+    }
+    if (event.key === 'ArrowRight' && currentIndex >= 0) {
+      const node = visibleRows[currentIndex]!
+      if (node.hasChildren && !expanded.has(node.id)) {
+        event.preventDefault()
+        toggle(node.id)
+      }
+      return
+    }
+    if (event.key === 'ArrowLeft' && currentIndex >= 0) {
+      const node = visibleRows[currentIndex]!
+      if (node.hasChildren && expanded.has(node.id)) {
+        event.preventDefault()
+        toggle(node.id)
+      }
+      return
+    }
+  }
+
   const hasProjections = nodes.length > 0
   const searchEnabled = projectOpen
 
@@ -197,6 +240,7 @@ export function Outliner() {
         ref={scrollRef}
         onScroll={onScroll}
         onClick={onBackgroundClick}
+        onKeyDown={onTreeKeyDown}
         role="tree"
         aria-label="World entities"
       >
@@ -219,8 +263,12 @@ export function Outliner() {
               return (
                 <div
                   key={node.id}
+                  ref={(el) => { rowRefs.current[node.id] = el }}
                   role="treeitem"
+                  data-node-id={node.id}
                   aria-selected={selected}
+                  aria-expanded={node.hasChildren ? expanded.has(node.id) : undefined}
+                  tabIndex={selected ? 0 : -1}
                   className={`outliner-row${selected ? ' selected' : ''}`}
                   style={{ position: 'absolute', top, height: ROW_HEIGHT, paddingLeft: 8 + node.depth * 14 }}
                   onClick={(event) => onRowClick(event, node)}

@@ -7,6 +7,7 @@ import {
   clearLayoutPreferences,
   PANEL_DEFAULT_SIZE,
   PANEL_MIN_SIZE,
+  PANEL_MAX_SIZE,
   type PanelRegion,
 } from './layoutStore'
 
@@ -118,5 +119,17 @@ describe('ResizeHandle keyboard semantics', () => {
     const handle = screen.getByRole('separator')
     expect(handle.getAttribute('aria-orientation')).toBe('vertical')
     expect(handle.getAttribute('aria-valuenow')).toBe(String(useLayoutStore.getState().panels.left.size))
+  })
+
+  it('exposes aria-valuemin equal to PANEL_MIN_SIZE for the region', () => {
+    render(<ResizeHandle region="left" edge="right" ariaLabel="Resize left" />)
+    const handle = screen.getByRole('separator')
+    expect(handle.getAttribute('aria-valuemin')).toBe(String(PANEL_MIN_SIZE.left))
+  })
+
+  it('exposes aria-valuemax equal to PANEL_MAX_SIZE for the region', () => {
+    render(<ResizeHandle region="left" edge="right" ariaLabel="Resize left" />)
+    const handle = screen.getByRole('separator')
+    expect(handle.getAttribute('aria-valuemax')).toBe(String(PANEL_MAX_SIZE.left))
   })
 })

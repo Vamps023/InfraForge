@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 
 #include "TestHelpers.hpp"
+#include "infraforge/domain/world/ChunkCacheMetadata.hpp"
 #include "infraforge/domain/world/EntityId.hpp"
 #include "infraforge/domain/world/Invalidation.hpp"
 #include "infraforge/domain/world/SpatialIndex.hpp"
@@ -10,6 +11,7 @@
 #include <vector>
 
 namespace world = infraforge::domain::world;
+namespace geo = infraforge::domain::geo;
 
 using infraforge::testhelpers::captureException;
 
@@ -19,11 +21,15 @@ world::EntityId entityId(std::uint64_t low) {
     return world::EntityId{0x4f'00'00'00'00'00'00'00ULL, low};
 }
 
+world::ChunkGrid kilometreGrid() {
+    return world::ChunkGrid::fromMetreEdge(geo::ResolvedUnit{"metre", 1.0});
+}
+
 } // namespace
 
 TEST_SUITE("canonical spatial index") {
     TEST_CASE("insert registers bounds and affected chunks") {
-        world::SpatialIndex index{world::ChunkGrid{}};
+        world::SpatialIndex index{kilometreGrid()};
 
         const auto mutation =
             index.insert(entityId(1), world::SpatialBounds::ofEdges(100.0, 100.0, 300.0, 300.0),
@@ -45,9 +51,9 @@ TEST_SUITE("canonical spatial index") {
     }
 
     TEST_CASE("movement dirties the union of old and new chunk sets") {
-        world::SpatialIndex index{world::ChunkGrid{}};
-        static_cast<void>(index.insert(
-            entityId(7), world::SpatialBounds::ofPoint(500.0, 500.0)));
+        world::SpatialIndex index{kilometreGrid()};
+        static_cast<void>(index.insert(entityId(7), world::SpatialBounds::ofPoint(500.0, 500.0),
+            world::InvalidationMask::of(world::InvalidationClass::Geometry)));
 
         const auto mutation = index.update(
             entityId(7), world::SpatialBounds::ofPoint(1500.0, 500.0),
@@ -66,20 +72,23 @@ TEST_SUITE("canonical spatial index") {
         CHECK(index.chunksOf(entityId(7)) == std::vector<world::ChunkCoord>{{1, 0}});
         // A 50 km jump keeps the same bounded dirty-set shape.
         const auto farMove = index.update(
-            entityId(7), world::SpatialBounds::ofPoint(50000.0, -50000.0));
+            entityId(7), world::SpatialBounds::ofPoint(50000.0, -50000.0),
+            world::InvalidationMask::of(world::InvalidationClass::Geometry));
         REQUIRE(farMove.dirtyChunks.size() == 2);
         CHECK(farMove.dirtyChunks[0] == world::ChunkCoord{1, 0});
         CHECK(farMove.dirtyChunks[1] == world::ChunkCoord{50, -50});
     }
 
     TEST_CASE("shrinking bounds invalidate the vacated remainder") {
-        world::SpatialIndex index{world::ChunkGrid{}};
+        world::SpatialIndex index{kilometreGrid()};
         static_cast<void>(index.insert(entityId(2),
-            world::SpatialBounds::ofEdges(-1000.0, -1000.0, 1999.0, 1999.0)));
+            world::SpatialBounds::ofEdges(-1000.0, -1000.0, 1999.0, 1999.0),
+            world::InvalidationMask::of(world::InvalidationClass::Geometry)));
         REQUIRE(index.chunksOf(entityId(2)).size() == 9);
 
-        const auto shrunk =
-            index.update(entityId(2), world::SpatialBounds::ofEdges(-100.0, -100.0, 100.0, 100.0));
+        const auto shrunk = index.update(entityId(2),
+            world::SpatialBounds::ofEdges(-100.0, -100.0, 100.0, 100.0),
+            world::InvalidationMask::of(world::InvalidationClass::Geometry));
 
         // The 200 m core covers the four cells around the origin; the
         // vacated five cells of the former 3x3 footprint stay dirty.
@@ -95,12 +104,13 @@ TEST_SUITE("canonical spatial index") {
     }
 
     TEST_CASE("expanding bounds invalidate the newly covered cells") {
-        world::SpatialIndex index{world::ChunkGrid{}};
-        static_cast<void>(index.insert(
-            entityId(3), world::SpatialBounds::ofPoint(0.0, 0.0)));
+        world::SpatialIndex index{kilometreGrid()};
+        static_cast<void>(index.insert(entityId(3), world::SpatialBounds::ofPoint(0.0, 0.0),
+            world::InvalidationMask::of(world::InvalidationClass::Geometry)));
 
-        const auto expanded =
-            index.update(entityId(3), world::SpatialBounds::ofEdges(-1000.0, -2000.0, 500.0, 0.0));
+        const auto expanded = index.update(entityId(3),
+            world::SpatialBounds::ofEdges(-1000.0, -2000.0, 500.0, 0.0),
+            world::InvalidationMask::of(world::InvalidationClass::Geometry));
 
         CHECK(expanded.updatedChunks.size() == 6);
         CHECK(expanded.dirtyChunks.size() == 6);
@@ -109,12 +119,14 @@ TEST_SUITE("canonical spatial index") {
     }
 
     TEST_CASE("removal releases cells and reports the vacated set") {
-        world::SpatialIndex index{world::ChunkGrid{}};
+        world::SpatialIndex index{kilometreGrid()};
         static_cast<void>(index.insert(entityId(4),
-            world::SpatialBounds::ofEdges(900.0, 900.0, 1100.0, 1100.0)));
+            world::SpatialBounds::ofEdges(900.0, 900.0, 1100.0, 1100.0),
+            world::InvalidationMask::of(world::InvalidationClass::Geometry)));
         REQUIRE(index.occupiedChunkCount() == 4);
 
-        const auto removed = index.remove(entityId(4));
+        const auto removed = index.remove(
+            entityId(4), world::InvalidationMask::of(world::InvalidationClass::Geometry));
 
         CHECK_FALSE(index.contains(entityId(4)));
         CHECK_FALSE(index.boundsOf(entityId(4)).has_value());
@@ -127,11 +139,15 @@ TEST_SUITE("canonical spatial index") {
     }
 
     TEST_CASE("entities sharing one chunk are all reported") {
-        world::SpatialIndex index{world::ChunkGrid{}};
-        static_cast<void>(index.insert(entityId(10), world::SpatialBounds::ofPoint(10.0, 10.0)));
-        static_cast<void>(index.insert(entityId(11), world::SpatialBounds::ofPoint(20.0, 990.0)));
-        static_cast<void>(index.insert(entityId(12), world::SpatialBounds::ofPoint(30.0, 20.0)));
-        static_cast<void>(index.insert(entityId(13), world::SpatialBounds::ofPoint(1200.0, 20.0)));
+        world::SpatialIndex index{kilometreGrid()};
+        static_cast<void>(index.insert(entityId(10), world::SpatialBounds::ofPoint(10.0, 10.0),
+            world::InvalidationMask::of(world::InvalidationClass::Geometry)));
+        static_cast<void>(index.insert(entityId(11), world::SpatialBounds::ofPoint(20.0, 990.0),
+            world::InvalidationMask::of(world::InvalidationClass::Geometry)));
+        static_cast<void>(index.insert(entityId(12), world::SpatialBounds::ofPoint(30.0, 20.0),
+            world::InvalidationMask::of(world::InvalidationClass::Geometry)));
+        static_cast<void>(index.insert(entityId(13), world::SpatialBounds::ofPoint(1200.0, 20.0),
+            world::InvalidationMask::of(world::InvalidationClass::Geometry)));
 
         const auto inOrigin = index.entitiesInChunk(world::ChunkCoord{0, 0});
         REQUIRE(inOrigin.size() == 3);
@@ -153,11 +169,12 @@ TEST_SUITE("canonical spatial index") {
     }
 
     TEST_CASE("one entity may span many chunks without becoming them") {
-        world::SpatialIndex index{world::ChunkGrid{}};
+        world::SpatialIndex index{kilometreGrid()};
 
         // A long corridor road from (-2500, 500) to (2500, 500): six cells.
-        const auto mutation = index.insert(
-            entityId(20), world::SpatialBounds::ofEdges(-2500.0, 400.0, 2500.0, 600.0));
+        const auto mutation = index.insert(entityId(20),
+            world::SpatialBounds::ofEdges(-2500.0, 400.0, 2500.0, 600.0),
+            world::InvalidationMask::of(world::InvalidationClass::Geometry));
 
         REQUIRE(mutation.updatedChunks.size() == 6);
         CHECK(index.chunksOf(entityId(20)).size() == 6);
@@ -172,11 +189,11 @@ TEST_SUITE("canonical spatial index") {
     }
 
     TEST_CASE("query intersection honours real bounds, not just cells") {
-        world::SpatialIndex index{world::ChunkGrid{}};
-        static_cast<void>(index.insert(
-            entityId(30), world::SpatialBounds::ofEdges(100.0, 100.0, 200.0, 200.0)));
-        static_cast<void>(index.insert(
-            entityId(31), world::SpatialBounds::ofEdges(1800.0, 100.0, 1900.0, 200.0)));
+        world::SpatialIndex index{kilometreGrid()};
+        static_cast<void>(index.insert(entityId(30), world::SpatialBounds::ofEdges(100.0, 100.0, 200.0, 200.0),
+            world::InvalidationMask::of(world::InvalidationClass::Geometry)));
+        static_cast<void>(index.insert(entityId(31), world::SpatialBounds::ofEdges(1800.0, 100.0, 1900.0, 200.0),
+            world::InvalidationMask::of(world::InvalidationClass::Geometry)));
 
         // A point query in cell (0,0) selects only entity 30 as a cell
         // candidate, and the real bounds check rejects it too.
@@ -189,8 +206,9 @@ TEST_SUITE("canonical spatial index") {
     }
 
     TEST_CASE("an entity can temporarily have no spatial extent") {
-        world::SpatialIndex index{world::ChunkGrid{}};
-        static_cast<void>(index.insert(entityId(40), world::SpatialBounds::ofPoint(100.0, 100.0)));
+        world::SpatialIndex index{kilometreGrid()};
+        static_cast<void>(index.insert(entityId(40), world::SpatialBounds::ofPoint(100.0, 100.0),
+            world::InvalidationMask::of(world::InvalidationClass::Geometry)));
 
         const auto dormant = index.update(
             entityId(40), world::SpatialBounds::empty(),
@@ -204,36 +222,42 @@ TEST_SUITE("canonical spatial index") {
         CHECK(dormant.updatedChunks.empty());
         CHECK(dormant.dirtyChunks.size() == 1);
         // Re-activating dirties only the re-entered cell.
-        const auto revived = index.update(entityId(40), world::SpatialBounds::ofPoint(-100.0, 100.0));
+        const auto revived = index.update(entityId(40), world::SpatialBounds::ofPoint(-100.0, 100.0),
+            world::InvalidationMask::of(world::InvalidationClass::Geometry));
         CHECK(revived.previousChunks.empty());
         CHECK(revived.updatedChunks.size() == 1);
     }
 
     TEST_CASE("invalid input is rejected without mutating the index") {
-        world::SpatialIndex index{world::ChunkGrid{}};
+        world::SpatialIndex index{kilometreGrid()};
 
         const auto nullId = captureException<world::WorldPartitionError>([&] {
-            static_cast<void>(index.insert(world::EntityId{}, world::SpatialBounds::ofPoint(0.0, 0.0)));
+            static_cast<void>(index.insert(world::EntityId{}, world::SpatialBounds::ofPoint(0.0, 0.0),
+                world::InvalidationMask::of(world::InvalidationClass::Geometry)));
         });
         REQUIRE(nullId.has_value());
         CHECK(nullId->code() == world::WorldPartitionErrorCode::NullEntityId);
 
-        static_cast<void>(index.insert(entityId(50), world::SpatialBounds::ofPoint(0.0, 0.0)));
+        static_cast<void>(index.insert(entityId(50), world::SpatialBounds::ofPoint(0.0, 0.0),
+            world::InvalidationMask::of(world::InvalidationClass::Geometry)));
 
         const auto duplicate = captureException<world::WorldPartitionError>([&] {
-            static_cast<void>(index.insert(entityId(50), world::SpatialBounds::ofPoint(1.0, 1.0)));
+            static_cast<void>(index.insert(entityId(50), world::SpatialBounds::ofPoint(1.0, 1.0),
+                world::InvalidationMask::of(world::InvalidationClass::Geometry)));
         });
         REQUIRE(duplicate.has_value());
         CHECK(duplicate->code() == world::WorldPartitionErrorCode::DuplicateEntity);
 
         const auto unknownUpdate = captureException<world::WorldPartitionError>([&] {
-            static_cast<void>(index.update(entityId(51), world::SpatialBounds::ofPoint(1.0, 1.0)));
+            static_cast<void>(index.update(entityId(51), world::SpatialBounds::ofPoint(1.0, 1.0),
+                world::InvalidationMask::of(world::InvalidationClass::Geometry)));
         });
         REQUIRE(unknownUpdate.has_value());
         CHECK(unknownUpdate->code() == world::WorldPartitionErrorCode::UnknownEntity);
 
         const auto unknownRemove = captureException<world::WorldPartitionError>([&] {
-            static_cast<void>(index.remove(entityId(51)));
+            static_cast<void>(index.remove(entityId(51),
+                world::InvalidationMask::of(world::InvalidationClass::Geometry)));
         });
         REQUIRE(unknownRemove.has_value());
         CHECK(unknownRemove->code() == world::WorldPartitionErrorCode::UnknownEntity);
@@ -241,7 +265,8 @@ TEST_SUITE("canonical spatial index") {
         const auto nonFinite = captureException<world::WorldPartitionError>([&] {
             static_cast<void>(index.insert(
                 entityId(52), world::SpatialBounds::ofEdges(0.0, 0.0,
-                                  std::numeric_limits<double>::infinity(), 10.0)));
+                                  std::numeric_limits<double>::infinity(), 10.0),
+                world::InvalidationMask::of(world::InvalidationClass::Geometry)));
         });
         REQUIRE(nonFinite.has_value());
         CHECK(nonFinite->code() == world::WorldPartitionErrorCode::InvalidBounds);
@@ -252,7 +277,7 @@ TEST_SUITE("canonical spatial index") {
 
     TEST_CASE("chunk dirty set accumulates per-chunk classes across mutations") {
         world::ChunkDirtySet dirty;
-        world::SpatialIndex index{world::ChunkGrid{}};
+        world::SpatialIndex index{kilometreGrid()};
 
         const auto first = index.insert(entityId(60),
             world::SpatialBounds::ofPoint(10.0, 10.0),
@@ -318,13 +343,13 @@ TEST_SUITE("canonical spatial index") {
     }
 
     TEST_CASE("chunk identity and entity identity are independent") {
-        world::SpatialIndex index{world::ChunkGrid{}};
+        world::SpatialIndex index{kilometreGrid()};
 
         // Deliberately degenerate-looking: the entity id numerically equals
         // a chunk coordinate pair, yet the two namespaces never interact.
         const world::EntityId deceptive{1, 2};
-        static_cast<void>(index.insert(
-            deceptive, world::SpatialBounds::ofPoint(2000.0, 2000.0)));
+        static_cast<void>(index.insert(deceptive, world::SpatialBounds::ofPoint(2000.0, 2000.0),
+            world::InvalidationMask::of(world::InvalidationClass::Geometry)));
 
         // Chunk (1,2) is empty; the entity lives in cell (2,2).
         CHECK(index.entitiesInChunk(world::ChunkCoord{1, 2}).empty());
@@ -332,9 +357,72 @@ TEST_SUITE("canonical spatial index") {
             == std::vector<world::EntityId>{deceptive});
         // Moving the entity does not change any other cell's identity, and
         // changing which cells exist never changes the entity.
-        static_cast<void>(index.update(deceptive, world::SpatialBounds::ofPoint(-2000.0, 2000.0)));
+        static_cast<void>(index.update(deceptive, world::SpatialBounds::ofPoint(-2000.0, 2000.0),
+            world::InvalidationMask::of(world::InvalidationClass::Geometry)));
         CHECK(deceptive == world::EntityId{1, 2});
         CHECK(index.boundsOf(deceptive).has_value());
         CHECK(index.occupiedChunkCount() == 1);
+    }
+
+    TEST_CASE("per-chunk content revisions keep unrelated chunks current across local edits") {
+        world::SpatialIndex index{kilometreGrid()};
+        const auto geometry = world::InvalidationMask::of(world::InvalidationClass::Geometry);
+
+        // Chunk A near the origin, chunk B ~60 km east: independent cells.
+        static_cast<void>(index.insert(
+            entityId(70), world::SpatialBounds::ofPoint(10.0, 10.0), geometry));
+        static_cast<void>(index.insert(
+            entityId(71), world::SpatialBounds::ofPoint(60000.0, 10.0), geometry));
+        const world::ChunkCoord cellA{0, 0};
+        const world::ChunkCoord cellB{60, 0};
+        REQUIRE(cellA != cellB);
+
+        // A generator records each chunk's content generation at
+        // generation time.
+        const world::ChunkCacheMetadata generatedA{
+            world::currentChunkCacheSchemaVersion, 1, index.lastAffectingRevision(cellA)};
+        const world::ChunkCacheMetadata generatedB{
+            world::currentChunkCacheSchemaVersion, 1, index.lastAffectingRevision(cellB)};
+        REQUIRE(generatedA.sourceRevision > 0);
+        REQUIRE(generatedB.sourceRevision > 0);
+
+        // Edit an entity that only affects chunk A.
+        const auto editRevisionBefore = index.revision();
+        static_cast<void>(index.update(
+            entityId(70), world::SpatialBounds::ofPoint(20.0, 20.0), geometry));
+
+        // The global index revision moved; that must be irrelevant for B.
+        CHECK(index.revision() == editRevisionBefore + 1);
+
+        // Chunk A's content generation advanced -> its cache is stale.
+        const world::ChunkCacheExpectation expectationA{
+            world::currentChunkCacheSchemaVersion, 1, index.lastAffectingRevision(cellA)};
+        CHECK(index.lastAffectingRevision(cellA) > generatedA.sourceRevision);
+        CHECK_FALSE(world::isCurrent(generatedA, expectationA));
+
+        // Chunk B was never touched: its generation is unchanged and its
+        // cache is still current — a distant local edit must not stale the
+        // whole world.
+        CHECK(index.lastAffectingRevision(cellB) == generatedB.sourceRevision);
+        const world::ChunkCacheExpectation expectationB{
+            world::currentChunkCacheSchemaVersion, 1, index.lastAffectingRevision(cellB)};
+        CHECK(world::isCurrent(generatedB, expectationB));
+
+        // Removing the far entity dirties exactly its own cell too.
+        static_cast<void>(index.remove(entityId(71), geometry));
+        CHECK(index.lastAffectingRevision(cellB) > generatedB.sourceRevision);
+        CHECK_FALSE(world::isCurrent(generatedB,
+            world::ChunkCacheExpectation{
+                world::currentChunkCacheSchemaVersion, 1,
+                index.lastAffectingRevision(cellB)}));
+        // ...and the untouched near cell keeps its generation.
+        CHECK(index.lastAffectingRevision(cellA) == expectationA.sourceRevision);
+    }
+
+    TEST_CASE("never-affected chunks carry content generation zero") {
+        const world::SpatialIndex index{kilometreGrid()};
+
+        CHECK(index.revision() == 0);
+        CHECK(index.lastAffectingRevision(world::ChunkCoord{12, -34}) == 0);
     }
 }

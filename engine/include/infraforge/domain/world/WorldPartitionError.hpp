@@ -12,6 +12,9 @@ namespace infraforge::domain::world {
 enum class WorldPartitionErrorCode : std::uint8_t {
     // Chunk size is non-finite or not positive.
     InvalidChunkSize,
+    // The resolved canonical linear unit cannot anchor chunk math
+    // (non-finite or non-positive metres-per-unit factor).
+    InvalidLinearUnit,
     // A non-empty bounds carries a non-finite edge.
     InvalidBounds,
     // A coordinate cannot be mapped to a chunk index: non-finite, beyond

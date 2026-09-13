@@ -18,6 +18,21 @@ WorldPartitionError invalidChunkSizeError(const double chunkSize) {
 
 } // namespace
 
+ChunkGrid ChunkGrid::fromMetreEdge(
+    const geo::ResolvedUnit& linearUnit, const double edgeMetres) {
+    // metres-per-unit must be usable as a divisor; the Geo domain resolves
+    // it, but the partition refuses to compute on a broken factor.
+    if (linearUnit.toMetre <= 0.0 || !std::isfinite(linearUnit.toMetre)) {
+        throw WorldPartitionError{
+            WorldPartitionErrorCode::InvalidLinearUnit,
+            "canonical linear unit factor must be finite and positive, got "
+                + std::to_string(linearUnit.toMetre)};
+    }
+    // Physical edge -> project-unit edge: divide by the metres carried by
+    // one canonical unit.
+    return ChunkGrid{ChunkGridConfig{edgeMetres / linearUnit.toMetre}};
+}
+
 ChunkGrid::ChunkGrid(ChunkGridConfig config) {
     if (config.chunkSize <= 0.0 || !std::isfinite(config.chunkSize)) {
         throw invalidChunkSizeError(config.chunkSize);

@@ -1,10 +1,12 @@
 #include <doctest/doctest.h>
 
+#include "infraforge/domain/world/ChunkCacheMetadata.hpp"
 #include "infraforge/domain/world/ChunkResidency.hpp"
 #include "infraforge/domain/world/Invalidation.hpp"
 #include "infraforge/domain/world/SpatialIndex.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <map>
@@ -13,8 +15,19 @@
 #include <vector>
 
 namespace world = infraforge::domain::world;
+namespace geo = infraforge::domain::geo;
 
 namespace {
+
+// The production grid path: the physical 1 km default edge converted
+// through the project's resolved canonical linear unit (metres here).
+world::ChunkGrid kilometreGrid() {
+    return world::ChunkGrid::fromMetreEdge(geo::ResolvedUnit{"metre", 1.0});
+}
+
+world::InvalidationMask geometryInvalidation() {
+    return world::InvalidationMask::of(world::InvalidationClass::Geometry);
+}
 
 // Deterministic LCG so the synthetic 100 km world is identical on every
 // platform and run (std:: distributions are implementation-defined).
@@ -110,13 +123,11 @@ using ExpectedCellMap = std::map<world::ChunkCoord, std::set<world::EntityId>>;
 TEST_SUITE("large-world spatial index acceptance") {
     TEST_CASE("a synthetic 100 km world indexes sparsely and query-plans exactly") {
         const SyntheticLargeWorld synthetic;
-        const world::ChunkGrid grid; // default 1 km cells
+        const world::ChunkGrid grid{kilometreGrid()}; // default 1 km physical cells
         world::SpatialIndex index{grid};
 
         for (const auto& entity : synthetic.entities()) {
-            static_cast<void>(index.insert(
-                entity.id, entity.bounds,
-                world::InvalidationMask::of(world::InvalidationClass::Geometry)));
+            static_cast<void>(index.insert(entity.id, entity.bounds, geometryInvalidation()));
         }
 
         // 100 km of extent at 1 km cells would be 100 x 100 = 10,000 dense
@@ -180,10 +191,10 @@ TEST_SUITE("large-world spatial index acceptance") {
 
     TEST_CASE("a one-entity local edit invalidates only its spatial neighbourhood") {
         const SyntheticLargeWorld synthetic;
-        const world::ChunkGrid grid;
+        const world::ChunkGrid grid{kilometreGrid()};
         world::SpatialIndex index{grid};
         for (const auto& entity : synthetic.entities()) {
-            static_cast<void>(index.insert(entity.id, entity.bounds));
+            static_cast<void>(index.insert(entity.id, entity.bounds, geometryInvalidation()));
         }
         const auto expected = buildExpectedCells(grid, synthetic.entities());
         const auto occupiedBefore = index.occupiedChunkCount();
@@ -193,16 +204,57 @@ TEST_SUITE("large-world spatial index acceptance") {
         const auto& moved = synthetic.entities().front();
         const auto movedFrom = index.boundsOf(moved.id);
         REQUIRE(movedFrom.has_value());
+
+        // Content generations of three occupied cells far away from BOTH
+        // the entity's origin and its destination, captured the way a
+        // chunk generator would record them before the edit.
+        const auto fromCenterX = (movedFrom->minEasting + movedFrom->maxEasting) / 2.0;
+        const auto fromCenterY = (movedFrom->minNorthing + movedFrom->maxNorthing) / 2.0;
+        const auto toCenterX = -48000.0 + 3.0;
+        const auto toCenterY = 48000.0;
+        std::vector<std::pair<world::ChunkCoord, world::ChunkCacheMetadata>> distantCaches;
+        for (const auto& occupied : expected) {
+            if (distantCaches.size() == 3) {
+                break;
+            }
+            const auto footprint = grid.chunkBounds(occupied.first);
+            const auto centerX = (footprint.minEasting + footprint.maxEasting) / 2.0;
+            const auto centerY = (footprint.minNorthing + footprint.maxNorthing) / 2.0;
+            const auto distanceFrom = std::hypot(centerX - fromCenterX, centerY - fromCenterY);
+            const auto distanceTo = std::hypot(centerX - toCenterX, centerY - toCenterY);
+            if (distanceFrom > 40000.0 && distanceTo > 40000.0) {
+                distantCaches.emplace_back(occupied.first,
+                    world::ChunkCacheMetadata{
+                        world::currentChunkCacheSchemaVersion, 1,
+                        index.lastAffectingRevision(occupied.first)});
+            }
+        }
+        REQUIRE(distantCaches.size() == 3);
+
         const auto mutation = index.update(moved.id,
             world::SpatialBounds::ofEdges(
                 -48000.0, 48000.0 - 3.0, -48000.0 + 6.0, 48000.0 + 3.0),
-            world::InvalidationMask::of(world::InvalidationClass::Geometry));
+            geometryInvalidation());
 
         // The dirty set is the old cells united with the new cells — and
         // nothing else. A 6 m asset can touch at most 2 cells per state.
         CHECK(mutation.revision == revisionBefore + 1);
         CHECK(mutation.dirtyChunks.size() <= 4);
         CHECK(mutation.dirtyChunks.size() * 1000 < 10000);
+
+        // The distant chunks' content generations are untouched: the
+        // global revision moved, but their caches stay current.
+        for (const auto& [cell, cache] : distantCaches) {
+            CHECK(index.lastAffectingRevision(cell) == cache.sourceRevision);
+            CHECK(world::isCurrent(cache,
+                world::ChunkCacheExpectation{
+                    world::currentChunkCacheSchemaVersion, 1,
+                    index.lastAffectingRevision(cell)}));
+        }
+        // ...while every cell of the edit carries a new generation.
+        for (const auto chunk : mutation.dirtyChunks) {
+            CHECK(index.lastAffectingRevision(chunk) == mutation.revision);
+        }
 
         // The union is exactly the ground-truth cell diff.
         std::set<world::ChunkCoord> expectedDirty;

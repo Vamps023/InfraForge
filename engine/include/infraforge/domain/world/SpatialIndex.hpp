@@ -25,8 +25,11 @@ namespace infraforge::domain::world {
 //   an entity invalidates the cells it left as well as the cells it
 //   entered (docs/02_DATA/WORLD_CHUNKS.md "Dirty tracking").
 // - classes: invalidation classes declared for this mutation.
-// - revision: monotonically increasing index revision after the mutation;
-//   usable as generated-cache source versioning.
+// - revision: monotonically increasing global index revision after the
+//   mutation. This is a whole-index counter — generated chunk content must
+//   version itself with SpatialIndex::lastAffectingRevision(chunk) instead,
+//   so an unrelated edit elsewhere in the world cannot mark this chunk's
+//   cache stale.
 struct IndexMutation {
     EntityId entity{};
     std::vector<ChunkCoord> previousChunks;
@@ -89,23 +92,25 @@ public:
 
     // Registers an entity with canonical bounds. Empty bounds register an
     // entity that temporarily has no spatial extent (occupies no cells).
-    // Throws WorldPartitionError (NullEntityId) for the reserved null
-    // identifier, (DuplicateEntity) when the identifier is already
-    // tracked, (InvalidBounds) for non-empty bounds with non-finite
-    // edges, and (CoordinateOutOfRange) when bounds cannot be mapped to
-    // chunk cells.
-    IndexMutation insert(EntityId entity, SpatialBounds bounds, InvalidationMask classes = {});
+    // The invalidation classes must be stated explicitly on every
+    // mutation; pass an empty InvalidationMask only when the mutation
+    // intentionally requires no generated work. Throws WorldPartitionError
+    // (NullEntityId) for the reserved null identifier, (DuplicateEntity)
+    // when the identifier is already tracked, (InvalidBounds) for
+    // non-empty bounds with non-finite edges, and (CoordinateOutOfRange)
+    // when bounds cannot be mapped to chunk cells.
+    IndexMutation insert(EntityId entity, SpatialBounds bounds, InvalidationMask classes);
 
     // Replaces the canonical bounds of a tracked entity; the mutation
     // carries the old and new cell coverage. Throws WorldPartitionError
     // (UnknownEntity) when the identifier is not tracked, plus the insert
     // input errors for the new bounds.
-    IndexMutation update(EntityId entity, SpatialBounds newBounds, InvalidationMask classes = {});
+    IndexMutation update(EntityId entity, SpatialBounds newBounds, InvalidationMask classes);
 
     // Removes an entity; previousChunks carries the cells it occupied so
     // content it vacated is invalidated. Throws WorldPartitionError
     // (UnknownEntity) when the identifier is not tracked.
-    IndexMutation remove(EntityId entity, InvalidationMask classes = {});
+    IndexMutation remove(EntityId entity, InvalidationMask classes);
 
     [[nodiscard]] std::optional<SpatialBounds> boundsOf(EntityId entity) const;
     [[nodiscard]] bool contains(EntityId entity) const {
@@ -120,6 +125,19 @@ public:
     }
 
     [[nodiscard]] std::uint64_t revision() const noexcept { return revision_; }
+
+    // Last index revision whose mutations affected this cell's content
+    // (insert/update/remove of an entity covering it). Generated chunk
+    // content must record this value as its cache sourceRevision at
+    // generation time; a later comparison against the chunk's current
+    // value marks exactly the edited cells stale while unrelated chunks
+    // stay current — a distant one-entity edit can never invalidate the
+    // whole world. 0 means no mutation ever affected the cell (it has no
+    // derived content to invalidate).
+    [[nodiscard]] std::uint64_t lastAffectingRevision(ChunkCoord chunk) const {
+        const auto found = chunkRevisions_.find(chunk);
+        return found == chunkRevisions_.end() ? 0 : found->second;
+    }
 
     // Cells intersecting the closed bounds (grid delegation, deterministic
     // row-major order).
@@ -149,6 +167,9 @@ private:
     ChunkGrid grid_;
     std::unordered_map<EntityId, Entry, EntityIdHash> entities_;
     std::unordered_map<ChunkCoord, std::vector<EntityId>, ChunkCoordHash> chunkEntities_;
+    // Sparse: one entry per cell ever touched by a mutation — never the
+    // dense world matrix.
+    std::unordered_map<ChunkCoord, std::uint64_t, ChunkCoordHash> chunkRevisions_;
     std::uint64_t revision_{0};
 };
 

@@ -10,8 +10,10 @@ out/
 engine/build/
 CMakeUserPresets.json
 
-# Local vcpkg checkout (CI checks it out at .vcpkg as well)
+# Local vcpkg checkout and build outputs
 .vcpkg/
+.vcpkg_archives/
+vcpkg_installed/
 
 # IDE / OS
 .vscode/

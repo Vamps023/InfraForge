@@ -145,4 +145,47 @@ TEST_CASE("tile codec round-trips and validates provenance") {
     }
 }
 
+// BLOCKER 3 regression: an all-NoData tile encodes and decodes correctly.
+// The renderer's buildPayload produces zero indices for all-NoData tiles;
+// the codec must handle all-NaN heights without error.
+TEST_CASE("all-NoData tile round-trips with NaN heights") {
+    using namespace infraforge::domain::terrain;
+
+    TerrainTileFile tile;
+    tile.datasetUuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    tile.datasetRevision = 1;
+    tile.chunkX = 0;
+    tile.chunkY = 0;
+    for (std::uint32_t level = 0; level < kTerrainTileLodCount; ++level) {
+        TerrainTileLodGrid grid;
+        grid.dim = terrainTileLodDim(level);
+        grid.originEasting = 500000.0;
+        grid.originNorthing = 4650000.0;
+        grid.cellEasting = 2.5;
+        grid.cellNorthing = 2.5;
+        grid.minZ = std::numeric_limits<double>::quiet_NaN();
+        grid.maxZ = std::numeric_limits<double>::quiet_NaN();
+        // Every cell is NoData (quiet NaN).
+        grid.heights.assign(
+            static_cast<std::size_t>(grid.dim) * grid.dim,
+            std::numeric_limits<double>::quiet_NaN());
+        tile.lods.push_back(std::move(grid));
+    }
+
+    const std::string encoded = encodeTerrainTile(tile);
+    const TerrainTileFile decoded = decodeTerrainTile(
+        std::span<const std::byte>(reinterpret_cast<const std::byte*>(encoded.data()), encoded.size()));
+
+    CHECK(decoded.datasetUuid == tile.datasetUuid);
+    REQUIRE(decoded.lods.size() == kTerrainTileLodCount);
+    for (std::uint32_t level = 0; level < kTerrainTileLodCount; ++level) {
+        CHECK(decoded.lods[level].heights.size()
+            == static_cast<std::size_t>(decoded.lods[level].dim) * decoded.lods[level].dim);
+        // Every decoded height must be NaN (NoData preserved).
+        for (const double height : decoded.lods[level].heights) {
+            CHECK(std::isnan(height));
+        }
+    }
+}
+
 } // TEST_SUITE

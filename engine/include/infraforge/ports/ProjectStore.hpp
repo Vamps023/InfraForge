@@ -17,6 +17,7 @@ enum class StoreErrorCategory {
     FormatUnsupported,
     SchemaUnsupported,
     PersistenceFailure,
+    NotFound,
 };
 
 class StoreError : public std::runtime_error {
@@ -82,6 +83,12 @@ public:
     // commits its canonical record in one transaction.
     [[nodiscard]] virtual TerrainDatasetInsertResult insertTerrainDataset(
         const domain::terrain::TerrainDataset& dataset) = 0;
+
+    // Removes a terrain dataset row and advances the project revision.
+    // Used for transactional rollback when a canonical commit partially
+    // fails after the DB row was inserted. The caller is responsible for
+    // removing the project-owned raster file separately.
+    virtual void removeTerrainDataset(const std::string& datasetId) = 0;
 
     // Flushes and closes the active project session.
     virtual void close() = 0;

@@ -229,15 +229,34 @@ JobRecord TerrainService::startImport(const TerrainImportSpec& spec) {
             payload->dataset.sourceSha256 = runtime::sha256Hex(hash.finish());
         }
 
-        // Phase 2: validate the stored copy as a raster.
+        // Phase 2: validate the stored copy as a raster and make it the
+        // authoritative source of canonical metadata (HIGH 5 TOCTOU fix).
+        // The initial probe (before the job) may have observed a different
+        // source state; after the async copy, the stored copy is the only
+        // truth. All canonical metadata is re-derived from the stored copy.
         context.reportNormalizedProgress(kPhase2Start, "validating stored copy");
         context.throwIfCancelled();
         const ports::TerrainSourceInfo stored = reader_.probe(payload->tempFile);
-        if (stored.width != payload->dataset.rasterWidth || stored.height != payload->dataset.rasterHeight
-            || stored.crsDefinition.empty()) {
+        if (stored.width <= 0 || stored.height <= 0 || stored.crsDefinition.empty()) {
             failImport(TerrainErrorCode::CorruptSource,
-                "stored terrain copy does not match the probed source");
+                "stored terrain copy is not a valid raster");
         }
+        // Re-derive canonical metadata from the stored copy. If the source
+        // changed between the initial probe and the copy, the stored copy
+        // wins — the dataset agrees with what is actually persisted.
+        payload->dataset.sourceFormat = stored.format;
+        payload->dataset.sourceCrs = stored.crsDefinition;
+        payload->dataset.rasterWidth = stored.width;
+        payload->dataset.rasterHeight = stored.height;
+        payload->dataset.originX = stored.originX;
+        payload->dataset.originY = stored.originY;
+        payload->dataset.cellSizeX = stored.pixelSizeX;
+        payload->dataset.cellSizeY = stored.pixelSizeY;
+        payload->dataset.elevationUnit = stored.elevationUnit;
+        payload->dataset.elevationUnitToMetre = stored.elevationUnitToMetre;
+        payload->dataset.hasNodata = stored.hasNodata;
+        payload->dataset.nodataValue = stored.nodataValue;
+        payload->dataset.sourceBytes = stored.fileBytes;
 
         // Worker-confined transform service (PROJ objects are thread-bound);
         // all project geometry comes from the immutable payload snapshot,
@@ -357,42 +376,46 @@ JobRecord TerrainService::startImport(const TerrainImportSpec& spec) {
 
 void TerrainService::commitImportedDataset(ImportPayload payload) {
     // Publish the project-owned raster at its canonical storage location
-    // before the database transaction, mirroring the manifest-first
-    // compensation pattern: a crash before commit leaves an unreferenced
-    // file, never a canonical record without storage.
+    // before the database transaction (manifest-first compensation: a crash
+    // before commit leaves an unreferenced file, never a canonical record
+    // without storage).
     const std::filesystem::path canonicalPath =
         payload.projectDirectory / std::filesystem::path{payload.dataset.storagePath};
     (void)renameReplace(payload.tempFile, canonicalPath);
 
-    // Transactional compensation (BLOCKER 10): if the DB insert or any
-    // subsequent canonical side effect fails, remove the newly published
-    // raster so no orphan canonical-looking storage remains. The storage
-    // path is UUID-derived so it can never collide with a previous file.
+    // The canonical commit boundary: DB row + world index + in-memory
+    // projection must all succeed together. If any fails after the DB row
+    // is committed, the DB row is rolled back (removeTerrainDataset) and
+    // the raster is removed. After this boundary, the dataset is canonical
+    // and post-commit failures (events, tile generation) never delete the
+    // raster or roll back the DB.
+    const std::string datasetUuid = domain::terrain::uuidTextFromEntityId(payload.dataset.id);
+
+    ports::TerrainDatasetInsertResult inserted;
     try {
-        const ports::TerrainDatasetInsertResult inserted = store_.insertTerrainDataset(payload.dataset);
+        inserted = store_.insertTerrainDataset(payload.dataset);
+        // world_.insert does not throw (validated bounds math), but if it
+        // ever does, we must roll back the DB row.
         const domain::world::IndexMutation mutation = world_.insert(
             payload.dataset.id, payload.dataset.bounds, InvalidationMask::of(InvalidationClass::Terrain));
-
-        // The canonical chunk diff of the insert is the tile-generation scope —
-        // the one canonical dirty-set flow, never recomputed bounds math.
         domain::world::ChunkDirtySet dirty;
         dirty.absorb(mutation);
-
         datasets_.push_back(payload.dataset);
         revision_ = inserted.record.revision;
 
         runtime::logInfo("terrain", "terrain.dataset_imported",
-            {{"dataset", domain::terrain::uuidTextFromEntityId(payload.dataset.id)},
+            {{"dataset", datasetUuid},
                 {"dirtyChunks", std::to_string(dirty.size())}});
-
-        if (eventSink_) {
-            eventSink_({.job = std::nullopt, .datasetAdded = payload.dataset, .revision = revision_});
-        }
-
-        submitTileGenerationJob(std::move(payload));
     } catch (...) {
-        // Compensation: remove the newly published raster. Never remove a
-        // valid previous file — the UUID-derived path guarantees uniqueness.
+        // Canonical commit failed. Roll back the DB row (if it was
+        // committed) and remove the raster. The UUID-derived storage path
+        // guarantees no collision with a previous file.
+        try {
+            store_.removeTerrainDataset(datasetUuid);
+        } catch (const std::exception& rollbackError) {
+            runtime::logError("terrain", "terrain.rollback_db_failed",
+                {{"dataset", datasetUuid}, {"error", rollbackError.what()}});
+        }
         std::error_code cleanupError;
         std::filesystem::remove(canonicalPath, cleanupError);
         if (cleanupError) {
@@ -401,6 +424,21 @@ void TerrainService::commitImportedDataset(ImportPayload payload) {
                     {"error", cleanupError.message()}});
         }
         throw;
+    }
+
+    // Post-commit: events and derived tile generation. Failures here are
+    // logged/reported but do NOT delete the canonical raster or roll back
+    // the DB — the dataset is already canonical and durable.
+    try {
+        if (eventSink_) {
+            eventSink_({.job = std::nullopt, .datasetAdded = payload.dataset, .revision = revision_});
+        }
+        submitTileGenerationJob(std::move(payload));
+    } catch (const std::exception& postCommitError) {
+        // The dataset is canonical; tile generation is derived cache work.
+        // Log the failure but do not invalidate the committed import.
+        runtime::logError("terrain", "terrain.post_commit_failed",
+            {{"dataset", datasetUuid}, {"error", postCommitError.what()}});
     }
 }
 

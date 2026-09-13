@@ -324,9 +324,10 @@ AssembledRaster assembleCanonicalGeoTiff(
                     }
                 }
             }
-            GDALRasterIO(outBand, GF_Write,
+            CPLErr maskWriteErr = GDALRasterIO(outBand, GF_Write,
                 0, 0, outWidth, outHeight,
                 maskBuf.data(), outWidth, outHeight, GDT_Float32, 0, 0);
+            (void)maskWriteErr;
         }
     }
 

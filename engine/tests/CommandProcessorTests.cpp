@@ -663,4 +663,296 @@ TEST_SUITE("command processor") {
         processor.shutdown();
         store.close();
     }
+    // -----------------------------------------------------------------------
+    // Validation-failure lifecycle tests (BLOCKER 1 fix):
+    // Every command that emits job.queued must reach exactly one terminal
+    // event, even when pre-execution validation fails. The lifecycle is:
+    // queued -> started -> failed (with stable error code).
+    // -----------------------------------------------------------------------
+
+    TEST_CASE("invalid create command (bad traffic_side) reaches terminal failed") {
+        infraforge::testhelpers::ScratchDirectory scratch;
+        infraforge::persistence::SqliteProjectStore store;
+        RecordingSink sink;
+        infraforge::domain::geo::GeoTransformService transforms;
+        infraforge::application::CommandProcessor processor(store, transforms, sink);
+        processor.start();
+
+        ProtocolFrame frame;
+        frame.set_request_id("req-bad-traffic");
+        auto* create = frame.mutable_command()->mutable_create_project();
+        create->set_display_name("Bad Traffic");
+        create->set_parent_directory(infraforge::runtime::utf8String(scratch.path()));
+        auto* georef = create->mutable_georeference();
+        georef->set_horizontal_crs("EPSG:32633");
+        georef->set_linear_unit("metre");
+        georef->set_axis_convention(infraforge::protocol::v1::AXIS_CONVENTION_EASTING_NORTHING_UP);
+        georef->set_origin_easting(500000.0);
+        georef->set_origin_northing(4649776.0);
+        // traffic_side left as TRAFFIC_SIDE_UNSPECIFIED (0) = invalid
+
+        processor.post("conn-1", std::move(frame));
+        // 1 result + 3 job events (queued, started, failed) = 4 total
+        REQUIRE(sink.waitForTotal(4, kWaitTimeout));
+
+        const auto jobs = jobEvents(sink.events());
+        REQUIRE(jobs.size() == 3);
+        REQUIRE(jobs[0].event().has_job_queued());
+        REQUIRE(jobs[1].event().has_job_started());
+        REQUIRE(jobs[2].event().has_job_failed());
+        CHECK_EQ(jobs[1].event().job_started().job_id(), jobs[0].event().job_queued().job_id());
+        CHECK_EQ(jobs[2].event().job_failed().job_id(), jobs[0].event().job_queued().job_id());
+        CHECK_EQ(jobs[2].event().job_failed().error_code(), "INVALID_ARGUMENT");
+        for (const auto& j : jobs) {
+            CHECK_FALSE(j.event().has_job_completed());
+        }
+
+        processor.shutdown();
+        store.close();
+    }
+
+    TEST_CASE("invalid create command (bad axis_convention) reaches terminal failed") {
+        infraforge::testhelpers::ScratchDirectory scratch;
+        infraforge::persistence::SqliteProjectStore store;
+        RecordingSink sink;
+        infraforge::domain::geo::GeoTransformService transforms;
+        infraforge::application::CommandProcessor processor(store, transforms, sink);
+        processor.start();
+
+        ProtocolFrame frame;
+        frame.set_request_id("req-bad-axis");
+        auto* create = frame.mutable_command()->mutable_create_project();
+        create->set_display_name("Bad Axis");
+        create->set_parent_directory(infraforge::runtime::utf8String(scratch.path()));
+        auto* georef = create->mutable_georeference();
+        georef->set_horizontal_crs("EPSG:32633");
+        georef->set_linear_unit("metre");
+        // axis_convention left as AXIS_CONVENTION_UNSPECIFIED (0) = invalid
+        georef->set_origin_easting(500000.0);
+        georef->set_origin_northing(4649776.0);
+        create->set_traffic_side(infraforge::protocol::v1::TRAFFIC_SIDE_RIGHT);
+
+        processor.post("conn-1", std::move(frame));
+        REQUIRE(sink.waitForTotal(4, kWaitTimeout));
+
+        const auto jobs = jobEvents(sink.events());
+        REQUIRE(jobs.size() == 3);
+        REQUIRE(jobs[0].event().has_job_queued());
+        REQUIRE(jobs[1].event().has_job_started());
+        REQUIRE(jobs[2].event().has_job_failed());
+        CHECK_EQ(jobs[2].event().job_failed().error_code(), "INVALID_ARGUMENT");
+        for (const auto& j : jobs) {
+            CHECK_FALSE(j.event().has_job_completed());
+        }
+
+        processor.shutdown();
+        store.close();
+    }
+
+    TEST_CASE("invalid set_georeference (bad axis_convention) reaches terminal failed") {
+        infraforge::testhelpers::ScratchDirectory scratch;
+        infraforge::persistence::SqliteProjectStore store;
+        RecordingSink sink;
+        infraforge::domain::geo::GeoTransformService transforms;
+        infraforge::application::CommandProcessor processor(store, transforms, sink);
+        processor.start();
+
+        // First create a project so set_georeference can be attempted.
+        processor.post("conn-1", createCommandFrame("req-create", scratch.path()));
+        REQUIRE(sink.waitForTotal(6, kWaitTimeout));
+
+        // Now send set_georeference with invalid axis_convention.
+        ProtocolFrame frame;
+        frame.set_request_id("req-bad-geo");
+        auto* setGeo = frame.mutable_command()->mutable_set_georeference();
+        auto* georef = setGeo->mutable_georeference();
+        georef->set_horizontal_crs("EPSG:32633");
+        georef->set_linear_unit("metre");
+        // axis_convention left as UNSPECIFIED = invalid
+        georef->set_origin_easting(500000.0);
+        georef->set_origin_northing(4649776.0);
+
+        processor.post("conn-1", std::move(frame));
+        // 1 result + 3 job events = 4 total for the failed command
+        REQUIRE(sink.waitForTotal(10, kWaitTimeout));
+
+        const auto jobs = jobEvents(sink.events());
+        // First command: 3 job events (queued, started, completed)
+        // Second command: 3 job events (queued, started, failed)
+        REQUIRE(jobs.size() == 6);
+        REQUIRE(jobs[3].event().has_job_queued());
+        REQUIRE(jobs[4].event().has_job_started());
+        REQUIRE(jobs[5].event().has_job_failed());
+        CHECK_EQ(jobs[5].event().job_failed().error_code(), "INVALID_ARGUMENT");
+        CHECK_FALSE(jobs[3].event().has_job_completed());
+        CHECK_FALSE(jobs[4].event().has_job_completed());
+        CHECK_FALSE(jobs[5].event().has_job_completed());
+
+        processor.shutdown();
+        store.close();
+    }
+
+    TEST_CASE("oversized transform batch reaches terminal failed") {
+        infraforge::testhelpers::ScratchDirectory scratch;
+        infraforge::persistence::SqliteProjectStore store;
+        RecordingSink sink;
+        infraforge::domain::geo::GeoTransformService transforms;
+        infraforge::application::CommandProcessor processor(store, transforms, sink);
+        processor.start();
+
+        // Create a project first.
+        processor.post("conn-1", createCommandFrame("req-create", scratch.path()));
+        REQUIRE(sink.waitForTotal(6, kWaitTimeout));
+
+        // Send a transform with too many coordinates.
+        ProtocolFrame frame;
+        frame.set_request_id("req-oversized");
+        auto* transform = frame.mutable_command()->mutable_transform_to_project_global();
+        transform->set_source_crs("EPSG:4326");
+        for (int i = 0; i <= static_cast<int>(infraforge::application::kMaxTransformCoordinates); ++i) {
+            auto* coord = transform->add_coordinates();
+            coord->set_x(0.0);
+            coord->set_y(0.0);
+            coord->set_z(0.0);
+        }
+
+        processor.post("conn-1", std::move(frame));
+        REQUIRE(sink.waitForTotal(10, kWaitTimeout));
+
+        const auto jobs = jobEvents(sink.events());
+        REQUIRE(jobs.size() == 6);
+        REQUIRE(jobs[3].event().has_job_queued());
+        REQUIRE(jobs[4].event().has_job_started());
+        REQUIRE(jobs[5].event().has_job_failed());
+        CHECK_EQ(jobs[5].event().job_failed().error_code(), "INVALID_ARGUMENT");
+        CHECK_FALSE(jobs[5].event().has_job_completed());
+
+        processor.shutdown();
+        store.close();
+    }
+
+    TEST_CASE("empty command envelope (COMMAND_NOT_SET) reaches terminal failed") {
+        infraforge::testhelpers::ScratchDirectory scratch;
+        infraforge::persistence::SqliteProjectStore store;
+        RecordingSink sink;
+        infraforge::domain::geo::GeoTransformService transforms;
+        infraforge::application::CommandProcessor processor(store, transforms, sink);
+        processor.start();
+
+        ProtocolFrame frame;
+        frame.set_request_id("req-empty");
+        // command() is not set -> COMMAND_NOT_SET
+
+        processor.post("conn-1", std::move(frame));
+        REQUIRE(sink.waitForTotal(4, kWaitTimeout));
+
+        const auto jobs = jobEvents(sink.events());
+        REQUIRE(jobs.size() == 3);
+        REQUIRE(jobs[0].event().has_job_queued());
+        CHECK_EQ(jobs[0].event().job_queued().operation(), "unknown");
+        REQUIRE(jobs[1].event().has_job_started());
+        REQUIRE(jobs[2].event().has_job_failed());
+        CHECK_EQ(jobs[2].event().job_failed().error_code(), "INVALID_ARGUMENT");
+        CHECK_FALSE(jobs[2].event().has_job_completed());
+
+        processor.shutdown();
+        store.close();
+    }
+
+    TEST_CASE("exactly one terminal event per queued job (no double terminal)") {
+        infraforge::testhelpers::ScratchDirectory scratch;
+        infraforge::persistence::SqliteProjectStore store;
+        RecordingSink sink;
+        infraforge::domain::geo::GeoTransformService transforms;
+        infraforge::application::CommandProcessor processor(store, transforms, sink);
+        processor.start();
+
+        processor.post("conn-1", createCommandFrame("req-ok", scratch.path()));
+        REQUIRE(sink.waitForTotal(6, kWaitTimeout));
+
+        const auto jobs = jobEvents(sink.events());
+        REQUIRE(jobs.size() == 3);
+        int completedCount = 0;
+        int failedCount = 0;
+        for (const auto& j : jobs) {
+            if (j.event().has_job_completed()) ++completedCount;
+            if (j.event().has_job_failed()) ++failedCount;
+        }
+        CHECK_EQ(completedCount, 1);
+        CHECK_EQ(failedCount, 0);
+
+        processor.shutdown();
+        store.close();
+    }
+
+    TEST_CASE("multiple queued commands execute in order with correct lifecycles") {
+        infraforge::testhelpers::ScratchDirectory scratch;
+        infraforge::persistence::SqliteProjectStore store;
+        RecordingSink sink;
+        infraforge::domain::geo::GeoTransformService transforms;
+        infraforge::application::CommandProcessor processor(store, transforms, sink);
+        processor.start();
+
+        processor.post("conn-1", createCommandFrame("req-1", scratch.path()));
+        processor.post("conn-1", createCommandFrame("req-2", scratch.path()));
+
+        // First: 1 result + 5 events = 6
+        // Second: 1 result + 3 events (queued, started, failed) = 4
+        // Total: 2 results + 8 events = 10
+        REQUIRE(sink.waitForTotal(10, kWaitTimeout));
+
+        const auto jobs = jobEvents(sink.events());
+        REQUIRE(jobs.size() == 6);
+        REQUIRE(jobs[0].event().has_job_queued());
+        REQUIRE(jobs[1].event().has_job_started());
+        REQUIRE(jobs[2].event().has_job_completed());
+        REQUIRE(jobs[3].event().has_job_queued());
+        REQUIRE(jobs[4].event().has_job_started());
+        REQUIRE(jobs[5].event().has_job_failed());
+        CHECK(jobs[0].event().job_queued().job_id() != jobs[3].event().job_queued().job_id());
+
+        processor.shutdown();
+        store.close();
+    }
+
+    TEST_CASE("shutdown does not create orphan pending jobs") {
+        infraforge::testhelpers::ScratchDirectory scratch;
+        infraforge::persistence::SqliteProjectStore store;
+        RecordingSink sink;
+        infraforge::domain::geo::GeoTransformService transforms;
+        infraforge::application::CommandProcessor processor(store, transforms, sink);
+        processor.start();
+
+        // Post a command but shut down before it can be processed.
+        // Since post() is enqueue-only (no job.queued emitted), the
+        // discarded command never enters the job lifecycle.
+        processor.post("conn-1", createCommandFrame("req-dropped", scratch.path()));
+
+        // Shut down immediately.
+        processor.shutdown();
+
+        const auto jobs = jobEvents(sink.events());
+        // If the command was processed before shutdown, it has a full
+        // lifecycle (3 events). If it was dropped, it has 0 events.
+        // Either way, there are no orphan pending jobs (no job.queued
+        // without a terminal event).
+        for (const auto& j : jobs) {
+            if (j.event().has_job_queued()) {
+                const auto& queuedJobId = j.event().job_queued().job_id();
+                bool hasTerminal = false;
+                for (const auto& j2 : jobs) {
+                    if ((j2.event().has_job_completed() && j2.event().job_completed().job_id() == queuedJobId)
+                        || (j2.event().has_job_failed() && j2.event().job_failed().job_id() == queuedJobId)) {
+                        hasTerminal = true;
+                        break;
+                    }
+                }
+                CHECK(hasTerminal);
+            }
+        }
+
+        store.close();
+    }
+
+
 }

@@ -77,11 +77,7 @@ export class ViewportSupervisor {
     return this.status
   }
 
-  async start(
-    parentWindowHandle: Buffer,
-    initialPlacement: ViewportPlacement,
-    options: { initialVisible?: boolean } = {},
-  ): Promise<void> {
+  async start(parentWindowHandle: Buffer, initialPlacement: ViewportPlacement): Promise<void> {
     if (this.child || this.starting) {
       return
     }
@@ -97,7 +93,7 @@ export class ViewportSupervisor {
       }
 
       this.publish({ state: 'starting', detail: 'Starting native viewport surface…' })
-      this.child = this.spawnChild(viewportPath, parentWindowHandle, initialPlacement, options.initialVisible ?? true)
+      this.child = this.spawnChild(viewportPath, parentWindowHandle, initialPlacement)
       await this.awaitReadiness(this.child)
     } catch (error) {
       // Every failure path — unresolvable path, spawn error, readiness
@@ -153,8 +149,12 @@ export class ViewportSupervisor {
     viewportPath: string,
     parentWindowHandle: Buffer,
     initialPlacement: ViewportPlacement,
-    initialVisible: boolean,
   ): ViewportChild {
+    // The spawn arguments deliberately carry no visibility state: the
+    // native surface is always created hidden, so no startup timing
+    // (overlay/minimize changing while the process launches) can produce a
+    // visible window. Visibility only begins through the runtime control
+    // path after the shell applies its visibility policy at readiness.
     const args = [
         '--parent-window', readWindowHandleHex(parentWindowHandle),
         '--screen-x', String(initialPlacement.screenX),
@@ -162,11 +162,6 @@ export class ViewportSupervisor {
         '--width', String(initialPlacement.width),
         '--height', String(initialPlacement.height),
         '--dpi-scale', String(Math.round(initialPlacement.dpiScale * 100)),
-        // Startup visibility contract: the native child window is created
-        // visible or hidden with this value, so a viewport started behind a
-        // blocking overlay or a minimized host never flashes. Runtime
-        // visibility stays on the viewport:set-visible control path.
-        '--initial-visible', initialVisible ? '1' : '0',
     ]
     if (process.env.INFRAFORGE_VIEWPORT_VALIDATE === '1') {
       // Development validation mode: KHONOS validation findings are logged

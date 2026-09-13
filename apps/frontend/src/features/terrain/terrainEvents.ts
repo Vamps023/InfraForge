@@ -26,11 +26,19 @@ function isTerrainJobOperation(operation: string): boolean {
 }
 
 async function refreshAfterTerrainWork(client: EngineClient): Promise<void> {
+  // BLOCKER 21: Capture the session token before the async refresh. If
+  // the project changes while the refresh is in flight, the token will
+  // differ and we discard the stale result.
+  const sessionToken = useTerrainStore.getState().sessionToken
   try {
     await refreshTerrainJobs(client)
   } catch {
     // Job list refresh is a projection nicety; failures surface through the
     // next command instead of masking the event that triggered this.
+  }
+  // Check if the project has changed during the async operation.
+  if (useTerrainStore.getState().sessionToken !== sessionToken) {
+    return  // Stale response — project has changed
   }
   if (scenePublisher) {
     scenePublisher()
@@ -39,6 +47,10 @@ async function refreshAfterTerrainWork(client: EngineClient): Promise<void> {
 
 export function applyTerrainEvent(client: EngineClient, event: EventEnvelope) {
   const store = useTerrainStore.getState()
+  // BLOCKER 21: Capture the session token at event time. If the project
+  // changes between the event arriving and an async refresh completing,
+  // the refresh checks the token and discards stale results.
+  const sessionToken = store.sessionToken
   switch (event.event.case) {
     case 'jobQueued': {
       const queued = event.event.value

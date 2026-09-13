@@ -24,11 +24,19 @@ export function applyProjectEvent(client: EngineClient, event: EventEnvelope) {
       // project. Datasets, jobs, and the renderer scene must be fetched
       // immediately so terrain renders after reopen without requiring a
       // terrain job to settle first.
-      useTerrainStore.getState().reset()
+      // BLOCKER 21: beginSession mints a new session token and clears
+      // state atomically. The async refresh captures the token and checks
+      // it before applying results, so a stale response from project A
+      // cannot populate project B's store.
+      const sessionToken = useTerrainStore.getState().beginSession()
       void (async () => {
         await refreshTerrainDatasets(client).catch(() => undefined)
+        // Check if the project changed during the async refresh.
+        if (useTerrainStore.getState().sessionToken !== sessionToken) return
         await refreshTerrainJobs(client).catch(() => undefined)
+        if (useTerrainStore.getState().sessionToken !== sessionToken) return
         const scene = await fetchTerrainScene(client).catch(() => null)
+        if (useTerrainStore.getState().sessionToken !== sessionToken) return
         if (scene) {
           window.infraforgeDesktop?.setViewportScene?.(scene as Record<string, unknown>)
         }

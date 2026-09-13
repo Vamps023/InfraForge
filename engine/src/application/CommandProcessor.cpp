@@ -1066,6 +1066,13 @@ void CommandProcessor::handleTerrainDownloadSelected(
     auto* result = response.mutable_result()->mutable_job_started();
     result->set_job_id(record.jobId);
     sink_.sendToConnection(connectionId, response);
+
+    // Emit the background job's queued event so all subscribers (including
+    // the frontend terrain event projector) learn about terrain.download.
+    TerrainServiceEvent event;
+    event.job = record;
+    event.revision = store_.isOpen() ? store_.current().revision : 0;
+    publishTerrainEvent(event);
 }
 
 void CommandProcessor::handleJobCancel(

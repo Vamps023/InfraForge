@@ -46,6 +46,7 @@ add_library(infraforge_core STATIC
     src/domain/terrain/TerrainDownloadProvider.cpp
     src/domain/terrain/TerrainSampler.cpp
     src/domain/terrain/MockTerrainProvider.cpp
+    src/domain/terrain/TerrariumTerrainProvider.cpp
     src/domain/world/ChunkGrid.cpp
     src/domain/world/ChunkResidency.cpp
     src/domain/world/Invalidation.cpp

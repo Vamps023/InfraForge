@@ -22,7 +22,7 @@ export function setTerrainScenePublisher(publisher: (() => void) | null) {
 }
 
 function isTerrainJobOperation(operation: string): boolean {
-  return operation === 'terrain.import' || operation === 'terrain.tiles'
+  return operation === 'terrain.import' || operation === 'terrain.tiles' || operation === 'terrain.download'
 }
 
 async function refreshAfterTerrainWork(client: EngineClient): Promise<void> {

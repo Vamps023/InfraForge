@@ -544,4 +544,198 @@ TEST_CASE("camera move evicts and reloads correct working set") {
     }
 }
 
+// BLOCKER 12 regression: terrain vertices use Render Y = -north, so the
+// tile cache distance calculation must also negate Y. Verify directly
+// that a tile north of the origin has a smaller distance to a camera
+// that is also north (render Y negative) than a tile south of the origin.
+TEST_CASE("tile distance negates Y: direct distance check") {
+    using infraforge::viewport::TerrainTileCache;
+    using infraforge::viewport::TerrainSceneTile;
+    using infraforge::viewport::TerrainCameraState;
+
+    const double originE = 500000.0;
+    const double originN = 4650000.0;
+
+    // North tile: northing = originN (center at originN + 500)
+    TerrainSceneTile northTile;
+    northTile.datasetUuid = "north";
+    northTile.chunkX = 0;
+    northTile.chunkY = 0;
+    northTile.minEasting = originE;
+    northTile.maxEasting = originE + 1000;
+    northTile.minNorthing = originN;
+    northTile.maxNorthing = originN + 1000;
+
+    // South tile: northing = originN - 1000 (center at originN - 500)
+    TerrainSceneTile southTile;
+    southTile.datasetUuid = "south";
+    southTile.chunkX = 0;
+    southTile.chunkY = -1;
+    southTile.minEasting = originE;
+    southTile.maxEasting = originE + 1000;
+    southTile.minNorthing = originN - 1000;
+    southTile.maxNorthing = originN;
+
+    TerrainTileCache cache;
+
+    // Camera at render Y = -500 (north of origin in the negated convention).
+    // North tile center: centerN = 500, renderY = -500, dy = -500 - (-500) = 0
+    // South tile center: centerN = -500, renderY = 500, dy = 500 - (-500) = 1000
+    // North should load first.
+    const TerrainCameraState cameraNorth{
+        .centerX = 500.0, .centerY = -500.0,
+        .metersPerPixel = 1.0, .viewportWidth = 1000, .viewportHeight = 800,
+        .originEasting = originE, .originNorthing = originN};
+
+    infraforge::viewport::TerrainScene scene;
+    scene.tiles.push_back(northTile);
+    scene.tiles.push_back(southTile);
+    (void)cache.adoptScene(scene);
+
+    // First update should load the nearest tile first (north tile)
+    auto result = cache.update(cameraNorth);
+    CHECK(result.toLoad.size() >= 1);
+    if (result.toLoad.size() >= 1) {
+        const auto* first = result.toLoad[0];
+        CHECK(first->tile.datasetUuid == "north");
+    }
+}
+
+// BLOCKER 12 regression: terrain vertices use Render Y = -north, so the
+// tile cache distance calculation must also negate Y. If the camera is at
+// render-local Y = -500 (which corresponds to northing = originN + 500,
+// i.e. NORTH of origin), the nearest tiles should be the ones north of
+// origin, not south.
+TEST_CASE("tile distance negates Y: camera north of origin selects north tiles") {
+    using infraforge::viewport::TerrainTileCache;
+    TerrainTileCache cache;
+
+    const double originE = 500000.0;
+    const double originN = 4650000.0;
+
+    infraforge::viewport::TerrainScene scene;
+    // 12x12 = 144 tiles north of origin (y = 0..11)
+    for (int y = 0; y < 12; ++y) {
+        for (int x = 0; x < 12; ++x) {
+            infraforge::viewport::TerrainSceneTile tile;
+            tile.datasetUuid = "ds-north";
+            tile.datasetRevision = 1;
+            tile.chunkX = x;
+            tile.chunkY = y;
+            tile.minEasting = originE + static_cast<double>(x) * 1000.0;
+            tile.maxEasting = tile.minEasting + 1000.0;
+            tile.minNorthing = originN + static_cast<double>(y) * 1000.0;
+            tile.maxNorthing = tile.minNorthing + 1000.0;
+            scene.tiles.push_back(tile);
+        }
+    }
+    // 12x12 = 144 tiles south of origin (y = -12..-1)
+    for (int y = -12; y < 0; ++y) {
+        for (int x = 0; x < 12; ++x) {
+            infraforge::viewport::TerrainSceneTile tile;
+            tile.datasetUuid = "ds-south";
+            tile.datasetRevision = 1;
+            tile.chunkX = x;
+            tile.chunkY = y;
+            tile.minEasting = originE + static_cast<double>(x) * 1000.0;
+            tile.maxEasting = tile.minEasting + 1000.0;
+            tile.minNorthing = originN + static_cast<double>(y) * 1000.0;
+            tile.maxNorthing = tile.minNorthing + 1000.0;
+            scene.tiles.push_back(tile);
+        }
+    }
+    (void)cache.adoptScene(scene);
+
+    // Camera far north of origin: render Y = -50000. Only north tiles
+    // (renderY = -(y*1000 + 500), y=0..11 → renderY = -500..-11500) should
+    // be in the desired set. South tiles (renderY = 500..11500) are much
+    // farther away.
+    const infraforge::viewport::TerrainCameraState camera{
+        .centerX = 500.0, .centerY = -50000.0,
+        .metersPerPixel = 1.0, .viewportWidth = 1000, .viewportHeight = 800,
+        .originEasting = originE, .originNorthing = originN};
+
+    for (int frame = 0; frame < 500; ++frame) {
+        auto result = cache.update(camera);
+        for (const auto* entry : result.toLoad) {
+            cache.notifyLoaded(entry->tile.datasetUuid, entry->tile.chunkX, entry->tile.chunkY,
+                entry->desiredLod, true);
+        }
+        for (const auto* entry : result.toRelease) {
+            cache.notifyReleased(entry->tile.datasetUuid, entry->tile.chunkX, entry->tile.chunkY);
+        }
+    }
+
+    // All resident tiles should be north tiles (ds-north), since the
+    // camera is far north of origin and only the nearest kMaxResidentTiles
+    // (64) of 288 total are resident.
+    CHECK(cache.residentTiles().size() <= TerrainTileCache::kMaxResidentTiles);
+    for (const auto* entry : cache.residentTiles()) {
+        CHECK(entry->tile.datasetUuid == "ds-north");
+    }
+}
+
+// BLOCKER 12 regression: camera south of origin should select south tiles.
+TEST_CASE("tile distance negates Y: camera south of origin selects south tiles") {
+    using infraforge::viewport::TerrainTileCache;
+    TerrainTileCache cache;
+
+    const double originE = 500000.0;
+    const double originN = 4650000.0;
+
+    infraforge::viewport::TerrainScene scene;
+    for (int y = 0; y < 12; ++y) {
+        for (int x = 0; x < 12; ++x) {
+            infraforge::viewport::TerrainSceneTile tile;
+            tile.datasetUuid = "ds-north";
+            tile.datasetRevision = 1;
+            tile.chunkX = x;
+            tile.chunkY = y;
+            tile.minEasting = originE + static_cast<double>(x) * 1000.0;
+            tile.maxEasting = tile.minEasting + 1000.0;
+            tile.minNorthing = originN + static_cast<double>(y) * 1000.0;
+            tile.maxNorthing = tile.minNorthing + 1000.0;
+            scene.tiles.push_back(tile);
+        }
+    }
+    for (int y = -12; y < 0; ++y) {
+        for (int x = 0; x < 12; ++x) {
+            infraforge::viewport::TerrainSceneTile tile;
+            tile.datasetUuid = "ds-south";
+            tile.datasetRevision = 1;
+            tile.chunkX = x;
+            tile.chunkY = y;
+            tile.minEasting = originE + static_cast<double>(x) * 1000.0;
+            tile.maxEasting = tile.minEasting + 1000.0;
+            tile.minNorthing = originN + static_cast<double>(y) * 1000.0;
+            tile.maxNorthing = tile.minNorthing + 1000.0;
+            scene.tiles.push_back(tile);
+        }
+    }
+    (void)cache.adoptScene(scene);
+
+    // Camera far south of origin: render Y = 50000. Only south tiles
+    // (renderY = 500..11500) should be in the desired set.
+    const infraforge::viewport::TerrainCameraState camera{
+        .centerX = 500.0, .centerY = 50000.0,
+        .metersPerPixel = 1.0, .viewportWidth = 1000, .viewportHeight = 800,
+        .originEasting = originE, .originNorthing = originN};
+
+    for (int frame = 0; frame < 500; ++frame) {
+        auto result = cache.update(camera);
+        for (const auto* entry : result.toLoad) {
+            cache.notifyLoaded(entry->tile.datasetUuid, entry->tile.chunkX, entry->tile.chunkY,
+                entry->desiredLod, true);
+        }
+        for (const auto* entry : result.toRelease) {
+            cache.notifyReleased(entry->tile.datasetUuid, entry->tile.chunkX, entry->tile.chunkY);
+        }
+    }
+
+    CHECK(cache.residentTiles().size() <= TerrainTileCache::kMaxResidentTiles);
+    for (const auto* entry : cache.residentTiles()) {
+        CHECK(entry->tile.datasetUuid == "ds-south");
+    }
+}
+
 } // TEST_SUITE

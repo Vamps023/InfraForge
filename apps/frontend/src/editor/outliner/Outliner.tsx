@@ -3,6 +3,7 @@ import { ChevronDown, ChevronRight, Search } from 'lucide-react'
 import { outlinerProjectionRegistry, type OutlinerNode, type OutlinerProjection } from './outlinerProjection'
 import { buildVisibleRows } from './outlinerTree'
 import { useSelectionStore, type CanonicalId } from '../selection/selectionStore'
+import { useProjectStore } from '../../features/project/projectStore'
 
 // Virtualized outliner. Consumes registered projections (backend/domain
 // projections, never canonical objects — ADR-0009), composes them into one
@@ -53,12 +54,12 @@ function useComposedNodes(): OutlinerNode[] {
     outlinerProjectionRegistry.getSnapshot,
   )
   // A version counter bumped by any projection's change notification. This
-  // is the only "force" mechanism and it is local to this hook, not a
-  // global mutable hack.
-  const [, setVersion] = useState(0)
+  // is included in the useMemo dependency graph below so a projection data
+  // change actually re-reads getNodes() rather than reusing a stale array.
+  const [projectionVersion, setProjectionVersion] = useState(0)
   useEffect(() => {
     const unsubs = projections.map((projection) =>
-      projection.subscribe(() => setVersion((n) => n + 1)),
+      projection.subscribe(() => setProjectionVersion((n) => n + 1)),
     )
     return () => {
       for (const unsub of unsubs) {
@@ -67,14 +68,12 @@ function useComposedNodes(): OutlinerNode[] {
     }
   }, [projections])
   return useMemo(() => {
-    // Read triggered by either projection list change or version bump.
     const all: OutlinerNode[] = []
     for (const projection of projections) {
       all.push(...projection.getNodes())
     }
     return all
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projections])
+  }, [projections, projectionVersion])
 }
 
 // Builds a search result that includes matching nodes plus their ancestor
@@ -123,6 +122,8 @@ export function Outliner() {
   const selectedIds = useSelectionStore((state) => state.selectedIds)
   const select = useSelectionStore((state) => state.select)
   const clear = useSelectionStore((state) => state.clear)
+  const projectSummary = useProjectStore((state) => state.summary)
+  const projectOpen = projectSummary !== null
   const [query, setQuery] = useState('')
   const [scrollTop, setScrollTop] = useState(0)
   const [viewportHeight, setViewportHeight] = useState(0)
@@ -173,7 +174,8 @@ export function Outliner() {
     clear()
   }
 
-  const hasProjections = nodes.length > 0 || isSearching
+  const hasProjections = nodes.length > 0
+  const searchEnabled = projectOpen
 
   return (
     <aside className="panel outliner-panel" aria-label="Outliner">
@@ -187,7 +189,7 @@ export function Outliner() {
           placeholder="Search"
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          disabled={!hasProjections}
+          disabled={!searchEnabled}
         />
       </div>
       <div
@@ -200,11 +202,11 @@ export function Outliner() {
       >
         {visibleRows.length === 0 ? (
           <div className="panel-empty">
-            {hasProjections
-              ? isSearching
+            {!projectOpen
+              ? 'Open a project to inspect world entities.'
+              : isSearching
                 ? 'No entities match the current filter.'
-                : 'No entities in this project.'
-              : 'Open a project to inspect world entities.'}
+                : 'No entities in this project.'}
           </div>
         ) : (
           <div style={{ position: 'relative', height: totalHeight }}>

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { render, screen, act } from '@testing-library/react'
 import { Outliner } from './Outliner'
 import {
@@ -7,6 +7,7 @@ import {
   type OutlinerProjection,
 } from './outlinerProjection'
 import { useSelectionStore } from '../selection/selectionStore'
+import { useProjectStore } from '../../features/project/projectStore'
 
 function node(id: string, parentId: string | null, hasChildren = false, depth = 0): OutlinerNode {
   return { id, parentId, label: id, type: 'test', depth, hasChildren }
@@ -14,10 +15,10 @@ function node(id: string, parentId: string | null, hasChildren = false, depth = 
 
 function makeProjection(
   id: string,
-  nodes: OutlinerNode[],
-  onChange?: (emit: () => void) => () => void,
-): OutlinerProjection & { emit: () => void } {
+  initialNodes: OutlinerNode[],
+): OutlinerProjection & { emit: () => void; setNodes: (nodes: OutlinerNode[]) => void } {
   let listener: (() => void) | null = null
+  let nodes = initialNodes
   return {
     id,
     label: id,
@@ -29,7 +30,10 @@ function makeProjection(
       }
     },
     emit: () => listener?.(),
-  } as OutlinerProjection & { emit: () => void }
+    setNodes: (next: OutlinerNode[]) => {
+      nodes = next
+    },
+  } as OutlinerProjection & { emit: () => void; setNodes: (nodes: OutlinerNode[]) => void }
 }
 
 beforeEach(() => {
@@ -37,6 +41,7 @@ beforeEach(() => {
     outlinerProjectionRegistry.unregister(projection.id)
   }
   useSelectionStore.getState().clear()
+  useProjectStore.getState().clearProject()
 })
 
 afterEach(() => {
@@ -44,6 +49,7 @@ afterEach(() => {
     outlinerProjectionRegistry.unregister(projection.id)
   }
   useSelectionStore.getState().clear()
+  useProjectStore.getState().clearProject()
 })
 
 describe('Outliner reactivity', () => {
@@ -73,12 +79,32 @@ describe('Outliner reactivity', () => {
     outlinerProjectionRegistry.register(projection)
     render(<Outliner />)
     expect(screen.getByText('a')).toBeInTheDocument()
-    // Mutate the node list and emit.
+    // Mutate the node list and emit — the Outliner must re-read getNodes().
     act(() => {
+      projection.setNodes([node('b', null)])
       projection.emit()
     })
-    // The projection still returns the same nodes; the emit triggers a
-    // re-read. To verify the re-read, swap the nodes via a mutable closure.
+    expect(screen.queryByText('a')).not.toBeInTheDocument()
+    expect(screen.getByText('b')).toBeInTheDocument()
+  })
+
+  it('updates rows across repeated emissions (A -> B -> C)', () => {
+    const projection = makeProjection('infra', [node('a', null)])
+    outlinerProjectionRegistry.register(projection)
+    render(<Outliner />)
+    expect(screen.getByText('a')).toBeInTheDocument()
+    act(() => {
+      projection.setNodes([node('b', null)])
+      projection.emit()
+    })
+    expect(screen.queryByText('a')).not.toBeInTheDocument()
+    expect(screen.getByText('b')).toBeInTheDocument()
+    act(() => {
+      projection.setNodes([node('c', null)])
+      projection.emit()
+    })
+    expect(screen.queryByText('b')).not.toBeInTheDocument()
+    expect(screen.getByText('c')).toBeInTheDocument()
   })
 
   it('removes rows when a projection is unregistered', () => {

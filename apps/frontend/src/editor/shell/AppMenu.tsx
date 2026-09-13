@@ -3,6 +3,8 @@ import { ChevronDown } from 'lucide-react'
 import {
   executeCommand,
   resolveCommandAvailability,
+  isCommandVisible,
+  commandSurfaces,
   useCommandRegistrySnapshot,
   type CommandContext,
   type CommandDefinition,
@@ -12,20 +14,25 @@ import {
 // through the central executeCommand path so gating is consistent with
 // toolbar/shortcuts. The menu reactively subscribes to the command registry
 // via useSyncExternalStore so it updates when commands are registered or
-// unregistered after mount.
+// unregistered after mount. Invisible commands are filtered out via the
+// shared isCommandVisible helper so visibility behavior is consistent
+// across all surfaces.
 export function AppMenu({ context }: { context: CommandContext }) {
   const [openCategory, setOpenCategory] = useState<string | null>(null)
   const commands = useCommandRegistrySnapshot()
   const categories = useMemo(() => {
     const seen = new Set<string>()
     for (const command of commands) {
-      const surfaces = command.surfaces ?? ['menu']
-      if (surfaces.includes('menu')) {
-        seen.add(command.category)
+      if (!commandSurfaces(command).includes('menu')) {
+        continue
       }
+      if (!isCommandVisible(command, context)) {
+        continue
+      }
+      seen.add(command.category)
     }
     return Array.from(seen)
-  }, [commands])
+  }, [commands, context])
 
   return (
     <nav className="app-menu" aria-label="Application menu">
@@ -44,8 +51,11 @@ export function AppMenu({ context }: { context: CommandContext }) {
             <div className="menu-dropdown" role="menu">
               {commands
                 .filter((command) => {
-                  const surfaces = command.surfaces ?? ['menu']
-                  return command.category === category && surfaces.includes('menu')
+                  return (
+                    command.category === category &&
+                    commandSurfaces(command).includes('menu') &&
+                    isCommandVisible(command, context)
+                  )
                 })
                 .map((command) => (
                   <MenuEntry

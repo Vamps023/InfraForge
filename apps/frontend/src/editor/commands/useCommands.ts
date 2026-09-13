@@ -3,6 +3,8 @@ import {
   commandRegistry,
   executeCommand,
   resolveCommandAvailability,
+  isCommandVisible,
+  commandSurfaces,
   shortcutKey,
   type CommandDefinition,
   type CommandId,
@@ -13,6 +15,8 @@ export {
   commandRegistry,
   executeCommand,
   resolveCommandAvailability,
+  isCommandVisible,
+  commandSurfaces,
   shortcutKey,
   type CommandDefinition,
   type CommandId,
@@ -77,10 +81,12 @@ export function useCommandExecutor(
 }
 
 // Global keyboard shortcut handler. Listens once at the shell root and
-// dispatches to the registry by matching shortcut metadata. Text-input
+// dispatches to the registry by matching shortcut metadata. Only commands
+// whose effective surfaces include 'shortcut' participate in global
+// keyboard dispatch — the `surfaces` contract is authoritative. Text-input
 // contexts are skipped so editor fields keep their normal key behavior.
-// Execution goes through the central executeCommand path so gating is
-// consistent with menu/toolbar.
+// Invisible commands are not dispatched. Execution goes through the central
+// executeCommand path so gating is consistent with menu/toolbar.
 export function useCommandShortcuts(context: CommandContext): void {
   const commands = useCommandRegistrySnapshot()
   useEffect(() => {
@@ -98,6 +104,15 @@ export function useCommandShortcuts(context: CommandContext): void {
       for (const command of commands) {
         const shortcut = command.shortcut
         if (!shortcut) {
+          continue
+        }
+        // Only commands whose surfaces include 'shortcut' participate in
+        // global keyboard dispatch.
+        if (!commandSurfaces(command).includes('shortcut')) {
+          continue
+        }
+        // Invisible commands are not dispatched via shortcut.
+        if (!isCommandVisible(command, context)) {
           continue
         }
         const meta = shortcutKey(shortcut)

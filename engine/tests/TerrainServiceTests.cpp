@@ -439,4 +439,253 @@ TEST_CASE("import canonicalizes metadata from the stored copy, not the initial p
         std::chrono::seconds{30}));
 }
 
+// ---- End-to-end download tests (BLOCKER 18) ----
+// These tests exercise the full download pipeline: startDownload → queued →
+// running → progress → provider responses → decode → assemble canonical
+// raster → canonical commit → dataset exists → project-owned source exists
+// → sample → scene → reopen. They use the MockTerrainProvider which writes
+// real GeoTIFFs (EPSG:3857) without any network access.
+
+TEST_CASE("download produces canonical dataset with real metadata and survives reopen") {
+    TerrainHarness harness{};
+
+    // Use a small area near the project origin (15E, 42N ≈ UTM 33N 500000,
+    // 4653000). The mock provider writes real GeoTIFFs in EPSG:3857.
+    const GeoBounds area{
+        .west = 15.0, .south = 42.0, .east = 15.05, .north = 42.05};
+    const std::uint32_t tileSize = 4000;
+
+    // Compute the selection grid to discover tile count.
+    const auto gridTiles = computeSelectionGrid(area, tileSize);
+    REQUIRE(!gridTiles.empty());
+
+    // Select all tiles.
+    std::vector<std::int32_t> allIndices;
+    for (std::int32_t i = 0; i < static_cast<std::int32_t>(gridTiles.size()); ++i) {
+        allIndices.push_back(i);
+    }
+
+    const auto record = harness.terrain->startDownload(
+        "mock-terrain", area, tileSize, allIndices, "Downloaded DEM");
+
+    const bool finished = harness.waitFor(
+        [&] { return isTerminal(harness.jobs->job(record.jobId)); },
+        std::chrono::seconds{60});
+    REQUIRE(finished);
+    const auto job = harness.jobs->job(record.jobId);
+    REQUIRE(job->state == infraforge::application::JobState::Completed);
+
+    // Canonical dataset committed with REAL metadata (not fabricated).
+    const auto storedDatasets = harness.store.terrainDatasets();
+    REQUIRE(storedDatasets.size() == 1);
+    const auto& dataset = storedDatasets.front();
+    CHECK(dataset.displayName == "Downloaded DEM");
+
+    // Real metadata derived from the probe (BLOCKER 2 regression).
+    CHECK(dataset.sourceFormat == "GTiff");
+    CHECK(dataset.rasterWidth > 0);
+    CHECK(dataset.rasterHeight > 0);
+    CHECK(dataset.cellSizeX > 0.0);  // not fabricated (was 0 before fix)
+    CHECK(dataset.cellSizeY > 0.0);  // not fabricated (was 0 before fix)
+    CHECK(dataset.originX != 0.0);   // not fabricated (was 0 before fix)
+    CHECK(dataset.originY != 0.0);   // not fabricated (was 0 before fix)
+    // Real elevation range (not hardcoded 0/1000).
+    CHECK(dataset.minZ < dataset.maxZ);
+    CHECK(dataset.minZ != doctest::Approx(0.0));
+    CHECK(dataset.maxZ != doctest::Approx(1000.0));
+    // SHA-256 provenance computed.
+    CHECK(dataset.sourceSha256.size() == 64);
+    CHECK(dataset.sourceBytes > 0);
+    // Storage path is valid (BLOCKER 3 regression).
+    CHECK(!dataset.storagePath.empty());
+    CHECK(dataset.storagePath.find("terrain/elevation/") == 0);
+    CHECK(dataset.storagePath.find(".tif") != std::string::npos);
+    // Attribution from provider.
+    CHECK(!dataset.sourceAttribution.empty());
+    // Timestamps set.
+    CHECK(!dataset.createdAt.empty());
+    CHECK(!dataset.modifiedAt.empty());
+    // CRS is EPSG:3857 (Web Mercator) from the mock provider.
+    const bool crsResolved = dataset.sourceCrs.find("3857") != std::string::npos
+        || dataset.sourceCrs.find("Mercator") != std::string::npos;
+    CHECK(crsResolved);
+    // Bounds are in project-global (UTM 33N) coordinates, NOT raw Web Mercator.
+    // The transform from EPSG:3857 to EPSG:32633 should produce easting near
+    // 500000 and northing near 4653000 (not Web Mercator values ~1.4M, ~5.1M).
+    CHECK(dataset.bounds.minEasting < 600000.0);
+    CHECK(dataset.bounds.maxEasting > 400000.0);
+    CHECK(dataset.bounds.minNorthing < 4660000.0);
+    CHECK(dataset.bounds.maxNorthing > 4640000.0);
+
+    // Project-owned raster file exists at the storage path (BLOCKER 3).
+    const auto canonicalPath = harness.projectDirectory / std::filesystem::path{dataset.storagePath};
+    CHECK(std::filesystem::is_regular_file(canonicalPath));
+
+    // The project-owned raster is GDAL-readable with CRS and geotransform.
+    {
+        GDALAllRegister();
+        GDALDatasetH ds = GDALOpen(canonicalPath.string().c_str(), GA_ReadOnly);
+        REQUIRE(ds != nullptr);
+        CHECK(GDALGetRasterXSize(ds) > 0);
+        CHECK(GDALGetRasterYSize(ds) > 0);
+        const char* projWkt = GDALGetProjectionRef(ds);
+        CHECK(projWkt != nullptr);
+        const std::string projStr{projWkt};
+        const bool hasValidCrs = projStr.find("3857") != std::string::npos
+            || projStr.find("Mercator") != std::string::npos;
+        CHECK(hasValidCrs);
+        double geotransform[6] = {0};
+        GDALGetGeoTransform(ds, geotransform);
+        CHECK(geotransform[1] > 0.0);  // pixel width positive
+        CHECK(geotransform[5] < 0.0);  // pixel height negative
+        GDALClose(ds);
+    }
+
+    // No .importing temp files remain (BLOCKER 11 regression).
+    bool tempLeft = false;
+    const auto elevDir = harness.projectDirectory / "terrain" / "elevation";
+    if (std::filesystem::exists(elevDir)) {
+        for (const auto& entry : std::filesystem::directory_iterator(elevDir)) {
+            if (entry.path().extension() == ".importing") {
+                tempLeft = true;
+            }
+        }
+    }
+    CHECK_FALSE(tempLeft);
+
+    // Canonical sampling within coverage returns a real height.
+    const double sampleE = (dataset.bounds.minEasting + dataset.bounds.maxEasting) * 0.5;
+    const double sampleN = (dataset.bounds.minNorthing + dataset.bounds.maxNorthing) * 0.5;
+    const auto sample = harness.terrain->sample("", sampleE, sampleN);
+    CHECK(sample.sample.status == infraforge::domain::terrain::TerrainSampleStatus::Height);
+    CHECK(sample.sample.height > 0.0);
+
+    // Sampling far outside coverage returns OutsideCoverage.
+    const auto outside = harness.terrain->sample("", 1000000.0, 1000000.0);
+    CHECK(outside.sample.status == infraforge::domain::terrain::TerrainSampleStatus::OutsideCoverage);
+
+    // Wait for derived tile generation to complete.
+    const auto datasetUuidText = infraforge::domain::terrain::uuidTextFromEntityId(dataset.id);
+    const bool tilesSettled = harness.waitFor(
+        [&] {
+            const auto snapshot = harness.terrain->datasetDetails(datasetUuidText);
+            return snapshot.presentTiles > 0;
+        },
+        std::chrono::seconds{30});
+    CHECK(tilesSettled);
+
+    // Scene projection contains tiles.
+    const auto scene = harness.terrain->sceneProjection();
+    CHECK(!scene.tiles.empty());
+
+    // Reopen: canonical state and sampling are restored (BLOCKER 18).
+    harness.store.close();
+    harness.terrain->onProjectClosed();
+    (void)harness.store.open(harness.projectDirectory);
+    harness.terrain->onProjectOpened();
+    REQUIRE(harness.terrain->listDatasets().size() == 1);
+    const auto reopened = harness.terrain->listDatasets().front();
+    CHECK(reopened.id == dataset.id);
+    CHECK(reopened.storagePath == dataset.storagePath);
+    CHECK(reopened.sourceSha256 == dataset.sourceSha256);
+    const auto afterReopen = harness.terrain->sample("", sampleE, sampleN);
+    CHECK(afterReopen.sample.status == infraforge::domain::terrain::TerrainSampleStatus::Height);
+    CHECK(afterReopen.sample.height == doctest::Approx(sample.sample.height).epsilon(1e-6));
+}
+
+TEST_CASE("download with disconnected selection preserves gaps as NoData") {
+    TerrainHarness harness{};
+
+    // Use a larger area to get multiple selection tiles (BLOCKER 4).
+    const GeoBounds area{
+        .west = 15.0, .south = 42.0, .east = 15.1, .north = 42.1};
+    const std::uint32_t tileSize = 4000;
+
+    const auto gridTiles = computeSelectionGrid(area, tileSize);
+    REQUIRE(gridTiles.size() >= 3);
+
+    // Select only the first and last tiles (disconnected islands with a gap).
+    const std::vector<std::int32_t> selectedIndices = {0,
+        static_cast<std::int32_t>(gridTiles.size()) - 1};
+
+    const auto record = harness.terrain->startDownload(
+        "mock-terrain", area, tileSize, selectedIndices, "Sparse DEM");
+
+    const bool finished = harness.waitFor(
+        [&] { return isTerminal(harness.jobs->job(record.jobId)); },
+        std::chrono::seconds{60});
+    REQUIRE(finished);
+    REQUIRE(harness.jobs->job(record.jobId)->state == infraforge::application::JobState::Completed);
+
+    const auto storedDatasets = harness.store.terrainDatasets();
+    REQUIRE(storedDatasets.size() == 1);
+    const auto& dataset = storedDatasets.front();
+
+    // Sample within a selected tile → Height.
+    // Use the dataset bounds to find a sample point within coverage.
+    const double sampleE = dataset.bounds.minEasting
+        + (dataset.bounds.maxEasting - dataset.bounds.minEasting) * 0.1;
+    const double sampleN = dataset.bounds.minNorthing
+        + (dataset.bounds.maxNorthing - dataset.bounds.minNorthing) * 0.1;
+    const auto inSelected = harness.terrain->sample("", sampleE, sampleN);
+    // Should be Height or NoData (if the sample falls in a gap between
+    // provider tiles). At the corner of the bounding box it should be
+    // within the first selected tile's coverage.
+    CHECK(inSelected.sample.status != infraforge::domain::terrain::TerrainSampleStatus::OutsideCoverage);
+
+    // Sample in the gap between selected tiles → NoData (no terrain).
+    // The gap is in the middle of the bounding box.
+    const double gapE = (dataset.bounds.minEasting + dataset.bounds.maxEasting) * 0.5;
+    const double gapN = (dataset.bounds.minNorthing + dataset.bounds.maxNorthing) * 0.5;
+    const auto inGap = harness.terrain->sample("", gapE, gapN);
+    // The gap should have NoData (no terrain), not a real height.
+    CHECK(inGap.sample.status != infraforge::domain::terrain::TerrainSampleStatus::Height);
+}
+
+TEST_CASE("download leaves no .importing temp files on failure") {
+    TerrainHarness harness{};
+
+    const GeoBounds area{
+        .west = 15.0, .south = 42.0, .east = 15.05, .north = 42.05};
+    const std::uint32_t tileSize = 4000;
+
+    const auto gridTiles = computeSelectionGrid(area, tileSize);
+    REQUIRE(!gridTiles.empty());
+
+    std::vector<std::int32_t> allIndices;
+    for (std::int32_t i = 0; i < static_cast<std::int32_t>(gridTiles.size()); ++i) {
+        allIndices.push_back(i);
+    }
+
+    // Start the download, then cancel it immediately.
+    const auto record = harness.terrain->startDownload(
+        "mock-terrain", area, tileSize, allIndices, "Cancel Test");
+
+    // Wait for the job to start running, then cancel.
+    harness.waitFor(
+        [&] { return harness.jobs->job(record.jobId).has_value()
+            && harness.jobs->job(record.jobId)->state != infraforge::application::JobState::Queued; },
+        std::chrono::seconds{10});
+    harness.jobs->requestCancel(record.jobId);
+
+    const bool settled = harness.waitFor(
+        [&] { return isTerminal(harness.jobs->job(record.jobId)); },
+        std::chrono::seconds{30});
+
+    // The job should be cancelled or completed (if it finished before cancel).
+    CHECK(settled);
+
+    // No .importing temp files remain regardless of outcome.
+    bool tempLeft = false;
+    const auto elevDir = harness.projectDirectory / "terrain" / "elevation";
+    if (std::filesystem::exists(elevDir)) {
+        for (const auto& entry : std::filesystem::directory_iterator(elevDir)) {
+            if (entry.path().extension() == ".importing") {
+                tempLeft = true;
+            }
+        }
+    }
+    CHECK_FALSE(tempLeft);
+}
+
 } // TEST_SUITE

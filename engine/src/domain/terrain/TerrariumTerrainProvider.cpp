@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <mutex>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -23,6 +24,24 @@
 namespace infraforge::domain::terrain {
 
 namespace {
+
+// Ensure GDAL is registered and PROJ_DATA is set before any GDAL call.
+// Mirrors GdalTerrainSource::ensureGdalRegistered() so the production
+// provider can resolve EPSG codes (e.g. importFromEPSG(3857)) without
+// depending on the persistence layer.
+void ensureGdalRegistered() {
+    static std::once_flag registered;
+    std::call_once(registered, [] {
+#ifdef INFRAFORGE_PROJ_DATA_DIR
+#ifdef _WIN32
+        (void)_putenv_s("PROJ_DATA", INFRAFORGE_PROJ_DATA_DIR);
+#else
+        (void)setenv("PROJ_DATA", INFRAFORGE_PROJ_DATA_DIR, 0);
+#endif
+#endif
+        GDALAllRegister();
+    });
+}
 
 constexpr double kPi = 3.14159265358979323846;
 constexpr double kEarthRadius = 6378137.0;
@@ -167,6 +186,8 @@ void writeTerrariumGeoTiff(
     const std::vector<float>& elevations,
     int width, int height,
     const TileBounds& bounds) {
+
+    ensureGdalRegistered();
 
     GDALDriverH driver = GDALGetDriverByName("GTiff");
     if (!driver) {

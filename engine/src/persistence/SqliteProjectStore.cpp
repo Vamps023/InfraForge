@@ -531,7 +531,7 @@ std::vector<domain::terrain::TerrainDataset> SqliteProjectStore::terrainDatasets
         "SELECT id, display_name, storage_path, source_format, source_crs, raster_width, raster_height, "
         "origin_x, origin_y, cell_size_x, cell_size_y, elevation_unit, elevation_unit_to_metre, "
         "has_nodata, nodata_value, min_z, max_z, bounds_east, bounds_west, bounds_north, bounds_south, "
-        "source_sha256, source_bytes, revision, diagnostics, created_at, modified_at "
+        "source_sha256, source_bytes, revision, diagnostics, created_at, modified_at, source_attribution "
         "FROM terrain_datasets ORDER BY created_at, id"};
     while (rows.step()) {
         domain::terrain::TerrainDataset dataset;
@@ -560,6 +560,7 @@ std::vector<domain::terrain::TerrainDataset> SqliteProjectStore::terrainDatasets
         dataset.revision = static_cast<std::uint64_t>(rows.columnInt64(23));
         dataset.createdAt = std::string{rows.columnText(25)};
         dataset.modifiedAt = std::string{rows.columnText(26)};
+        dataset.sourceAttribution = std::string{rows.columnText(27)};
 
         // Stored diagnostics are a JSON array of {code, message}; unknown
         // code text means a corrupt row, not an ignorable warning.
@@ -623,8 +624,8 @@ ports::TerrainDatasetInsertResult SqliteProjectStore::insertTerrainDatasetImpl(
             "(id, display_name, storage_path, source_format, source_crs, raster_width, raster_height, "
             "origin_x, origin_y, cell_size_x, cell_size_y, elevation_unit, elevation_unit_to_metre, "
             "has_nodata, nodata_value, min_z, max_z, bounds_east, bounds_west, bounds_north, bounds_south, "
-            "source_sha256, source_bytes, revision, diagnostics, created_at, modified_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"};
+            "source_sha256, source_bytes, revision, diagnostics, created_at, modified_at, source_attribution) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"};
         insert.bindText(1, domain::terrain::uuidTextFromEntityId(dataset.id));
         insert.bindText(2, dataset.displayName);
         insert.bindText(3, dataset.storagePath);
@@ -652,6 +653,7 @@ ports::TerrainDatasetInsertResult SqliteProjectStore::insertTerrainDatasetImpl(
         insert.bindText(25, diagnosticsJson.dump());
         insert.bindText(26, dataset.createdAt);
         insert.bindText(27, dataset.modifiedAt);
+        insert.bindText(28, dataset.sourceAttribution);
         (void)insert.step();
 
         SqliteStatement state{*connection_,

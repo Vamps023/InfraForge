@@ -11,7 +11,7 @@
 namespace infraforge::persistence {
 namespace {
 
-constexpr std::array<MigrationDefinition, 2> kCanonicalMigrations{{
+constexpr std::array<MigrationDefinition, 3> kCanonicalMigrations{{
     {
         .id = 1,
         .name = "core project foundation",
@@ -44,6 +44,41 @@ CREATE TABLE georeference (
         .sql = R"sql(
 ALTER TABLE georeference
     ADD COLUMN origin_height REAL NOT NULL DEFAULT 0.0;
+)sql",
+    },
+    {
+        .id = 3,
+        .name = "terrain datasets",
+        .sql = R"sql(
+CREATE TABLE terrain_datasets (
+    id TEXT PRIMARY KEY,
+    display_name TEXT NOT NULL,
+    storage_path TEXT NOT NULL,
+    source_format TEXT NOT NULL,
+    source_crs TEXT NOT NULL,
+    raster_width INTEGER NOT NULL CHECK (raster_width > 0),
+    raster_height INTEGER NOT NULL CHECK (raster_height > 0),
+    origin_x REAL NOT NULL,
+    origin_y REAL NOT NULL,
+    cell_size_x REAL NOT NULL CHECK (cell_size_x > 0),
+    cell_size_y REAL NOT NULL CHECK (cell_size_y > 0),
+    elevation_unit TEXT NOT NULL,
+    elevation_unit_to_metre REAL NOT NULL CHECK (elevation_unit_to_metre > 0),
+    has_nodata INTEGER NOT NULL CHECK (has_nodata IN (0, 1)),
+    nodata_value REAL NOT NULL DEFAULT 0.0,
+    min_z REAL NOT NULL,
+    max_z REAL NOT NULL,
+    bounds_east REAL NOT NULL,
+    bounds_west REAL NOT NULL,
+    bounds_north REAL NOT NULL,
+    bounds_south REAL NOT NULL,
+    source_sha256 TEXT NOT NULL,
+    source_bytes INTEGER NOT NULL CHECK (source_bytes > 0),
+    revision INTEGER NOT NULL CHECK (revision >= 1),
+    diagnostics TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL,
+    modified_at TEXT NOT NULL
+);
 )sql",
     }},
 };

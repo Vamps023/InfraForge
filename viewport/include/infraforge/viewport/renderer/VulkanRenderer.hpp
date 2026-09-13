@@ -1,9 +1,11 @@
 #pragma once
 
+#include "infraforge/viewport/platform/SurfaceInput.hpp"
 #include "infraforge/viewport/renderer/GridCamera.hpp"
 #include "infraforge/viewport/renderer/GridPass.hpp"
 #include "infraforge/viewport/renderer/RenderThread.hpp"
 #include "infraforge/viewport/renderer/SwapchainState.hpp"
+#include "infraforge/viewport/renderer/TerrainPass.hpp"
 #include "infraforge/viewport/renderer/VulkanDevice.hpp"
 #include "infraforge/viewport/renderer/VulkanInstance.hpp"
 #include "infraforge/viewport/renderer/VulkanSurface.hpp"
@@ -12,8 +14,10 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -51,6 +55,14 @@ public:
     void resize(std::uint32_t width, std::uint32_t height);
     void setVisible(bool visible);
 
+    // Thread-safe terrain scene hand-off (control path). Adopted by the
+    // render thread; the renderer fits the camera to the scene extent the
+    // first time a non-empty scene arrives.
+    void setTerrainScene(const TerrainScene& scene);
+
+    // Thread-safe raw mouse input (surface window procedure).
+    void postCameraInput(const SurfaceInputEvent& event);
+
     // Stops the render thread and tears down all Vulkan objects in reverse
     // dependency order (wait idle → pass → swapchain → device → surface →
     // instance).
@@ -74,8 +86,10 @@ private:
     VulkanSurface surface_;
     VulkanDevice device_;
     VulkanSwapchain swapchain_;
+    TerrainPass terrainPass_;
     GridPass gridPass_;
     GridCamera camera_;
+    bool cameraFitted_{false};
 
     // Frame-in-flight synchronization (double buffered). Acquire semaphores
     // and fences are per frame slot; render-finished semaphores are per
@@ -95,6 +109,12 @@ private:
     std::uint32_t requestedHeight_{0};
     bool sizeDirty_{false};
     bool visible_{true};
+    std::optional<TerrainScene> pendingScene_;
+
+    // Raw input queue: the window procedure posts, the render thread drains
+    // and applies (camera stays render-thread-owned).
+    std::mutex inputMutex_;
+    std::deque<SurfaceInputEvent> inputQueue_;
 
     RenderThread renderThread_;
     bool initialized_{false};

@@ -121,6 +121,15 @@ export class ViewportSupervisor {
     })
   }
 
+  // Forwards the engine-derived terrain scene projection to the viewport.
+  // The shell treats this as opaque transport metadata: it validates the
+  // envelope shape and never interprets tile content. BigInt values
+  // (datasetRevision, chunkX, chunkY) are serialized as decimal strings so
+  // 64-bit values survive JSON transport losslessly (BLOCKER 8).
+  sendScene(scene: Record<string, unknown>): void {
+    this.sendControl({ type: 'scene', ...scene })
+  }
+
   setVisible(visible: boolean): void {
     this.sendControl({ type: 'visibility', visible })
   }
@@ -238,7 +247,10 @@ export class ViewportSupervisor {
       return
     }
     try {
-      child.stdin.write(`${JSON.stringify(command)}\n`)
+      // BigInt-safe JSON serialization: 64-bit integer values (datasetRevision,
+      // chunkX, chunkY, revision) are serialized as decimal strings so they
+      // survive JSON transport losslessly beyond Number.MAX_SAFE_INTEGER.
+      child.stdin.write(`${JSON.stringify(command, (_key, value) => typeof value === 'bigint' ? value.toString() : value)}\n`)
     } catch (error) {
       this.publish({
         state: 'failed',

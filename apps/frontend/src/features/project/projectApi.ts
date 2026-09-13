@@ -56,6 +56,9 @@ const failureFallbackMessages: Record<CommandErrorCode, string> = {
   [CommandErrorCode.INTERNAL]: 'An internal engine error occurred.',
   [CommandErrorCode.GEO_UNSUPPORTED]:
     'The georeference or coordinate transform is not supported by this engine.',
+  [CommandErrorCode.TERRAIN_UNSUPPORTED]:
+    'The terrain source or storage cannot be used by this engine.',
+  [CommandErrorCode.NOT_FOUND]: 'The referenced job or dataset does not exist.',
 }
 
 function describeFailure(code: CommandErrorCode, message: string): string {

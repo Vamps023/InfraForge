@@ -3,9 +3,9 @@ find_package(nlohmann_json CONFIG REQUIRED)
 find_package(Vulkan REQUIRED)
 find_package(unofficial-shaderc CONFIG REQUIRED)
 
-set(INFRAFORGE_VIEWPORT_PLATFORM_SOURCES src/platform/SurfaceUnsupported.cpp)
+set(INFRAFORGE_VIEWPORT_PLATFORM_SOURCES src/platform/SurfaceInput.cpp src/platform/SurfaceUnsupported.cpp)
 if(WIN32)
-    set(INFRAFORGE_VIEWPORT_PLATFORM_SOURCES src/platform/SurfaceWin32.cpp)
+    set(INFRAFORGE_VIEWPORT_PLATFORM_SOURCES src/platform/SurfaceInput.cpp src/platform/SurfaceWin32.cpp)
 endif()
 
 set(INFRAFORGE_VIEWPORT_RENDERER_SOURCES
@@ -13,6 +13,9 @@ set(INFRAFORGE_VIEWPORT_RENDERER_SOURCES
     src/renderer/GridPass.cpp
     src/renderer/SelectionId.cpp
     src/renderer/SwapchainState.cpp
+    src/renderer/TerrainPass.cpp
+    src/renderer/TerrainScene.cpp
+    src/renderer/TerrainTileCache.cpp
     src/renderer/VulkanDevice.cpp
     src/renderer/VulkanInstance.cpp
     src/renderer/VulkanRenderer.cpp
@@ -24,17 +27,21 @@ set(INFRAFORGE_VIEWPORT_GENERATED_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated)
 file(MAKE_DIRECTORY ${INFRAFORGE_VIEWPORT_GENERATED_DIR})
 
 add_custom_command(
-    OUTPUT ${INFRAFORGE_VIEWPORT_GENERATED_DIR}/GridShaderSource.h
+    OUTPUT ${INFRAFORGE_VIEWPORT_GENERATED_DIR}/ViewportShaderSource.h
     COMMAND ${CMAKE_COMMAND}
-        -DOUT=${INFRAFORGE_VIEWPORT_GENERATED_DIR}/GridShaderSource.h
+        -DOUT=${INFRAFORGE_VIEWPORT_GENERATED_DIR}/ViewportShaderSource.h
         -DNS=shaders
         -DNAME_0=kGridVertex -DFILE_0=${CMAKE_CURRENT_SOURCE_DIR}/../shaders/grid.vert.glsl
         -DNAME_1=kGridFragment -DFILE_1=${CMAKE_CURRENT_SOURCE_DIR}/../shaders/grid.frag.glsl
+        -DNAME_2=kTerrainVertex -DFILE_2=${CMAKE_CURRENT_SOURCE_DIR}/../shaders/terrain.vert.glsl
+        -DNAME_3=kTerrainFragment -DFILE_3=${CMAKE_CURRENT_SOURCE_DIR}/../shaders/terrain.frag.glsl
         -P ${CMAKE_CURRENT_SOURCE_DIR}/../shaders/EmbedTextFiles.cmake
     DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/../shaders/grid.vert.glsl
             ${CMAKE_CURRENT_SOURCE_DIR}/../shaders/grid.frag.glsl
+            ${CMAKE_CURRENT_SOURCE_DIR}/../shaders/terrain.vert.glsl
+            ${CMAKE_CURRENT_SOURCE_DIR}/../shaders/terrain.frag.glsl
             ${CMAKE_CURRENT_SOURCE_DIR}/../shaders/EmbedTextFiles.cmake
-    COMMENT "Embedding grid shader sources"
+    COMMENT "Embedding viewport shader sources"
 )
 
 add_library(infraforge_viewport_core STATIC
@@ -42,7 +49,7 @@ add_library(infraforge_viewport_core STATIC
     src/ViewportApplication.cpp
     ${INFRAFORGE_VIEWPORT_PLATFORM_SOURCES}
     ${INFRAFORGE_VIEWPORT_RENDERER_SOURCES}
-    ${INFRAFORGE_VIEWPORT_GENERATED_DIR}/GridShaderSource.h
+    ${INFRAFORGE_VIEWPORT_GENERATED_DIR}/ViewportShaderSource.h
 )
 
 target_compile_features(infraforge_viewport_core PUBLIC cxx_std_23)
@@ -70,6 +77,8 @@ add_executable(infraforge-viewport-tests
     tests/RenderThreadTests.cpp
     tests/SelectionIdTests.cpp
     tests/SwapchainStateTests.cpp
+    tests/TerrainSceneTests.cpp
+    tests/TerrainTileCacheTests.cpp
     tests/ViewportApplicationTests.cpp
     tests/Win32DpiTests.cpp
 )

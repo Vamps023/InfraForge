@@ -1,5 +1,7 @@
 #pragma once
 
+#include "infraforge/viewport/renderer/TerrainScene.hpp"
+
 #include <cstdint>
 #include <optional>
 #include <stdexcept>
@@ -31,6 +33,9 @@ struct SurfacePlacement {
 //   {"type":"place","screenX":..,"screenY":..,"width":..,"height":..,"dpiScale":..}
 //   {"type":"visibility","visible":true}
 //   {"type":"shutdown"}
+//   {"type":"scene","originEasting":..,"originNorthing":..,"originHeight":..,
+//    "missingTiles":N,"revision":N,"tiles":[{datasetUuid,datasetRevision,
+//    chunkX,chunkY,path,minE,minN,maxE,maxN},...]}
 // Unknown types and malformed lines are rejected explicitly, never ignored.
 struct PlaceCommand {
     SurfacePlacement placement;
@@ -40,7 +45,10 @@ struct VisibilityCommand {
 };
 struct ShutdownCommand {
 };
-using ControlCommand = std::variant<PlaceCommand, VisibilityCommand, ShutdownCommand>;
+struct SceneCommand {
+    TerrainScene scene;
+};
+using ControlCommand = std::variant<PlaceCommand, VisibilityCommand, ShutdownCommand, SceneCommand>;
 
 struct CommandParseError : std::runtime_error {
     explicit CommandParseError(std::string message)

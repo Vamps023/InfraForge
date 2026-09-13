@@ -3,9 +3,17 @@ syntax = "proto3";
 package infraforge.protocol.v1;
 
 import "infraforge/protocol/v1/geo.proto";
+import "infraforge/protocol/v1/terrain.proto";
 
 // Project lifecycle contract: canonical create/open/save-as/save/close queries
 // executed by the native engine against the project database.
+//
+// Protocol 1.4: terrain domain additions. The generic job lifecycle types
+// (JobState, JobQueuedEvent, JobStartedEvent, JobProgressEvent,
+// JobCompletedEvent, JobFailedEvent, JobCancelledEvent) were introduced in
+// protocol 1.3 (Issue #5) and remain authoritative here. Protocol 1.4 adds
+// the background-job query/cancel contract (JobRecord, JobCancelCommand,
+// JobListCommand) and terrain-specific commands/results/events.
 
 enum TrafficSide {
   TRAFFIC_SIDE_UNSPECIFIED = 0;
@@ -78,6 +86,12 @@ enum CommandErrorCode {
   // supported by the canonical geospatial engine (unsupported CRS kind,
   // unavailable vertical transform, unsupported unit).
   COMMAND_ERROR_CODE_GEO_UNSUPPORTED = 9;
+  // A terrain request is well-formed but the raster source, storage, or
+  // derived tile work cannot be performed as asked (missing/unsupported
+  // raster configuration, corrupt source, missing project-owned storage).
+  COMMAND_ERROR_CODE_TERRAIN_UNSUPPORTED = 10;
+  // A referenced entity (e.g. a job or terrain dataset) does not exist.
+  COMMAND_ERROR_CODE_NOT_FOUND = 11;
 }
 
 message CommandError {
@@ -127,8 +141,8 @@ message JobQueuedEvent {
   string label = 3;
   // Canonical object ID the operation targets, when applicable.
   string target_id = 4;
-  // Whether the backend supports cancelling this job. False for all current
-  // operations; cancellation is not yet wired end-to-end.
+  // Whether the backend supports cancelling this job. True for long-running
+  // background jobs (e.g. terrain import); false for synchronous commands.
   bool cancellable = 5;
 }
 
@@ -161,6 +175,55 @@ message JobFailedEvent {
 
 message JobCancelledEvent {
   string job_id = 1;
+}
+
+// Generic background-job query/cancel contract (protocol 1.4). Long-running
+// operations (e.g. terrain import) return a JobStartedResult immediately
+// and are tracked through the job lifecycle events above. The frontend
+// Operations surface projects job.list and job.cancel for real long jobs.
+
+// Snapshot of a job's current state for job.list queries.
+message JobRecord {
+  string job_id = 1;
+  // Logical operation name, e.g. "terrain.import".
+  string operation = 2;
+  JobState state = 3;
+  // Progress in [0,1] when available. Absent means indeterminate progress.
+  optional double progress = 4;
+  // Processed work units when available. uint64 preserved as bigint in TS.
+  optional uint64 processed = 5;
+  // Total work units when available. uint64 preserved as bigint in TS.
+  optional uint64 total = 6;
+  // Human-readable label / status message.
+  string label = 7;
+  // Failure detail when state is FAILED; empty otherwise.
+  string message = 8;
+  string created_at = 9;
+  // Whether the backend supports cancelling this job.
+  bool cancellable = 10;
+}
+
+// Result of a command that starts a background job. The command's
+// request lifecycle completes immediately; the long operation is tracked
+// through job lifecycle events and job.list.
+message JobStartedResult {
+  string job_id = 1;
+}
+
+message JobCancelCommand {
+  string job_id = 1;
+}
+
+message JobCancelResult {
+  string job_id = 1;
+  // False when the job had already finished and could not be cancelled.
+  bool cancelled = 2;
+}
+
+message JobListCommand {}
+
+message JobListResult {
+  repeated JobRecord jobs = 1;
 }
 
 // Diagnostic lifecycle events (docs/03_PROTOCOL/EVENTS.md). Diagnostics
@@ -206,6 +269,16 @@ message CommandEnvelope {
     GetGeoreferenceCommand get_georeference = 7;
     SetGeoreferenceCommand set_georeference = 8;
     TransformToProjectGlobalCommand transform_to_project_global = 9;
+    // Protocol 1.4 terrain + background-job query/cancel commands.
+    TerrainProbeSourceCommand terrain_probe_source = 10;
+    TerrainImportDatasetCommand terrain_import_dataset = 11;
+    TerrainListDatasetsCommand terrain_list_datasets = 12;
+    TerrainGetDatasetCommand terrain_get_dataset = 13;
+    TerrainSampleCommand terrain_sample = 14;
+    TerrainRegenerateTilesCommand terrain_regenerate_tiles = 15;
+    TerrainGetSceneCommand terrain_get_scene = 16;
+    JobCancelCommand job_cancel = 17;
+    JobListCommand job_list = 18;
   }
 }
 
@@ -216,6 +289,15 @@ message ResultEnvelope {
     CommandError error = 3;
     GeoreferenceStateResult georeference_state = 4;
     TransformToProjectGlobalResult transform_to_project_global = 5;
+    // Protocol 1.4 terrain + background-job results.
+    TerrainProbeSourceResult terrain_probe_source_result = 6;
+    JobStartedResult job_started = 7;
+    TerrainListDatasetsResult terrain_list_datasets_result = 8;
+    TerrainGetDatasetResult terrain_get_dataset_result = 9;
+    TerrainSampleResult terrain_sample_result = 10;
+    JobCancelResult job_cancel_result = 11;
+    JobListResult job_list_result = 12;
+    TerrainSceneResult terrain_scene_result = 13;
   }
 }
 
@@ -236,5 +318,7 @@ message EventEnvelope {
     DiagnosticAddedEvent diagnostic_added = 13;
     DiagnosticRemovedEvent diagnostic_removed = 14;
     DiagnosticClearedEvent diagnostic_cleared = 15;
+    // Protocol 1.4 terrain event.
+    TerrainDatasetAddedEvent terrain_dataset_added = 16;
   }
 }

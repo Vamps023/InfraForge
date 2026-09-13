@@ -1,0 +1,110 @@
+#pragma once
+
+#include <filesystem>
+#include <mutex>
+#include <string>
+
+#include <gdal_priv.h>
+#include <ogr_spatialref.h>
+
+#ifdef _WIN32
+#include <cstdlib>
+#endif
+
+namespace infraforge::testhelpers {
+namespace {
+
+// GDAL resolves CRS definitions through its own PROJ context, which needs
+// the proj.db location; point it at the same share directory the engine's
+// GeoTransformService uses (compile-time vcpkg layout).
+void ensureProjDataForGdal() {
+    static std::once_flag once;
+    std::call_once(once, [] {
+#ifdef INFRAFORGE_PROJ_DATA_DIR
+#ifdef _WIN32
+        (void)_putenv_s("PROJ_DATA", INFRAFORGE_PROJ_DATA_DIR);
+        (void)_putenv_s("PROJ_LIB", INFRAFORGE_PROJ_DATA_DIR);
+#else
+        (void)setenv("PROJ_DATA", INFRAFORGE_PROJ_DATA_DIR, 1);
+        (void)setenv("PROJ_LIB", INFRAFORGE_PROJ_DATA_DIR, 1);
+#endif
+#endif
+    });
+}
+
+} // namespace
+
+// Deterministic GeoTIFF DEM fixtures written with the real GDAL driver
+// (docs: prefer programmatically generated fixtures with the actual raster
+// library). One definition point for the fixture geometry:
+//
+//   CRS        EPSG:32633 (UTM 33N, metre)
+//   origin     (500000, 4650000 + height * 10) — top-left pixel corner
+//   size       32 x 32 pixels, 10 m cells  -> 320 m x 320 m coverage
+//   heights    z(row, col) = 100 + 0.5 * col + 0.25 * row   (metres)
+//   NoData     -9999 at cell (row 5, col 5) when withNodata
+//
+// The project fixture used by the terrain tests anchors at (500000,
+// 4650000) in the same CRS, so the source->project transform is the
+// identity and expected canonical values equal the source values.
+struct TerrainDemSpec {
+    int width{32};
+    int height{32};
+    double originX{500000.0};
+    double originY{4650320.0}; // top-left corner
+    double cellSize{10.0};
+    int nodataRow{5};
+    int nodataCol{5};
+    bool withNodata{true};
+};
+
+[[nodiscard]] inline double demHeightAt(int row, int col) {
+    // Definition point of the fixture elevation surface (metres).
+    return 100.0 + 0.5 * col + 0.25 * row;
+}
+
+inline void writeDemGeoTiff(const std::filesystem::path& file, const TerrainDemSpec& spec) {
+    ensureProjDataForGdal();
+    GDALAllRegister();
+    GDALDriver* driver = GetGDALDriverManager()->GetDriverByName("GTiff");
+    if (driver == nullptr) {
+        throw std::runtime_error("GDAL GTiff driver is unavailable in the test environment");
+    }
+    GDALDataset* dataset = driver->Create(file.string().c_str(), spec.width, spec.height, 1, GDT_Float32, nullptr);
+    if (dataset == nullptr) {
+        throw std::runtime_error("cannot create test DEM: " + file.string());
+    }
+    double geotransform[6] = {
+        spec.originX, spec.cellSize, 0.0,
+        spec.originY, 0.0, -spec.cellSize};
+    dataset->SetGeoTransform(geotransform);
+
+    OGRSpatialReference srs;
+    srs.SetFromUserInput("EPSG:32633");
+    char* wkt = nullptr;
+    srs.exportToWkt(&wkt);
+    dataset->SetProjection(wkt);
+    CPLFree(wkt);
+
+    GDALRasterBand* band = dataset->GetRasterBand(1);
+    if (spec.withNodata) {
+        band->SetNoDataValue(-9999.0);
+    }
+    std::vector<float> row(static_cast<std::size_t>(spec.width), 0.0F);
+    for (int r = 0; r < spec.height; ++r) {
+        for (int c = 0; c < spec.width; ++c) {
+            const bool nodata = spec.withNodata && r == spec.nodataRow && c == spec.nodataCol;
+            row[static_cast<std::size_t>(c)] = nodata ? -9999.0F
+                : static_cast<float>(demHeightAt(r, c));
+        }
+        const CPLErr status = band->RasterIO(
+            GF_Write, 0, r, spec.width, 1, row.data(), spec.width, 1, GDT_Float32, 0, 0, nullptr);
+        if (status != CE_None) {
+            GDALClose(dataset);
+            throw std::runtime_error("cannot write test DEM row: " + file.string());
+        }
+    }
+    GDALClose(dataset);
+}
+
+} // namespace infraforge::testhelpers

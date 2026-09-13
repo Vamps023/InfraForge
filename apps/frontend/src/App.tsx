@@ -1,18 +1,26 @@
 import { useEffect, useRef, useState } from 'react'
-import { Box, ChevronDown, CircleDot, FolderOpen, PanelBottom, PanelLeft, PanelRight, Search } from 'lucide-react'
+import { Box, ChevronDown, CircleDot } from 'lucide-react'
 import { connectEngineSession, type EngineSession, type EngineSessionStatus } from './lib/engineSession'
 import { GeoreferencePanel } from './features/geo/GeoreferencePanel'
 import { NewProjectDialog } from './features/project/NewProjectDialog'
-import { closeProject, openProject, refreshProjectSummary, saveProject } from './features/project/projectApi'
+import { refreshProjectSummary } from './features/project/projectApi'
 import { subscribeProjectEvents } from './features/project/projectEvents'
 import { useProjectStore } from './features/project/projectStore'
 import { useViewportHost } from './features/viewport/useViewportHost'
 import { useViewportStore, viewportSurfaceActive } from './features/viewport/viewportStore'
 import { useUiStore } from './state/uiStore'
 
-const bottomTabs = ['Problems', 'Operations'] as const
-
-type BottomTab = (typeof bottomTabs)[number]
+import { AppMenu } from './editor/shell/AppMenu'
+import { Toolbar } from './editor/shell/Toolbar'
+import { BottomPanel } from './editor/shell/BottomPanel'
+import { EditorLayout } from './editor/layout/EditorLayout'
+import { Outliner } from './editor/outliner/Outliner'
+import { Inspector } from './editor/inspector/Inspector'
+import { registerBuiltinCommands, unregisterBuiltinCommands } from './editor/commands/builtinCommands'
+import { registerProjectOverviewSection, unregisterProjectOverviewSection } from './editor/inspector/projectOverviewSection'
+import { useCommandContext, useCommandShortcuts } from './editor/commands/useCommands'
+import { useShellUiStore } from './editor/shell/shellUiStore'
+import { useProblemDiagnostics } from './editor/problems/useProblemDiagnostics'
 
 function ViewportArea({ hostRef }: { hostRef: React.RefObject<HTMLDivElement | null> }) {
   const rendererStatus = useViewportStore((state) => state.status)
@@ -46,21 +54,7 @@ function ViewportArea({ hostRef }: { hostRef: React.RefObject<HTMLDivElement | n
   )
 }
 
-function AppHeader({
-  projectOpen,
-  busy,
-  engineReady,
-  onSave,
-  onGeoreference,
-  onClose,
-}: {
-  projectOpen: boolean
-  busy: boolean
-  engineReady: boolean
-  onSave: () => void
-  onGeoreference: () => void
-  onClose: () => void
-}) {
+function AppHeader() {
   const summary = useProjectStore((state) => state.summary)
   return (
     <header className="app-header">
@@ -72,118 +66,8 @@ function AppHeader({
         {summary ? summary.displayName : 'No project open'}
       </div>
       <div className="header-spacer" />
-      {projectOpen ? (
-        <div className="header-actions">
-          <button className="button secondary" type="button" disabled={!engineReady || busy} onClick={onSave}>
-            Save
-          </button>
-          <button className="button secondary" type="button" disabled={!engineReady || busy} onClick={onGeoreference}>
-            Georeference…
-          </button>
-          <button className="button secondary" type="button" disabled={!engineReady || busy} onClick={onClose}>
-            Close
-          </button>
-        </div>
-      ) : null}
       <div className="build-label">Foundation 0.3.0</div>
     </header>
-  )
-}
-
-function Toolbar({
-  engineReady,
-  busy,
-  onNewProject,
-  onOpenProject,
-}: {
-  engineReady: boolean
-  busy: boolean
-  onNewProject: () => void
-  onOpenProject: () => void
-}) {
-  return (
-    <div className="toolbar" aria-label="Editor toolbar">
-      <button className="tool-button active" type="button" aria-pressed="true">
-        Select
-      </button>
-      <div className="toolbar-separator" />
-      <button className="tool-button" type="button" disabled={!engineReady || busy} onClick={onNewProject}>
-        New Project…
-      </button>
-      <button className="tool-button" type="button" disabled={!engineReady || busy} onClick={onOpenProject}>
-        <FolderOpen size={13} /> Open Project…
-      </button>
-      <div className="toolbar-spacer" />
-      <span className="toolbar-hint">Authoring tools appear only when their production domain is available.</span>
-    </div>
-  )
-}
-
-function Outliner() {
-  return (
-    <aside className="panel outliner-panel">
-      <div className="panel-title-row">
-        <span>Outliner</span>
-        <PanelLeft size={14} />
-      </div>
-      <div className="search-box">
-        <Search size={14} />
-        <input aria-label="Search outliner" placeholder="Search" disabled />
-      </div>
-      <div className="panel-empty">Open a project to inspect world entities.</div>
-    </aside>
-  )
-}
-
-function Inspector() {
-  return (
-    <aside className="panel inspector-panel">
-      <div className="panel-title-row">
-        <span>Inspector</span>
-        <PanelRight size={14} />
-      </div>
-      <div className="panel-empty">Select an authored entity to inspect its properties.</div>
-    </aside>
-  )
-}
-
-function BottomPanel({ activeTab, setActiveTab }: { activeTab: BottomTab; setActiveTab: (tab: BottomTab) => void }) {
-  const lastError = useProjectStore((state) => state.lastError)
-  const rendererStatus = useViewportStore((state) => state.status)
-  const rendererProblem =
-    rendererStatus.state === 'failed' || rendererStatus.state === 'stopped'
-      ? `Viewport: ${rendererStatus.detail}`
-      : null
-  return (
-    <section className="bottom-panel">
-      <div className="bottom-tabs">
-        {bottomTabs.map((tab) => (
-          <button
-            key={tab}
-            className={activeTab === tab ? 'bottom-tab active' : 'bottom-tab'}
-            type="button"
-            onClick={() => setActiveTab(tab)}
-          >
-            {tab}
-          </button>
-        ))}
-        <div className="bottom-spacer" />
-        <PanelBottom size={14} />
-      </div>
-      <div className="bottom-content">
-        {activeTab === 'Problems' ? (
-          lastError ? (
-            <span className="problem-row">{lastError.message}</span>
-          ) : rendererProblem ? (
-            <span className="problem-row">{rendererProblem}</span>
-          ) : (
-            'No diagnostics.'
-          )
-        ) : (
-          'No operations are running.'
-        )}
-      </div>
-    </section>
   )
 }
 
@@ -230,28 +114,49 @@ function StatusBar({ engineStatus }: { engineStatus: EngineSessionStatus }) {
 }
 
 export function App() {
-  const activeBottomTab = useUiStore((state) => state.activeBottomTab)
-  const setActiveBottomTab = useUiStore((state) => state.setActiveBottomTab)
   const engineStatus = useUiStore((state) => state.engineStatus)
   const setEngineStatus = useUiStore((state) => state.setEngineStatus)
   const [engineSession, setEngineSession] = useState<EngineSession | null>(null)
-  const [showNewProjectDialog, setShowNewProjectDialog] = useState(false)
-  const [showGeoreferencePanel, setShowGeoreferencePanel] = useState(false)
   const disposersRef = useRef<(() => void) | null>(null)
   const viewportHostRef = useRef<HTMLDivElement | null>(null)
+
+  const openDialog = useShellUiStore((state) => state.openDialog)
+  const closeDialog = useShellUiStore((state) => state.closeDialog)
+
+  // Register builtin commands and the project-overview inspector section
+  // once. Commands close over the live engine client via the getter so they
+  // always see the current session without re-registration.
+  useEffect(() => {
+    registerBuiltinCommands({ getEngineClient: () => engineSessionRef.current?.client ?? null })
+    registerProjectOverviewSection()
+    return () => {
+      unregisterBuiltinCommands()
+      unregisterProjectOverviewSection()
+    }
+  }, [])
+
+  // Keep a ref of the session so command handlers (registered once) read the
+  // live client without depending on the session in their closure.
+  const engineSessionRef = useRef<EngineSession | null>(null)
+  useEffect(() => {
+    engineSessionRef.current = engineSession
+  }, [engineSession])
+
+  const commandContext = useCommandContext(engineStatus, engineSession)
+  useCommandShortcuts(commandContext)
+  useProblemDiagnostics()
 
   // Blocking application overlays that render over the editor surface. The
   // native child-HWND viewport cannot be occluded by CSS z-index, so the
   // page reports this centrally and the desktop shell hides/restores the
   // native viewport (with a placement refresh) through its visibility
   // policy.
-  const blockingOverlayActive = showNewProjectDialog || showGeoreferencePanel
+  const blockingOverlayActive = openDialog !== null
   useViewportHost(viewportHostRef, { blockedByOverlay: blockingOverlayActive })
 
   const summary = useProjectStore((state) => state.summary)
   const operation = useProjectStore((state) => state.operation)
   const projectOpen = summary !== null
-  const engineReady = engineStatus.state === 'ready' && engineSession !== null
   const busy = operation !== null
 
   useEffect(() => {
@@ -299,78 +204,30 @@ export function App() {
     }
   }, [setEngineStatus])
 
-  const handleNewProject = () => setShowNewProjectDialog(true)
-
-  const handleOpenProject = async () => {
-    if (!engineSession) {
-      return
-    }
-    const desktop = window.infraforgeDesktop
-    if (!desktop?.pickDirectory) {
-      useProjectStore.getState().setLastError({
-        code: '4',
-        message: 'The desktop shell did not expose a directory picker.',
-      })
-      return
-    }
-    const selected = await desktop.pickDirectory({
-      title: 'Open an InfraForge project directory',
-      buttonLabel: 'Open Project',
-    })
-    if (!selected) {
-      return
-    }
-    await openProject(engineSession.client, selected).catch(() => undefined)
-  }
-
-  const handleSave = async () => {
-    if (!engineSession) {
-      return
-    }
-    await saveProject(engineSession.client).catch(() => undefined)
-  }
-
-  const handleClose = async () => {
-    if (!engineSession) {
-      return
-    }
-    await closeProject(engineSession.client).catch(() => undefined)
-  }
-
   return (
     <div className="app-shell">
-      <AppHeader
-        projectOpen={projectOpen}
-        busy={busy}
-        engineReady={engineReady}
-        onSave={() => void handleSave()}
-        onGeoreference={() => setShowGeoreferencePanel(true)}
-        onClose={() => void handleClose()}
+      <AppHeader />
+      <AppMenu context={commandContext} />
+      <Toolbar context={commandContext} />
+      <EditorLayout
+        viewportHostRef={viewportHostRef}
+        viewport={<ViewportArea hostRef={viewportHostRef} />}
+        leftPanel={<Outliner />}
+        rightPanel={<Inspector />}
+        bottomPanel={<BottomPanel />}
       />
-      <Toolbar
-        engineReady={engineReady}
-        busy={busy}
-        onNewProject={handleNewProject}
-        onOpenProject={() => void handleOpenProject()}
-      />
-      <div className="workspace">
-        <Outliner />
-        <ViewportArea hostRef={viewportHostRef} />
-        <Inspector />
-      </div>
-      <BottomPanel activeTab={activeBottomTab} setActiveTab={setActiveBottomTab} />
       <StatusBar engineStatus={engineStatus} />
-      {showNewProjectDialog && engineSession ? (
+      {openDialog === 'new-project' && engineSession ? (
         <NewProjectDialog
           client={engineSession.client}
           busy={busy}
-          onClose={() => setShowNewProjectDialog(false)}
+          onClose={() => closeDialog()}
         />
       ) : null}
-      {showGeoreferencePanel && engineSession && projectOpen ? (
+      {openDialog === 'georeference' && engineSession && projectOpen ? (
         <GeoreferencePanel
           client={engineSession.client}
-          onClose={() => setShowGeoreferencePanel(false)}
+          onClose={() => closeDialog()}
         />
       ) : null}
     </div>

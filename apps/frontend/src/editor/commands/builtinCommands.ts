@@ -1,0 +1,166 @@
+import {
+  commandRegistry,
+  type CommandDefinition,
+} from './commandRegistry'
+import { useShellUiStore } from '../shell/shellUiStore'
+import { useProjectStore } from '../../features/project/projectStore'
+import { useLayoutStore } from '../layout/layoutStore'
+import { closeProject, openProject, saveProject } from '../../features/project/projectApi'
+import type { EngineClient } from '../../lib/engineSession'
+
+// Builtin commands that migrate the existing real project operations onto the
+// command registry. No command here invents a domain action; each issues a
+// real engine command or toggles presentation state (dialogs/panels).
+//
+// The engine client is supplied by the shell at registration time so handlers
+// close over the live session without the registry holding global state.
+
+export interface BuiltinCommandDeps {
+  getEngineClient: () => EngineClient | null
+}
+
+export function registerBuiltinCommands(deps: BuiltinCommandDeps): void {
+  const defs: CommandDefinition[] = [
+    {
+      id: 'project.new',
+      label: 'New Project…',
+      description: 'Create a new InfraForge project.',
+      category: 'Project',
+      group: 'project',
+      shortcut: { key: 'n', ctrlOrCmd: true, display: 'Ctrl+N' },
+      requiresEngine: true,
+      execute: () => {
+        useShellUiStore.getState().openDialogCommand('new-project')
+      },
+    },
+    {
+      id: 'project.open',
+      label: 'Open Project…',
+      description: 'Open an existing InfraForge project directory.',
+      category: 'Project',
+      group: 'project',
+      shortcut: { key: 'o', ctrlOrCmd: true, display: 'Ctrl+O' },
+      requiresEngine: true,
+      execute: async () => {
+        const client = deps.getEngineClient()
+        if (!client) {
+          return
+        }
+        const desktop = window.infraforgeDesktop
+        if (!desktop?.pickDirectory) {
+          useProjectStore.getState().setLastError({
+            code: '4',
+            message: 'The desktop shell did not expose a directory picker.',
+          })
+          return
+        }
+        const selected = await desktop.pickDirectory({
+          title: 'Open an InfraForge project directory',
+          buttonLabel: 'Open Project',
+        })
+        if (!selected) {
+          return
+        }
+        await openProject(client, selected).catch(() => undefined)
+      },
+    },
+    {
+      id: 'project.save',
+      label: 'Save Project',
+      description: 'Save the open project to its database.',
+      category: 'Project',
+      group: 'project',
+      shortcut: { key: 's', ctrlOrCmd: true, display: 'Ctrl+S' },
+      requiresEngine: true,
+      requiresProject: true,
+      execute: async () => {
+        const client = deps.getEngineClient()
+        if (!client) {
+          return
+        }
+        await saveProject(client).catch(() => undefined)
+      },
+    },
+    {
+      id: 'project.close',
+      label: 'Close Project',
+      description: 'Close the open project session.',
+      category: 'Project',
+      group: 'project',
+      requiresEngine: true,
+      requiresProject: true,
+      execute: async () => {
+        const client = deps.getEngineClient()
+        if (!client) {
+          return
+        }
+        await closeProject(client).catch(() => undefined)
+      },
+    },
+    {
+      id: 'project.georeference',
+      label: 'Georeference…',
+      description: 'Open the canonical georeference settings panel.',
+      category: 'Project',
+      group: 'project',
+      requiresEngine: true,
+      requiresProject: true,
+      execute: () => {
+        useShellUiStore.getState().openDialogCommand('georeference')
+      },
+    },
+    {
+      id: 'panel.toggle-outliner',
+      label: 'Toggle Outliner',
+      description: 'Show or hide the outliner panel.',
+      category: 'View',
+      group: 'panels',
+      execute: () => {
+        const store = useLayoutStore.getState()
+        store.setPanelVisible('left', !store.panels.left.visible)
+      },
+    },
+    {
+      id: 'panel.toggle-inspector',
+      label: 'Toggle Inspector',
+      description: 'Show or hide the inspector panel.',
+      category: 'View',
+      group: 'panels',
+      execute: () => {
+        const store = useLayoutStore.getState()
+        store.setPanelVisible('right', !store.panels.right.visible)
+      },
+    },
+    {
+      id: 'panel.toggle-bottom',
+      label: 'Toggle Bottom Panel',
+      description: 'Show or hide the bottom panel.',
+      category: 'View',
+      group: 'panels',
+      execute: () => {
+        const store = useLayoutStore.getState()
+        store.setPanelVisible('bottom', !store.panels.bottom.visible)
+      },
+    },
+  ]
+
+  for (const def of defs) {
+    commandRegistry.register(def)
+  }
+}
+
+export function unregisterBuiltinCommands(): void {
+  const ids = [
+    'project.new',
+    'project.open',
+    'project.save',
+    'project.close',
+    'project.georeference',
+    'panel.toggle-outliner',
+    'panel.toggle-inspector',
+    'panel.toggle-bottom',
+  ]
+  for (const id of ids) {
+    commandRegistry.unregister(id)
+  }
+}

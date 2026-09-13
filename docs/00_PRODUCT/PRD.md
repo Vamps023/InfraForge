@@ -11,7 +11,7 @@ InfraForge is a new product architecture. OpenGeoStudio is a lessons-learned ref
 InfraForge shall let a user:
 
 1. create or open a georeferenced project;
-2. select or import real-world geographic data;
+2. select or import real-world geographic data while retaining source provenance;
 3. acquire/import terrain and imagery;
 4. author roads using geometric alignments and elevation profiles;
 5. author lane sections, lane properties, markings, and connectivity;
@@ -111,6 +111,10 @@ These are design budgets, not claims of current implementation:
 ## 10. Interoperability direction
 
 Initial product design includes OpenStreetMap-derived import, OpenDRIVE interoperability, GeoTIFF/DEM data, GeoJSON where applicable, glTF export, and later OpenSCENARIO integration. Each format adapter maps to/from canonical InfraForge domain objects; no importer-specific parallel world model is allowed.
+
+Piecewise-linear source linework such as OSM roads and railways is source evidence, not automatically final engineering geometry. InfraForge retains the original source coordinates/IDs/tags for provenance, transforms them through the shared Geo service, protects topology-defining anchors, and derives smooth canonical alignments using domain-appropriate mathematical primitives. A visual smoothing pass may be offered for preview, but it is derived data and cannot replace the canonical line/arc/clothoid representation required by road/rail engineering workflows. Source geometry must remain inspectable so users can compare imported data with the reconstructed canonical alignment.
+
+Detailed requirements are defined in `docs/05_DOMAINS/LINEAR_INFRASTRUCTURE_GEOMETRY.md`.
 
 ## 11. Non-goals for the foundation phase
 

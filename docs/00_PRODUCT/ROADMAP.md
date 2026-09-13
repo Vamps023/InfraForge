@@ -76,6 +76,8 @@ This roadmap is dependency ordered. Later phases must not bypass incomplete foun
 
 - reference line geometry
 - line/arc/spiral primitives
+- reusable deterministic source-polyline -> alignment fitting kernel
+- protected-anchor/topology constraints for later imports
 - elevation/superelevation profiles
 - control-point editing
 - road mesh derivation
@@ -92,7 +94,10 @@ This roadmap is dependency ordered. Later phases must not bypass incomplete foun
 
 ## Phase 9 — Import adapters
 
-- OSM-derived roads
+- OSM-derived roads with original source geometry/provenance retained
+- topology analysis before smoothing/fitting; never smooth through real junctions
+- metric-space line/arc/clothoid reconstruction with configured source-deviation limits
+- source-vs-canonical alignment import review/diagnostics
 - OpenDRIVE
 - GeoJSON/GIS adapters where domain-valid
 - import reports and conflict handling
@@ -122,8 +127,9 @@ This roadmap is dependency ordered. Later phases must not bypass incomplete foun
 
 ## Phase 13 — Rail
 
-- rail alignment/track
-- switches
+- rail alignment/track using shared domain-neutral line/arc/clothoid services
+- OSM/GIS rail source-line import with retained provenance and topology-safe curve fitting
+- switches/turnouts as protected topology anchors; never smooth through branch points
 - platforms/wayside features
 - signalling primitives
 - train/scenario integration

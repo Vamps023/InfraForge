@@ -31,8 +31,9 @@ std::string makeTerrariumPng(int width = 256, int height = 256) {
     for (int b = 1; b <= 3; ++b) {
         GDALRasterBandH band = GDALGetRasterBand(ds, b);
         std::vector<uint8_t> data(width * height, b == 1 ? 128 : 0);
-        GDALRasterIO(band, GF_Write, 0, 0, width, height,
+        CPLErr err = GDALRasterIO(band, GF_Write, 0, 0, width, height,
             data.data(), width, height, GDT_Byte, 0, 0);
+        (void)err;
     }
 
     // Write to a temp file as PNG.

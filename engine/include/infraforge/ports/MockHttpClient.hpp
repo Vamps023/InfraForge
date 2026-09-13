@@ -2,6 +2,7 @@
 
 #include "infraforge/ports/HttpClient.hpp"
 
+#include <atomic>
 #include <filesystem>
 #include <fstream>
 #include <map>

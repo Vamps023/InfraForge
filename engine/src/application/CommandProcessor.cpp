@@ -166,6 +166,12 @@ std::string_view commandName(const ProtocolFrame& frame) {
         return "terrain.regenerate_tiles";
     case protocol::v1::CommandEnvelope::kTerrainGetScene:
         return "terrain.get_scene";
+    case protocol::v1::CommandEnvelope::kTerrainListSources:
+        return "terrain.list_sources";
+    case protocol::v1::CommandEnvelope::kTerrainPlanDownload:
+        return "terrain.plan_download";
+    case protocol::v1::CommandEnvelope::kTerrainDownloadSelected:
+        return "terrain.download_selected";
     case protocol::v1::CommandEnvelope::kJobCancel:
         return "job.cancel";
     case protocol::v1::CommandEnvelope::kJobList:
@@ -538,6 +544,15 @@ void CommandProcessor::processCommand(
             break;
         case protocol::v1::CommandEnvelope::kTerrainGetScene:
             handleTerrainGetScene(connectionId, frame);
+            break;
+        case protocol::v1::CommandEnvelope::kTerrainListSources:
+            handleTerrainListSources(connectionId, frame);
+            break;
+        case protocol::v1::CommandEnvelope::kTerrainPlanDownload:
+            handleTerrainPlanDownload(connectionId, frame);
+            break;
+        case protocol::v1::CommandEnvelope::kTerrainDownloadSelected:
+            handleTerrainDownloadSelected(connectionId, frame);
             break;
         case protocol::v1::CommandEnvelope::kJobCancel:
             handleJobCancel(connectionId, frame);
@@ -946,6 +961,111 @@ void CommandProcessor::handleTerrainGetScene(
         scene->set_revision(projection.revision);
         sink_.sendToConnection(connectionId, response);
     });
+}
+
+void CommandProcessor::handleTerrainListSources(
+    const std::string& connectionId, const ProtocolFrame& frame) {
+    executeCommand([this, &connectionId, &frame] {
+        const auto providers = terrainService_->listSources();
+
+        ProtocolFrame response;
+        response.set_request_id(frame.request_id());
+        auto* result = response.mutable_result()->mutable_terrain_list_sources_result();
+        for (const auto& info : providers) {
+            auto* p = result->add_providers();
+            p->set_provider_id(info.providerId);
+            p->set_display_name(info.displayName);
+            p->set_attribution(info.attribution);
+            p->set_requires_auth(info.requiresAuth);
+            p->set_max_resolution_mpp(info.maxResolutionMpp);
+            p->set_coverage_west(info.coverage.west);
+            p->set_coverage_south(info.coverage.south);
+            p->set_coverage_east(info.coverage.east);
+            p->set_coverage_north(info.coverage.north);
+        }
+        sink_.sendToConnection(connectionId, response);
+    });
+}
+
+void CommandProcessor::handleTerrainPlanDownload(
+    const std::string& connectionId, const ProtocolFrame& frame) {
+    executeCommand([this, &connectionId, &frame] {
+        const auto& command = frame.command().terrain_plan_download();
+        domain::terrain::GeoBounds area;
+        area.west = command.area().west();
+        area.south = command.area().south();
+        area.east = command.area().east();
+        area.north = command.area().north();
+        std::vector<std::int32_t> selectedIndices(
+            command.selected_indices().begin(), command.selected_indices().end());
+
+        const auto plan = terrainService_->planDownload(
+            command.provider_id(), area, command.tile_size_metres(), selectedIndices);
+
+        ProtocolFrame response;
+        response.set_request_id(frame.request_id());
+        auto* result = response.mutable_result()->mutable_terrain_plan_download_result();
+        auto* planMsg = result->mutable_plan();
+        planMsg->set_provider_id(plan.providerId);
+        for (const auto& tile : plan.selectionTiles) {
+            auto* t = planMsg->add_selection_tiles();
+            t->set_col(tile.col);
+            t->set_row(tile.row);
+            auto* b = t->mutable_bounds();
+            b->set_west(tile.bounds.west);
+            b->set_south(tile.bounds.south);
+            b->set_east(tile.bounds.east);
+            b->set_north(tile.bounds.north);
+            t->set_area_sqm(tile.areaSqm);
+        }
+        for (auto idx : plan.selectedIndices) {
+            planMsg->add_selected_indices(idx);
+        }
+        for (const auto& req : plan.providerRequests) {
+            auto* r = planMsg->add_provider_requests();
+            r->set_request_id(req.requestId);
+            auto* b = r->mutable_bounds();
+            b->set_west(req.bounds.west);
+            b->set_south(req.bounds.south);
+            b->set_east(req.bounds.east);
+            b->set_north(req.bounds.north);
+            r->set_estimated_bytes(req.estimatedBytes);
+        }
+        planMsg->set_request_count(plan.requestCount);
+        planMsg->set_deduplicated_request_count(plan.deduplicatedRequestCount);
+        planMsg->set_effective_resolution_mpp(plan.effectiveResolutionMpp);
+        planMsg->set_estimated_bytes(plan.estimatedBytes);
+        for (const auto& w : plan.warnings) {
+            planMsg->add_warnings(w);
+        }
+        planMsg->set_full_coverage(plan.fullCoverage);
+        planMsg->set_total_tile_count(plan.totalTileCount);
+        planMsg->set_selected_tile_count(plan.selectedTileCount);
+        planMsg->set_selected_area_sqm(plan.selectedAreaSqm);
+        sink_.sendToConnection(connectionId, response);
+    });
+}
+
+void CommandProcessor::handleTerrainDownloadSelected(
+    const std::string& connectionId, const ProtocolFrame& frame) {
+    const auto& command = frame.command().terrain_download_selected();
+    domain::terrain::GeoBounds area;
+    area.west = command.area().west();
+    area.south = command.area().south();
+    area.east = command.area().east();
+    area.north = command.area().north();
+    std::vector<std::int32_t> selectedIndices(
+        command.selected_indices().begin(), command.selected_indices().end());
+
+    const JobRecord record = terrainService_->startDownload(
+        command.provider_id(), area, command.tile_size_metres(),
+        selectedIndices, command.display_name());
+
+    ProtocolFrame response;
+    response.set_request_id(frame.request_id());
+    auto* result = response.mutable_result()->mutable_job_started();
+    result->set_job_id(record.jobId);
+    sink_.sendToConnection(connectionId, response);
 }
 
 void CommandProcessor::handleJobCancel(

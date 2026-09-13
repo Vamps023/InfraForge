@@ -43,7 +43,9 @@ add_library(infraforge_core STATIC
     src/domain/geo/ProjectGeoreference.cpp
     src/domain/project/ProjectModel.cpp
     src/domain/terrain/TerrainDataset.cpp
+    src/domain/terrain/TerrainDownloadProvider.cpp
     src/domain/terrain/TerrainSampler.cpp
+    src/domain/terrain/MockTerrainProvider.cpp
     src/domain/world/ChunkGrid.cpp
     src/domain/world/ChunkResidency.cpp
     src/domain/world/Invalidation.cpp
@@ -138,6 +140,7 @@ add_executable(infraforge-engine-tests
     tests/SpatialIndexTests.cpp
     tests/SqliteProjectStoreTests.cpp
     tests/TerrainDomainTests.cpp
+    tests/TerrainDownloadProviderTests.cpp
     tests/TerrainServiceTests.cpp
     tests/WebSocketServerTests.cpp
     src/network/CommandRouter.cpp

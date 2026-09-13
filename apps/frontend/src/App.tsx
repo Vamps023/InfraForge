@@ -30,7 +30,7 @@ import { registerTerrainCommands, unregisterTerrainCommands } from './features/t
 import { registerTerrainOutlinerProjection, unregisterTerrainOutlinerProjection } from './features/terrain/terrainOutlinerProjection'
 import { registerTerrainInspectorSection, unregisterTerrainInspectorSection } from './features/terrain/terrainInspectorSection'
 import { subscribeTerrainEvents, setTerrainScenePublisher } from './features/terrain/terrainEvents'
-import { fetchTerrainScene } from './features/terrain/terrainApi'
+import { fetchTerrainScene, refreshTerrainDatasets, refreshTerrainJobs } from './features/terrain/terrainApi'
 import { useTerrainStore } from './features/terrain/terrainStore'
 
 function ViewportArea({ hostRef }: { hostRef: React.RefObject<HTMLDivElement | null> }) {
@@ -224,6 +224,17 @@ export function App() {
       setEngineSession(result.session)
 
       await refreshProjectSummary(result.session.client).catch(() => undefined)
+      // BLOCKER 3: refresh terrain projection on session startup so an
+      // already-open project's terrain renders immediately without waiting
+      // for a terrain job event.
+      void (async () => {
+        await refreshTerrainDatasets(result.session.client).catch(() => undefined)
+        await refreshTerrainJobs(result.session.client).catch(() => undefined)
+        const scene = await fetchTerrainScene(result.session.client).catch(() => null)
+        if (scene) {
+          window.infraforgeDesktop?.setViewportScene?.(scene as Record<string, unknown>)
+        }
+      })()
     })().catch((error: unknown) => {
       if (!cancelled) {
         setEngineStatus({

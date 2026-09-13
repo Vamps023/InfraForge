@@ -169,3 +169,132 @@ message TerrainDatasetAddedEvent {
   TerrainDatasetInfo dataset = 1;
   uint64 revision = 2;
 }
+
+// ---- Download Area workflow (Issue #6 BLOCKER 7) ----
+//
+// The Download Area path lets the user draw a rectangular working area on a
+// geographic map, generate a deterministic application-level terrain
+// selection grid, select/deselect individual tiles, and download only the
+// selected tiles from a remote DEM provider. The engine owns provider
+// planning, network acquisition, decoding, clipping, canonical raster
+// assembly, and commit. The frontend owns only map/draw/selection UX.
+
+// A terrain DEM provider that can be selected for Download Area acquisition.
+message TerrainProviderInfo {
+  // Stable provider identifier (e.g. "aws-terrarium").
+  string provider_id = 1;
+  // Human-readable name.
+  string display_name = 2;
+  // Attribution text required by the provider's terms.
+  string attribution = 3;
+  // Whether the provider requires authentication credentials.
+  bool requires_auth = 4;
+  // Maximum native resolution in metres per pixel (0 if unknown).
+  double max_resolution_mpp = 5;
+  // Geographic coverage bounds in WGS84 (EPSG:4326) degrees.
+  // Empty means global coverage.
+  double coverage_west = 6;
+  double coverage_south = 7;
+  double coverage_east = 8;
+  double coverage_north = 9;
+}
+
+message TerrainListSourcesCommand {}
+
+message TerrainListSourcesResult {
+  repeated TerrainProviderInfo providers = 1;
+}
+
+// A rectangular geographic area in WGS84 (EPSG:4326) degrees.
+message GeoBounds {
+  double west = 1;
+  double south = 2;
+  double east = 3;
+  double north = 4;
+}
+
+// One application-level terrain selection tile. These are user-facing
+// project/canonical area units (e.g. 4 km x 4 km), NOT provider tiles.
+// The distinction between TerrainSelectionTile and provider request tiles
+// (e.g. XYZ/WebMercator) is explicit in the domain model.
+message TerrainSelectionTile {
+  // Grid index in the selection grid (column, row).
+  int32 col = 1;
+  int32 row = 2;
+  // Geographic bounds of this tile in WGS84 degrees.
+  GeoBounds bounds = 3;
+  // Approximate area in square metres.
+  double area_sqm = 4;
+}
+
+// One provider request needed to cover selected application tiles.
+message TerrainProviderRequest {
+  // Provider-specific request identifier (e.g. "z/x/y" for XYZ tiles).
+  string request_id = 1;
+  // Geographic bounds covered by this request in WGS84 degrees.
+  GeoBounds bounds = 2;
+  // Estimated response size in bytes (0 if unknown).
+  uint64 estimated_bytes = 3;
+}
+
+// A deterministic download plan produced by the engine before any network
+// acquisition. The UI presents this to the user before starting the download.
+message TerrainDownloadPlan {
+  // The provider that will be used.
+  string provider_id = 1;
+  // All application selection tiles in the drawn area (selected + unselected).
+  repeated TerrainSelectionTile selection_tiles = 2;
+  // Indices (into selection_tiles) of the selected tiles.
+  repeated int32 selected_indices = 3;
+  // Unique provider requests needed to cover ONLY the selected tiles.
+  repeated TerrainProviderRequest provider_requests = 4;
+  // Total number of provider requests (after deduplication).
+  uint32 request_count = 5;
+  // Total number of unique provider requests (same as provider_requests size).
+  uint32 deduplicated_request_count = 6;
+  // Effective resolution in metres per pixel.
+  double effective_resolution_mpp = 7;
+  // Total estimated download size in bytes (0 if not deterministically knowable).
+  uint64 estimated_bytes = 8;
+  // Warnings (e.g. partial provider coverage, unavoidable overfetch).
+  repeated string warnings = 9;
+  // Whether the provider fully covers the selected area.
+  bool full_coverage = 10;
+  // Total number of selection tiles.
+  uint32 total_tile_count = 11;
+  // Number of selected tiles.
+  uint32 selected_tile_count = 12;
+  // Approximate total selected area in square metres.
+  double selected_area_sqm = 13;
+}
+
+message TerrainPlanDownloadCommand {
+  // Provider to use for the download.
+  string provider_id = 1;
+  // The drawn working area in WGS84 degrees.
+  GeoBounds area = 2;
+  // Application selection tile size in metres (1000, 2000, 4000, 8000, 16000).
+  uint32 tile_size_metres = 3;
+  // Indices of selected tiles (into the deterministic grid for the area).
+  repeated int32 selected_indices = 4;
+}
+
+message TerrainPlanDownloadResult {
+  TerrainDownloadPlan plan = 1;
+}
+
+message TerrainDownloadSelectedCommand {
+  // Provider to use for the download.
+  string provider_id = 1;
+  // The drawn working area in WGS84 degrees.
+  GeoBounds area = 2;
+  // Application selection tile size in metres.
+  uint32 tile_size_metres = 3;
+  // Indices of selected tiles (into the deterministic grid for the area).
+  repeated int32 selected_indices = 4;
+  // Display name for the resulting terrain dataset.
+  string display_name = 5;
+}
+
+// TerrainDownloadSelectedCommand returns JobStartedResult (the download runs
+// as a background job with real progress and cancellation).

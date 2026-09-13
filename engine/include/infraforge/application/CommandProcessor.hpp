@@ -121,6 +121,9 @@ private:
     void handleTerrainSample(const std::string& connectionId, const protocol::v1::Frame& frame);
     void handleTerrainRegenerateTiles(const std::string& connectionId, const protocol::v1::Frame& frame);
     void handleTerrainGetScene(const std::string& connectionId, const protocol::v1::Frame& frame);
+    void handleTerrainListSources(const std::string& connectionId, const protocol::v1::Frame& frame);
+    void handleTerrainPlanDownload(const std::string& connectionId, const protocol::v1::Frame& frame);
+    void handleTerrainDownloadSelected(const std::string& connectionId, const protocol::v1::Frame& frame);
     void handleJobCancel(const std::string& connectionId, const protocol::v1::Frame& frame);
     void handleJobList(const std::string& connectionId, const protocol::v1::Frame& frame);
 

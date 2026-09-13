@@ -279,6 +279,10 @@ message CommandEnvelope {
     TerrainGetSceneCommand terrain_get_scene = 16;
     JobCancelCommand job_cancel = 17;
     JobListCommand job_list = 18;
+    // Protocol 1.4 terrain download area commands.
+    TerrainListSourcesCommand terrain_list_sources = 19;
+    TerrainPlanDownloadCommand terrain_plan_download = 20;
+    TerrainDownloadSelectedCommand terrain_download_selected = 21;
   }
 }
 
@@ -298,6 +302,9 @@ message ResultEnvelope {
     JobCancelResult job_cancel_result = 11;
     JobListResult job_list_result = 12;
     TerrainSceneResult terrain_scene_result = 13;
+    // Protocol 1.4 terrain download area results.
+    TerrainListSourcesResult terrain_list_sources_result = 14;
+    TerrainPlanDownloadResult terrain_plan_download_result = 15;
   }
 }
 

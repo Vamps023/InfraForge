@@ -2,15 +2,21 @@ import { create } from '@bufbuild/protobuf'
 import {
   JobCancelCommandSchema,
   JobListCommandSchema,
+  GeoBoundsSchema,
+  TerrainDownloadSelectedCommandSchema,
   TerrainGetDatasetCommandSchema,
   TerrainGetSceneCommandSchema,
   TerrainImportDatasetCommandSchema,
   TerrainListDatasetsCommandSchema,
+  TerrainListSourcesCommandSchema,
+  TerrainPlanDownloadCommandSchema,
   TerrainProbeSourceCommandSchema,
   TerrainRegenerateTilesCommandSchema,
   type CommandEnvelope,
   type JobRecord,
   type TerrainDatasetInfo,
+  type TerrainListSourcesResult,
+  type TerrainPlanDownloadResult,
   type TerrainProbeSourceResult,
   type TerrainSceneResult,
 } from '@infraforge/protocol'
@@ -146,4 +152,63 @@ export async function refreshDatasetDetails(
   }
   useTerrainStore.getState().upsertDataset(outcome.value.dataset)
   return outcome.value.dataset
+}
+
+// ---- Download Area workflow (Issue #6 BLOCKER 7) ----
+
+export async function listTerrainSources(client: EngineClient): Promise<TerrainListSourcesResult> {
+  const outcome = await sendTerrainCommand(client, {
+    case: 'terrainListSources',
+    value: create(TerrainListSourcesCommandSchema, {}),
+  })
+  if (outcome.case !== 'terrainListSourcesResult') {
+    throw expectFailure(outcome)
+  }
+  return outcome.value
+}
+
+export async function planTerrainDownload(
+  client: EngineClient,
+  providerId: string,
+  area: { west: number; south: number; east: number; north: number },
+  tileSizeMetres: number,
+  selectedIndices: number[],
+): Promise<TerrainPlanDownloadResult> {
+  const outcome = await sendTerrainCommand(client, {
+    case: 'terrainPlanDownload',
+    value: create(TerrainPlanDownloadCommandSchema, {
+      providerId,
+      area: create(GeoBoundsSchema, area),
+      tileSizeMetres,
+      selectedIndices,
+    }),
+  })
+  if (outcome.case !== 'terrainPlanDownloadResult') {
+    throw expectFailure(outcome)
+  }
+  return outcome.value
+}
+
+export async function downloadSelectedTerrain(
+  client: EngineClient,
+  providerId: string,
+  area: { west: number; south: number; east: number; north: number },
+  tileSizeMetres: number,
+  selectedIndices: number[],
+  displayName: string,
+): Promise<string> {
+  const outcome = await sendTerrainCommand(client, {
+    case: 'terrainDownloadSelected',
+    value: create(TerrainDownloadSelectedCommandSchema, {
+      providerId,
+      area: create(GeoBoundsSchema, area),
+      tileSizeMetres,
+      selectedIndices,
+      displayName,
+    }),
+  })
+  if (outcome.case !== 'jobStarted') {
+    throw expectFailure(outcome)
+  }
+  return outcome.value.jobId
 }

@@ -102,8 +102,11 @@ void TerrainTileCache::rebuildIndex() {
 }
 
 double TerrainTileCache::tileCenterDistanceSquared(const Entry& entry, const TerrainCameraState& camera) const {
-    const double centerE = (entry.tile.minEasting + entry.tile.maxEasting) * 0.5;
-    const double centerN = (entry.tile.minNorthing + entry.tile.maxNorthing) * 0.5;
+    // Convert tile canonical bounds to render-local before computing
+    // distance, so the camera (render-local) and tile centers are in the
+    // same coordinate space.
+    const double centerE = (entry.tile.minEasting + entry.tile.maxEasting) * 0.5 - camera.originEasting;
+    const double centerN = (entry.tile.minNorthing + entry.tile.maxNorthing) * 0.5 - camera.originNorthing;
     const double dx = centerE - camera.centerX;
     const double dy = centerN - camera.centerY;
     return dx * dx + dy * dy;
@@ -157,11 +160,58 @@ TerrainTileCache::UpdateResult TerrainTileCache::update(const TerrainCameraState
         }
     }
 
-    // 3. Loads: stale tiles first (freshest content), then unloaded tiles
-    // and LOD-replacing tiles nearest the camera center. Bounded per update
-    // so a working-set change cannot stall the frame.
+    // BLOCKER 4: Compute the desired working set — the kMaxResidentTiles
+    // nearest tiles to the camera. Only tiles in the desired set are
+    // eligible for loading. Tiles outside the desired set that are currently
+    // resident are evicted. This prevents churn: a budget-evicted tile that
+    // returns to Unloaded is NOT in the desired set, so it won't be reloaded
+    // on the next update while the camera is stationary.
+    //
+    // The desired set is purely distance-based: the nearest kMaxResidentTiles
+    // tiles regardless of current residency. GPU-holding tiles outside the
+    // desired set are evicted; non-GPU-holding tiles inside the desired set
+    // are load candidates.
+    std::vector<std::size_t> allByDistance;
+    allByDistance.reserve(entries_.size());
+    for (std::size_t i = 0; i < entries_.size(); ++i) {
+        if (entries_[i].residency != Residency::Evicting) {
+            allByDistance.push_back(i);
+        }
+    }
+    std::sort(allByDistance.begin(), allByDistance.end(), [&](std::size_t a, std::size_t b) {
+        return tileCenterDistanceSquared(entries_[a], camera)
+            < tileCenterDistanceSquared(entries_[b], camera);
+    });
+
+    // The desired working set is the nearest kMaxResidentTiles tiles.
+    const std::size_t desiredCapacity = std::min(allByDistance.size(), kMaxResidentTiles);
+    std::vector<bool> inDesiredSet(entries_.size(), false);
+    for (std::size_t i = 0; i < desiredCapacity; ++i) {
+        inDesiredSet[allByDistance[i]] = true;
+    }
+
+    // 3. Evict resident tiles that are no longer in the desired working set.
+    // This prevents stale residents from consuming GPU memory when the
+    // camera has moved away.
+    for (std::size_t i = 0; i < entries_.size(); ++i) {
+        Entry& entry = entries_[i];
+        if (!inDesiredSet[i]
+            && (entry.residency == Residency::Resident || entry.residency == Residency::LodReplacing)
+            && entry.loadedLod == entry.desiredLod) {
+            entry.residency = Residency::Evicting;
+            queueRelease(entry);
+        }
+    }
+
+    // 4. Loads: stale tiles first (freshest content), then unloaded tiles
+    // and LOD-replacing tiles nearest the camera center — but ONLY tiles in
+    // the desired working set. Bounded per update so a working-set change
+    // cannot stall the frame.
     std::vector<std::size_t> candidates;
     for (std::size_t i = 0; i < entries_.size(); ++i) {
+        if (!inDesiredSet[i]) {
+            continue;
+        }
         const Entry& entry = entries_[i];
         if (entry.residency == Residency::Unloaded || entry.residency == Residency::Stale) {
             candidates.push_back(i);
@@ -199,10 +249,13 @@ TerrainTileCache::UpdateResult TerrainTileCache::update(const TerrainCameraState
         result.toLoad.push_back(&entry);
     }
 
-    // 4. Budget pressure: when the resident set would exceed the bound, the
+    // 5. Budget pressure: when the resident set would exceed the bound, the
     // farthest up-to-date tiles are evicted first. In-flight loads are never
     // evicted — their completion is version-checked instead. LodReplacing
     // tiles count toward the resident budget (they hold GPU payloads).
+    // This is a safety net; the desired-set eviction in step 3 should handle
+    // most cases, but in-flight loads that complete can temporarily exceed
+    // the budget.
     std::size_t usefulResident = 0;
     for (const Entry& entry : entries_) {
         if ((entry.residency == Residency::Resident || entry.residency == Residency::LodReplacing)

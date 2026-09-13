@@ -4,6 +4,7 @@
 #include "infraforge/application/WorldState.hpp"
 #include "infraforge/domain/geo/ProjectGeoreference.hpp"
 #include "infraforge/domain/terrain/TerrainDataset.hpp"
+#include "infraforge/domain/terrain/TerrainDownloadProvider.hpp"
 #include "infraforge/domain/terrain/TerrainSampler.hpp"
 #include "infraforge/domain/terrain/TerrainTypes.hpp"
 #include "infraforge/domain/world/ChunkGrid.hpp"
@@ -121,6 +122,29 @@ public:
     // Re-generates missing/stale derived tiles for one dataset.
     [[nodiscard]] JobRecord regenerateTiles(const std::string& datasetUuid);
 
+    // ---- Download Area workflow (Issue #6 BLOCKER 7) ----
+
+    // List available terrain DEM providers.
+    [[nodiscard]] std::vector<domain::terrain::ProviderInfo> listSources() const;
+
+    // Compute a deterministic download plan for the selected tiles. Does NOT
+    // perform any network I/O.
+    [[nodiscard]] domain::terrain::DownloadPlan planDownload(
+        const std::string& providerId,
+        const domain::terrain::GeoBounds& area,
+        std::uint32_t tileSizeMetres,
+        const std::vector<std::int32_t>& selectedIndices) const;
+
+    // Start a background download job for the selected tiles. The job
+    // acquires provider data, decodes, assembles canonical coverage, and
+    // commits through the same canonical ingestion path as local-file import.
+    [[nodiscard]] JobRecord startDownload(
+        const std::string& providerId,
+        const domain::terrain::GeoBounds& area,
+        std::uint32_t tileSizeMetres,
+        const std::vector<std::int32_t>& selectedIndices,
+        const std::string& displayName);
+
     [[nodiscard]] std::vector<domain::terrain::TerrainDataset> listDatasets() const;
     [[nodiscard]] TerrainDatasetDetails datasetDetails(const std::string& datasetUuid) const;
     [[nodiscard]] TerrainSceneProjection sceneProjection() const;
@@ -149,6 +173,17 @@ private:
         std::uint64_t generated{0};
         std::uint64_t skipped{0};
     };
+    // Immutable inputs for the download worker (Issue #6 BLOCKER 7).
+    struct DownloadPayload {
+        std::string jobId;
+        std::string providerId;
+        std::vector<domain::terrain::SelectionTile> selectedTiles;
+        std::vector<domain::terrain::ProviderRequest> requests;
+        std::string displayName;
+        std::string projectUuid;
+        std::filesystem::path projectDirectory;
+        domain::geo::ProjectGeoreference project;
+    };
 
     [[nodiscard]] std::filesystem::path projectDirectory_() const;
     [[nodiscard]] std::optional<domain::terrain::TerrainDataset> findDataset(
@@ -162,12 +197,18 @@ private:
     void untrackJob(const std::string& jobId);
     void cancelTrackedJobs();
 
+    // Download Area worker: acquires provider data, decodes, assembles
+    // canonical coverage, and commits through the same path as local import.
+    struct DownloadPayload;
+    void executeDownload(const DownloadPayload& payload, JobContext& context);
+
     ports::ProjectStore& store_;
     const domain::geo::GeoTransformService& transforms_;
     ports::TerrainSourceReader& reader_;
     WorldState& world_;
     JobSystem& jobs_;
     EventSink eventSink_;
+    domain::terrain::TerrainProviderRegistry providers_;
 
     std::optional<domain::geo::ProjectGeoreference> project_;
     std::vector<domain::terrain::TerrainDataset> datasets_; // creation order

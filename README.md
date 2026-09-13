@@ -26,13 +26,17 @@ Current implementation state is tracked in `docs/IMPLEMENTATION_STATUS.md`. A do
 ```text
 apps/          Desktop shell and frontend application
 contracts/     Versioned transport schemas
-engine/        Native C++ application/domain/runtime/renderer
+engine/        Native C++ core engine (domain, application, persistence, network)
+viewport/      Native Vulkan viewport process and platform surface integration
 packages/      Shared TypeScript packages
 shaders/       Renderer shader sources
 tools/         Developer/build tooling
-tests/         Cross-layer verification
 docs/          Product, technical, UX, data, protocol, and engineering specifications
 ```
+
+Automated verification tests are organized within their owning subsystems (`engine/tests/`, `viewport/tests/`, `apps/*/tests/`, and `tools/engine-smoke/`).
+
+For instructions on building prerequisites, native toolchain configuration, and running the desktop application, see `docs/07_ENGINEERING/BUILDING.md`.
 
 ## Source of truth
 

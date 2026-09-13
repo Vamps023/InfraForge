@@ -1,33 +1,35 @@
 # System architecture
 
 ```text
-┌──────────────────────────────────────────────────────────────┐
-│ Desktop process                                             │
-│ Electron                                                    │
-│ - OS window lifecycle                                       │
-│ - engine process lifecycle                                  │
-│ - native viewport hosting                                   │
-│ - secure preload                                            │
-└───────────────┬──────────────────────────────┬───────────────┘
-                │                              │
-                │ validated preload API        │ native surface
-                v                              v
-┌───────────────────────────────┐      ┌──────────────────────┐
-│ React frontend                │      │ Vulkan viewport      │
-│ presentation + UI state       │      │ native renderer      │
-└──────────────┬────────────────┘      └──────────▲───────────┘
-               │ WebSocket                        │ scene deltas
-               v                                  │
-┌─────────────────────────────────────────────────┴────────────┐
-│ infraforge-engine                                           │
-│ Transport -> Application -> Domain                          │
-│                │          │                                  │
-│                │          ├─ Geo/Terrain/Road/etc.          │
-│                │          └─ Simulation                      │
-│                ├─ Persistence adapters                       │
-│                ├─ Import/export adapters                     │
-│                └─ Render scene derivation                    │
-└──────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Desktop process (Electron shell)                                            │
+│ - OS window & application lifecycle                                        │
+│ - EngineSupervisor (engine lifecycle, loopback port/token validation)       │
+│ - ViewportSupervisor (infraforge-viewport lifecycle, stdio control, HWND)   │
+│ - validated preload API & native directory dialogs                          │
+└───────────────┬───────────────────────────────┬─────────────────────────────┘
+                │                               │
+                │ preload bridge                │ child HWND + stdio control
+                v                               v
+┌───────────────────────────────┐      ┌──────────────────────────────────────┐
+│ React frontend (renderer)     │      │ infraforge-viewport process          │
+│ - presentation & UI state     │      │ - native Vulkan 1.3 renderer         │
+│ - transient layout & draft    │      │ - Win32 child surface integration    │
+│ - command dispatch & events   │      │ - render thread & swapchain machine  │
+└───────────────┬───────────────┘      │ - grid camera & selection ID pass    │
+                │                      └──────────────────▲───────────────────┘
+                │ WebSocket (authenticated)               │ scene updates
+                v                                         │
+┌─────────────────────────────────────────────────────────┴───────────────────┐
+│ infraforge-engine process                                                   │
+│ Transport -> Application -> Domain                                          │
+│                │          │                                                 │
+│                │          ├─ Project / Geo / Terrain / Road / etc.          │
+│                │          └─ Simulation                                     │
+│                ├─ Persistence adapters (SQLite + project.json)              │
+│                ├─ Import/export adapters                                    │
+│                └─ Render scene derivation & invalidation                    │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Ownership rule

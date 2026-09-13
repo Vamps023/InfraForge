@@ -46,9 +46,18 @@ Responsibilities:
 - simulation;
 - render-scene generation/invalidation.
 
-### 4. Native renderer execution
+### 4. Native renderer execution (`infraforge-viewport`)
 
-Renderer ownership may live inside the engine process or a dedicated native viewport module, but its public boundary remains render-scene commands/data rather than domain object mutation. The embedding choice must be proven against Windows resize/DPI/focus/multi-monitor/destruction behavior before road authoring begins.
+The native renderer runs as a dedicated child process (`infraforge-viewport`) supervised by the desktop shell. Responsibilities:
+
+- create and manage the native Vulkan 1.3 presentation surface and swapchain;
+- embed into the shell window as a native OS child surface (Win32 child `HWND`);
+- consume stdio control commands (`place`, `visibility`, `shutdown`) emitted by the desktop `ViewportSupervisor`;
+- emit machine-readable readiness (`INFRAFORGE_VIEWPORT_READY`) and renderer status records (`INFRAFORGE_VIEWPORT_STATUS`) to stdout;
+- manage render-thread lifecycle, camera projection, swapchain recreation, and shader execution;
+- consume derived render-scene updates from the engine without directly accessing canonical project persistence.
+
+See `docs/ADR/0011-dedicated-viewport-process.md` and `docs/03_PROTOCOL/VIEWPORT_CONTROL_PROTOCOL.md`.
 
 ## Local startup sequence
 
@@ -60,8 +69,9 @@ Renderer ownership may live inside the engine process or a dedicated native view
 6. Electron validates the readiness record against the requested endpoint and exposes `{host, port, token, protocolVersion}` through preload.
 7. Frontend opens WebSocket and sends `ClientHello` as a binary Protocol Buffer frame.
 8. Engine accepts application messages only after token and protocol compatibility validation.
+9. Concurrently, Electron's `ViewportSupervisor` launches `infraforge-viewport` parented to the main window HWND with initial placement and listens for viewport readiness and renderer status.
 
-If any step fails, the UI displays the engine state and actionable failure. There is no browser-only fallback that pretends native functionality is available.
+If any step fails, the UI displays the engine/viewport state and actionable failure. There is no browser-only fallback that pretends native functionality is available.
 
 ## Shutdown sequence
 
@@ -69,8 +79,8 @@ If any step fails, the UI displays the engine state and actionable failure. Ther
 2. Engine rejects shutdown while a non-interruptible transaction is committing; otherwise jobs are cancelled/settled according to job policy.
 3. Persistence is flushed/checkpointed.
 4. WebSocket closes cleanly.
-5. Renderer resources are destroyed.
+5. Desktop shell sends `shutdown` to `infraforge-viewport` over stdio and awaits clean process exit before force-terminating.
 6. Engine exits.
-7. Electron force-terminates only after the supervised graceful path fails.
+7. Electron terminates only after supervised child processes exit cleanly.
 
-The graceful project-aware shutdown protocol is not implemented in the foundation transport milestone; until project persistence exists, Electron supervision terminates the child engine during application quit and the implementation ledger must state that limitation.
+The full transactional project-aware shutdown handshake is tracked under limitations in `docs/05_DOMAINS/PROJECT.md`; currently, the desktop supervisor terminates child processes upon application quit and the engine flushes the SQLite session on exit.

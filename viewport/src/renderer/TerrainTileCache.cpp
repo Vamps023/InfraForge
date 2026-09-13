@@ -195,11 +195,20 @@ TerrainTileCache::UpdateResult TerrainTileCache::update(const TerrainCameraState
     // 3. Evict resident tiles that are no longer in the desired working set.
     // This prevents stale residents from consuming GPU memory when the
     // camera has moved away.
+    // BLOCKER 13: Evict any GPU-holding tile outside the desired set,
+    // including LodReplacing tiles whose loadedLod != desiredLod. A tile
+    // that becomes undesired during LOD replacement must not keep an old
+    // GPU payload alive.
     for (std::size_t i = 0; i < entries_.size(); ++i) {
         Entry& entry = entries_[i];
         if (!inDesiredSet[i]
-            && (entry.residency == Residency::Resident || entry.residency == Residency::LodReplacing)
-            && entry.loadedLod == entry.desiredLod) {
+            && (entry.residency == Residency::Resident
+                || entry.residency == Residency::LodReplacing)) {
+            // If a LOD replacement load is in progress, mark it stale so
+            // the completion does not resurrect an undesired tile.
+            if (entry.lodLoadInProgress) {
+                entry.lodLoadInProgress = false;
+            }
             entry.residency = Residency::Evicting;
             queueRelease(entry);
         }
@@ -258,10 +267,12 @@ TerrainTileCache::UpdateResult TerrainTileCache::update(const TerrainCameraState
     // This is a safety net; the desired-set eviction in step 3 should handle
     // most cases, but in-flight loads that complete can temporarily exceed
     // the budget.
+    // BLOCKER 13: Count all GPU-holding tiles, including LodReplacing tiles
+    // with mismatched LODs (they still hold an old GPU payload).
     std::size_t usefulResident = 0;
     for (const Entry& entry : entries_) {
-        if ((entry.residency == Residency::Resident || entry.residency == Residency::LodReplacing)
-            && entry.loadedLod == entry.desiredLod) {
+        if (entry.residency == Residency::Resident
+            || entry.residency == Residency::LodReplacing) {
             ++usefulResident;
         }
     }
@@ -269,8 +280,8 @@ TerrainTileCache::UpdateResult TerrainTileCache::update(const TerrainCameraState
         std::vector<std::size_t> evictable;
         for (std::size_t i = 0; i < entries_.size(); ++i) {
             const Entry& entry = entries_[i];
-            if ((entry.residency == Residency::Resident || entry.residency == Residency::LodReplacing)
-                && entry.loadedLod == entry.desiredLod) {
+            if (entry.residency == Residency::Resident
+                || entry.residency == Residency::LodReplacing) {
                 evictable.push_back(i);
             }
         }
@@ -301,6 +312,15 @@ void TerrainTileCache::notifyLoaded(
         throw std::out_of_range("notifyLoaded for an untracked terrain tile");
     }
     Entry& entry = entries_[*index];
+    // BLOCKER 13: A stale load completion must not resurrect an undesired
+    // or evicted tile. If the tile was evicted while the load was in
+    // flight, drop the result silently.
+    if (entry.residency == Residency::Evicting
+        || entry.residency == Residency::Unloaded
+        || entry.residency == Residency::Stale) {
+        entry.lodLoadInProgress = false;
+        return;
+    }
     if (entry.residency == Residency::LodReplacing) {
         // LOD replacement completion: on success, atomically replace the LOD;
         // on failure, retain the old resident payload (no flicker, no drop).

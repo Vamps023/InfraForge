@@ -118,7 +118,7 @@ function LocalFileImport({ client, onClose }: { client: EngineClient; onClose: (
     importJob && importJob.progress && importJob.progress > 0
       ? Math.min(100, Math.floor(importJob.progress * 100))
       : importJob && importJob.total && importJob.total > 0n
-        ? Math.min(100, Math.floor((Number(importJob.processed ?? 0n) * 100) / Number(importJob.total)))
+        ? Math.min(100, Number((importJob.processed ?? 0n) * 100n / importJob.total))
         : 0
 
   const pickFile = async () => {
@@ -356,7 +356,7 @@ function DownloadAreaImport({ client, onClose }: { client: EngineClient; onClose
     downloadJob && downloadJob.progress && downloadJob.progress > 0
       ? Math.min(100, Math.floor(downloadJob.progress * 100))
       : downloadJob && downloadJob.total && downloadJob.total > 0n
-        ? Math.min(100, Math.floor((Number(downloadJob.processed ?? 0n) * 100) / Number(downloadJob.total)))
+        ? Math.min(100, Number((downloadJob.processed ?? 0n) * 100n / downloadJob.total))
         : 0
 
   // Load providers on mount.

@@ -31,6 +31,17 @@ describe('BottomPanel accessibility', () => {
     expect(tabs[1]).toHaveAttribute('aria-selected', 'false')
   })
 
+  it('links tabs to tabpanels via aria-controls/aria-labelledby', () => {
+    render(<BottomPanel />)
+    const tabs = screen.getAllByRole('tab')
+    const tabpanel = screen.getByRole('tabpanel')
+    // The active tab controls the visible tabpanel.
+    expect(tabs[0]).toHaveAttribute('aria-controls', 'bottom-tabpanel-problems')
+    expect(tabs[1]).toHaveAttribute('aria-controls', 'bottom-tabpanel-operations')
+    expect(tabpanel).toHaveAttribute('id', 'bottom-tabpanel-problems')
+    expect(tabpanel).toHaveAttribute('aria-labelledby', 'bottom-tab-problems')
+  })
+
   it('ArrowRight moves from Problems to Operations tab', async () => {
     render(<BottomPanel />)
     const tabs = screen.getAllByRole('tab')

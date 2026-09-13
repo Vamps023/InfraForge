@@ -20,10 +20,12 @@ export interface OperationProjection {
   state: OperationState
   // Progress in [0,1] when the backend provides it; null when not provided.
   progress: number | null
-  // Processed work units when available.
-  processed?: number
-  // Total work units when available.
-  total?: number
+  // Processed work units when available. Preserved as bigint to avoid
+  // precision loss from uint64 protocol values.
+  processed?: bigint
+  // Total work units when available. Preserved as bigint to avoid
+  // precision loss from uint64 protocol values.
+  total?: bigint
   // Diagnostics/error message when state === 'failed'.
   message?: string
   // Source/domain that owns the operation, e.g. 'terrain', 'import'.

@@ -371,16 +371,25 @@ async function main() {
   // closes, georeference/revision/dirty events for the canonical update.
   // Events are broadcast after the correlated result, so allow the final
   // event frames to arrive before judging the stream.
-  const waitForEventCount = async (count: number): Promise<void> => {
+  // The engine also emits job.* and diagnostic.* events (protocol 1.3), so
+  // filter for project events only when counting.
+  const projectEventKinds = new Set([
+    'projectOpened',
+    'projectClosed',
+    'projectRevisionChanged',
+    'projectDirtyStateChanged',
+    'georeferenceChanged',
+  ])
+  const waitForProjectEventCount = async (count: number): Promise<void> => {
     const deadline = Date.now() + FRAME_TIMEOUT_MS
-    while (receivedEvents.length < count) {
+    while (receivedEvents.filter((e) => projectEventKinds.has(e.event.case ?? '')).length < count) {
       if (Date.now() > deadline) {
-        fail(`timed out waiting for project events (have ${receivedEvents.length}, want ${count})`)
+        fail(`timed out waiting for project events (have ${receivedEvents.length} total, want ${count} project)`)
       }
       await new Promise((resolveTimer) => setTimeout(resolveTimer, 25))
     }
   }
-  await waitForEventCount(9)
+  await waitForProjectEventCount(9)
   const kinds = receivedEvents.map((event) => event.event.case)
   const openedCount = kinds.filter((kind) => kind === 'projectOpened').length
   const closedCount = kinds.filter((kind) => kind === 'projectClosed').length

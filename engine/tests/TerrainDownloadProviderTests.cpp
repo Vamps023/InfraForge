@@ -7,6 +7,10 @@
 #include <set>
 #include <string>
 
+#include <gdal.h>
+#include <gdal_priv.h>
+#include <ogr_spatialref.h>
+
 using namespace infraforge::domain::terrain;
 
 TEST_SUITE("terrain download provider") {
@@ -93,6 +97,7 @@ TEST_SUITE("terrain download provider") {
     }
 
     TEST_CASE("mock provider fetchRequest writes deterministic file") {
+        GDALAllRegister();
         MockTerrainProvider provider;
         ProviderRequest req;
         req.requestId = "10/163/395";
@@ -105,16 +110,28 @@ TEST_SUITE("terrain download provider") {
         CHECK(std::filesystem::exists(file));
         CHECK(std::filesystem::file_size(file) > 0);
 
-        // Verify the file has the magic header.
+        // Verify the file is a GDAL-readable GeoTIFF with CRS and geotransform
+        // (BLOCKER 2 regression: mock provider must write real GeoTIFFs, not
+        // the old MDEM binary format).
         {
-            std::ifstream in(file, std::ios::binary);
-            char magic[4];
-            in.read(magic, 4);
-            CHECK(magic[0] == 'M');
-            CHECK(magic[1] == 'D');
-            CHECK(magic[2] == 'E');
-            CHECK(magic[3] == 'M');
-        } // in is closed here
+            GDALDatasetH ds = GDALOpen(file.string().c_str(), GA_ReadOnly);
+            CHECK(ds != nullptr);
+            if (ds) {
+                CHECK(GDALGetRasterXSize(ds) > 0);
+                CHECK(GDALGetRasterYSize(ds) > 0);
+                // CRS must be set (non-empty WKT). The mock provider sets
+                // EPSG:3857; the full pipeline test verifies the authority
+                // code is resolved correctly.
+                const char* projWkt = GDALGetProjectionRef(ds);
+                CHECK(projWkt != nullptr);
+                CHECK(std::string{projWkt}.size() > 0);
+                double geotransform[6] = {0};
+                GDALGetGeoTransform(ds, geotransform);
+                CHECK(geotransform[1] > 0.0);  // pixel width positive
+                CHECK(geotransform[5] < 0.0);  // pixel height negative
+                GDALClose(ds);
+            }
+        }
 
         std::error_code ec;
         std::filesystem::remove_all(tempDir, ec);

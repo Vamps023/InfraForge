@@ -11,7 +11,7 @@
 namespace infraforge::persistence {
 namespace {
 
-constexpr std::array<MigrationDefinition, 3> kCanonicalMigrations{{
+constexpr std::array<MigrationDefinition, 4> kCanonicalMigrations{{
     {
         .id = 1,
         .name = "core project foundation",
@@ -80,8 +80,16 @@ CREATE TABLE terrain_datasets (
     modified_at TEXT NOT NULL
 );
 )sql",
-    }},
-};
+    },
+    {
+        .id = 4,
+        .name = "terrain source attribution",
+        .sql = R"sql(
+ALTER TABLE terrain_datasets
+    ADD COLUMN source_attribution TEXT NOT NULL DEFAULT '';
+)sql",
+    },
+}};
 
 } // namespace
 

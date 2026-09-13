@@ -2,16 +2,53 @@
 
 #include <algorithm>
 #include <cmath>
+#include <mutex>
 #include <set>
 #include <sstream>
+#include <vector>
+
+#include <gdal.h>
+#include <gdal_priv.h>
+#include <ogr_spatialref.h>
 
 namespace infraforge::domain::terrain {
 
 namespace {
 
+// Ensure GDAL is registered and PROJ_DATA is set before any GDAL call.
+// Mirrors GdalTerrainSource::ensureGdalRegistered() so the mock provider
+// can resolve EPSG codes (e.g. importFromEPSG(3857)) without depending on
+// the persistence layer.
+void ensureGdalRegistered() {
+    static std::once_flag registered;
+    std::call_once(registered, [] {
+#ifdef INFRAFORGE_PROJ_DATA_DIR
+#ifdef _WIN32
+        (void)_putenv_s("PROJ_DATA", INFRAFORGE_PROJ_DATA_DIR);
+#else
+        (void)setenv("PROJ_DATA", INFRAFORGE_PROJ_DATA_DIR, 0);
+#endif
+#endif
+        GDALAllRegister();
+    });
+}
+
 constexpr double kPi = 3.14159265358979323846;
 
 constexpr double kWebMercatorMaxLat = 85.05112878;
+
+constexpr double kEarthRadius = 6378137.0;
+
+// Web Mercator forward: WGS84 lat/lon -> EPSG:3857 x/y (meters).
+struct WebMercatorCoord { double x; double y; };
+WebMercatorCoord toWebMercator(double lonDeg, double latDeg) {
+    const double lonRad = lonDeg * kPi / 180.0;
+    const double latRad = latDeg * kPi / 180.0;
+    return {
+        kEarthRadius * lonRad,
+        kEarthRadius * std::log(std::tan(kPi / 4.0 + latRad / 2.0))
+    };
+}
 
 [[nodiscard]] std::int32_t lonToTileX(double lon, std::uint32_t zoom) {
     const double n = std::pow(2.0, static_cast<double>(zoom));
@@ -97,39 +134,70 @@ std::filesystem::path MockTerrainProvider::fetchRequest(
         throw ProviderError(*failMode_, "mock provider configured to fail");
     }
 
-    // Write a simple deterministic binary raster file (not a real GeoTIFF,
-    // but enough to test the workflow). Format: 4-byte magic "MDEM",
-    // 4-byte width, 4-byte height, then float32 elevation values.
-    // The elevation is deterministic from the request bounds.
-    constexpr std::uint32_t kDim = 32;
+    ensureGdalRegistered();
+
+    // Write a real GeoTIFF with EPSG:3857 CRS and proper geotransform so the
+    // canonical assembly pipeline (assembleCanonicalGeoTiff) can read it via
+    // GDAL. This replaces the old MDEM binary placeholder (BLOCKER 2).
+    constexpr int kDim = 32;
+
     // Sanitize the request ID into a valid filename (replace / with _).
     std::string safeId = request.requestId;
     std::replace(safeId.begin(), safeId.end(), '/', '_');
-    const std::string fileName = "mock_" + safeId + ".mdat";
+    const std::string fileName = "mock_" + safeId + ".tif";
     const std::filesystem::path filePath = tempDir / fileName;
 
-    std::ofstream out(filePath, std::ios::binary);
-    if (!out) {
+    // Convert WGS84 bounds to Web Mercator (EPSG:3857) for the geotransform.
+    const auto sw = toWebMercator(request.bounds.west, request.bounds.south);
+    const auto ne = toWebMercator(request.bounds.east, request.bounds.north);
+    const double minX = sw.x;
+    const double maxY = ne.y;
+    const double pixelW = (ne.x - sw.x) / static_cast<double>(kDim);
+    const double pixelH = (ne.y - sw.y) / static_cast<double>(kDim);
+
+    GDALDriverH driver = GDALGetDriverByName("GTiff");
+    if (!driver) {
         throw ProviderError(ProviderErrorCode::SourceUnavailable,
-            "cannot create mock terrain file");
+            "GDAL GTiff driver not available for mock provider");
     }
-    const char magic[4] = {'M', 'D', 'E', 'M'};
-    out.write(magic, 4);
-    const std::uint32_t width = kDim;
-    const std::uint32_t height = kDim;
-    out.write(reinterpret_cast<const char*>(&width), 4);
-    out.write(reinterpret_cast<const char*>(&height), 4);
+    GDALDatasetH ds = GDALCreate(driver, filePath.string().c_str(),
+        kDim, kDim, 1, GDT_Float32, nullptr);
+    if (!ds) {
+        throw ProviderError(ProviderErrorCode::SourceUnavailable,
+            "cannot create mock terrain GeoTIFF");
+    }
+
+    double geotransform[6] = {minX, pixelW, 0.0, maxY, 0.0, -pixelH};
+    GDALSetGeoTransform(ds, geotransform);
+
+    OGRSpatialReference srs;
+    srs.importFromEPSG(3857);
+    char* wkt = nullptr;
+    srs.exportToWkt(&wkt);
+    GDALSetProjection(ds, wkt);
+    CPLFree(wkt);
+
+    GDALRasterBandH band = GDALGetRasterBand(ds, 1);
+    GDALSetRasterNoDataValue(band, -9999.0);
 
     // Deterministic elevation: based on the center latitude.
     const double centerLat = (request.bounds.north + request.bounds.south) * 0.5;
-    const double baseElevation = std::abs(centerLat) * 100.0; // simple ramp
-    for (std::uint32_t row = 0; row < kDim; ++row) {
-        for (std::uint32_t col = 0; col < kDim; ++col) {
-            float value = static_cast<float>(baseElevation + row * 0.5 + col * 0.25);
-            out.write(reinterpret_cast<const char*>(&value), 4);
+    const double baseElevation = std::abs(centerLat) * 100.0;
+    std::vector<float> rowData(kDim, 0.0F);
+    for (int row = 0; row < kDim; ++row) {
+        for (int col = 0; col < kDim; ++col) {
+            rowData[static_cast<std::size_t>(col)] =
+                static_cast<float>(baseElevation + row * 0.5 + col * 0.25);
+        }
+        CPLErr err = GDALRasterIO(band, GF_Write, 0, row, kDim, 1,
+            rowData.data(), kDim, 1, GDT_Float32, 0, 0);
+        if (err != CE_None) {
+            GDALClose(ds);
+            throw ProviderError(ProviderErrorCode::SourceUnavailable,
+                "cannot write mock terrain GeoTIFF row");
         }
     }
-    out.close();
+    GDALClose(ds);
     return filePath;
 }
 

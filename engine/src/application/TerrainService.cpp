@@ -77,6 +77,20 @@ constexpr double kDlCommitEnd = 0.95;
     throw TerrainError(code, message);
 }
 
+// Web Mercator forward: WGS84 lat/lon -> EPSG:3857 x/y (meters).
+// Used to transform selected coverage bounds for raster clipping.
+constexpr double kWebMercatorPi = 3.14159265358979323846;
+constexpr double kWebMercatorEarthRadius = 6378137.0;
+struct WebMercatorPoint { double x, y; };
+WebMercatorPoint toWebMercatorMeters(double lonDeg, double latDeg) {
+    const double lonRad = lonDeg * kWebMercatorPi / 180.0;
+    const double latRad = latDeg * kWebMercatorPi / 180.0;
+    return {
+        kWebMercatorEarthRadius * lonRad,
+        kWebMercatorEarthRadius * std::log(std::tan(kWebMercatorPi / 4.0 + latRad / 2.0))
+    };
+}
+
 // RAII scope guard for temporary directory cleanup (BLOCKER 11).
 class TempDirGuard {
 public:
@@ -96,6 +110,8 @@ private:
 // Assemble multiple temporary GeoTIFFs into a single canonical GeoTIFF
 // (BLOCKER 2). Uses GDAL to read each input tile, compute the union bounds,
 // and write a single mosaicked GeoTIFF with NoData in gaps (BLOCKER 4).
+// If selectedCoverage is non-empty, pixels outside the coverage rectangles
+// are set to NoData (clip ONLY to selected application coverage, BLOCKER 2).
 struct AssembledRaster {
     std::filesystem::path path;
     double minX, minY, maxX, maxY;  // Web Mercator bounds
@@ -105,9 +121,13 @@ struct AssembledRaster {
     bool hasNodata;
 };
 
+// Coverage rectangle in EPSG:3857 (Web Mercator) metres.
+struct CoverageRect { double minX, minY, maxX, maxY; };
+
 AssembledRaster assembleCanonicalGeoTiff(
     const std::vector<std::filesystem::path>& inputTiles,
-    const std::filesystem::path& outputPath) {
+    const std::filesystem::path& outputPath,
+    const std::vector<CoverageRect>& selectedCoverage = {}) {
 
     if (inputTiles.empty()) {
         failImport(TerrainErrorCode::InvalidArgument,
@@ -274,6 +294,40 @@ AssembledRaster assembleCanonicalGeoTiff(
         }
 
         GDALClose(ds);
+    }
+
+    // Clip to selected coverage (BLOCKER 2: clip ONLY to selected application
+    // coverage). Pixels outside the coverage rectangles are set to NoData so
+    // unselected gaps have no terrain data. This prevents provider overfetch
+    // from filling gaps between disconnected selected tiles (BLOCKER 4).
+    if (!selectedCoverage.empty()) {
+        std::vector<float> maskBuf(static_cast<size_t>(outWidth) * outHeight);
+        CPLErr maskErr = GDALRasterIO(outBand, GF_Read,
+            0, 0, outWidth, outHeight,
+            maskBuf.data(), outWidth, outHeight, GDT_Float32, 0, 0);
+        if (maskErr == CE_None) {
+            for (int row = 0; row < outHeight; ++row) {
+                const double py = unionMaxY - (static_cast<double>(row) + 0.5) * pixelH;
+                for (int col = 0; col < outWidth; ++col) {
+                    const double px = unionMinX + (static_cast<double>(col) + 0.5) * pixelW;
+                    bool inside = false;
+                    for (const auto& rect : selectedCoverage) {
+                        if (px >= rect.minX && px <= rect.maxX &&
+                            py >= rect.minY && py <= rect.maxY) {
+                            inside = true;
+                            break;
+                        }
+                    }
+                    if (!inside) {
+                        maskBuf[static_cast<size_t>(row) * outWidth + col] =
+                            static_cast<float>(nodata);
+                    }
+                }
+            }
+            GDALRasterIO(outBand, GF_Write,
+                0, 0, outWidth, outHeight,
+                maskBuf.data(), outWidth, outHeight, GDT_Float32, 0, 0);
+        }
     }
 
     GDALClose(outDs);
@@ -1148,16 +1202,19 @@ JobRecord TerrainService::startDownload(
                 "provider not found: " + payload->providerId);
         }
 
-        // RAII guard for temp directory cleanup (BLOCKER 11).
+        // RAII guard for temp directory cleanup (BLOCKER 11). The temp dir
+        // holds provider tile files; it is removed regardless of how the
+        // worker exits (success, failure, cancellation).
         const std::filesystem::path tempDir =
-            payload->projectDirectory / ".iforge" / "terrain" / "downloads" / runtime::generateUuidV4();
+            payload->projectDirectory / "terrain" / "downloads" / runtime::generateUuidV4();
         std::filesystem::create_directories(tempDir);
         TempDirGuard tempGuard(tempDir);
 
         // Phase 1: Planning already done. Report 0-5%.
-        context.reportProgress(0, 100, "Planning download");
+        context.reportNormalizedProgress(0.0, "Planning download");
 
-        // Phase 2: Download provider requests (5-55%).
+        // Phase 2: Provider acquisition (5-55%). Fetch each provider request
+        // and decode it to a temporary GeoTIFF. Progress is by request count.
         std::vector<std::filesystem::path> downloadedFiles;
         downloadedFiles.reserve(payload->requests.size());
         const std::uint64_t totalRequests = payload->requests.size();
@@ -1174,65 +1231,96 @@ JobRecord TerrainService::startDownload(
                 throw TerrainError(TerrainErrorCode::SourceUnreadable,
                     "provider request failed: " + std::string(error.what()));
             }
-            // Report progress in the fetch phase (5-55%).
+            // Report progress in the fetch phase (5-55%) with real units.
             const double frac = static_cast<double>(i + 1) / static_cast<double>(totalRequests);
-            const int pct = static_cast<int>(kDlFetchStart * 100 + frac * fetchRange * 100);
-            context.reportProgress(pct, 100, "Downloaded " + request.requestId);
+            context.reportNormalizedProgress(
+                kDlFetchStart + frac * fetchRange,
+                "Downloaded " + request.requestId +
+                " (" + std::to_string(i + 1) + "/" + std::to_string(totalRequests) + ")");
         }
 
         context.throwIfCancelled();
 
-        // Phase 3: Decode/validation (55-70%) — handled by the provider
-        // during fetchRequest (GDAL decoding is done there).
-        context.reportProgress(static_cast<int>(kDlDecodeEnd * 100), 100, "Decoding complete");
+        // Phase 3: Decode/validation (55-70%). The provider decodes PNG/raw
+        // during fetchRequest; this phase validates that every fetched file
+        // is a GDAL-readable GeoTIFF with a CRS.
+        const double decodeRange = kDlDecodeEnd - kDlFetchEnd;
+        for (std::size_t i = 0; i < downloadedFiles.size(); ++i) {
+            context.throwIfCancelled();
+            ports::TerrainSourceInfo tileInfo = reader_.probe(downloadedFiles[i]);
+            if (tileInfo.crsDefinition.empty()) {
+                failImport(TerrainErrorCode::MissingCrs,
+                    "provider tile has no CRS: " + downloadedFiles[i].string());
+            }
+            const double frac = static_cast<double>(i + 1) / static_cast<double>(totalRequests);
+            context.reportNormalizedProgress(
+                kDlFetchEnd + frac * decodeRange,
+                "Validated tile " + std::to_string(i + 1) + "/" + std::to_string(totalRequests));
+        }
 
-        // Phase 4: Assembly (70-85%) — mosaic provider GeoTIFFs into a
-        // single canonical GeoTIFF using GDAL (BLOCKER 2).
-        // Use a stable project-relative path (BLOCKER 3).
+        // Phase 4: Assembly (70-85%). Mosaic provider GeoTIFFs into a single
+        // canonical GeoTIFF using GDAL (BLOCKER 2). Use the same project-
+        // relative canonical directory as local import (BLOCKER 3).
         const std::string datasetId = runtime::generateUuidV4();
         const std::filesystem::path canonicalDir =
-            payload->projectDirectory / ".iforge" / "terrain" / "elevation";
+            payload->projectDirectory / "terrain" / "elevation";
         std::filesystem::create_directories(canonicalDir);
 
-        // Temporary .importing file; renamed to .tif on success.
+        // Temporary .importing file; commitImportedDataset renames it to
+        // the final .tif path on canonical commit success (BLOCKER 3).
         const std::filesystem::path tempRaster =
             canonicalDir / (datasetId + ".tif.importing");
-        const std::filesystem::path finalRaster =
-            canonicalDir / (datasetId + ".tif");
 
-        context.reportProgress(static_cast<int>(kDlAssembleEnd * 100 - 5), 100, "Assembling raster");
+        // RAII guard: if the worker exits via exception after assembly,
+        // the .importing file is removed (BLOCKER 11). Released before
+        // return since onComplete takes ownership of the file.
+        TempDirGuard rasterGuard(tempRaster);
 
-        AssembledRaster assembled = assembleCanonicalGeoTiff(downloadedFiles, tempRaster);
+        context.reportNormalizedProgress(kDlAssembleEnd - 0.05, "Assembling raster");
 
-        // Temp download dir cleaned by RAII guard (BLOCKER 11).
-        tempGuard.release();  // Don't clean yet — we still need the temp files
-        // Actually, the temp files are in the tempDir, which we want to clean.
-        // But we've already read them into the assembled raster. Clean now.
+        // Compute the selected coverage in EPSG:3857 (Web Mercator) for
+        // clipping the assembled raster to selected application coverage
+        // (BLOCKER 2: clip ONLY to selected application coverage).
+        std::vector<CoverageRect> selectedCoverage;
+        selectedCoverage.reserve(payload->selectedTiles.size());
+        for (const auto& tile : payload->selectedTiles) {
+            const auto sw = toWebMercatorMeters(tile.bounds.west, tile.bounds.south);
+            const auto ne = toWebMercatorMeters(tile.bounds.east, tile.bounds.north);
+            selectedCoverage.push_back({sw.x, sw.y, ne.x, ne.y});
+        }
+
+        // The assembled raster metadata (bounds, CRS) is re-derived from the
+        // probe below; the assembly return value is not used directly.
+        (void)assembleCanonicalGeoTiff(downloadedFiles, tempRaster, selectedCoverage);
+
+        // Provider tile temp files are no longer needed after assembly.
+        // The RAII guard cleans the temp dir on scope exit.
         std::error_code cleanupEc;
         std::filesystem::remove_all(tempDir, cleanupEc);
 
-        context.reportProgress(static_cast<int>(kDlAssembleEnd * 100), 100, "Assembly complete");
+        context.reportNormalizedProgress(kDlAssembleEnd, "Assembly complete");
 
-        // Phase 5: Canonical validation (85-92%) — probe the assembled
-        // GeoTIFF using the canonical GdalTerrainSource to derive real
-        // metadata (BLOCKER 2). Do NOT fabricate metadata.
-        context.reportProgress(static_cast<int>(kDlValidateEnd * 100 - 3), 100, "Validating raster");
+        // Phase 5: Canonical validation/hash (85-92%). Probe the assembled
+        // GeoTIFF using the canonical GdalTerrainSource to derive REAL
+        // metadata (BLOCKER 2). Do NOT fabricate metadata. Then transform
+        // coverage from source CRS to project-global via GeoTransformService
+        // (same as local import), scan for real elevation range/NoData, and
+        // compute SHA-256 provenance.
+        context.reportNormalizedProgress(kDlValidateEnd - 0.07, "Validating raster");
+        context.throwIfCancelled();
 
-        ports::TerrainSourceInfo sourceInfo = reader_.probe(tempRaster);
+        const ports::TerrainSourceInfo sourceInfo = reader_.probe(tempRaster);
+        if (sourceInfo.width <= 0 || sourceInfo.height <= 0 || sourceInfo.crsDefinition.empty()) {
+            failImport(TerrainErrorCode::CorruptSource,
+                "assembled terrain raster is not a valid raster");
+        }
 
-        // Rename to final canonical path (BLOCKER 3).
-        std::filesystem::rename(tempRaster, finalRaster);
-
-        context.reportProgress(static_cast<int>(kDlValidateEnd * 100), 100, "Validation complete");
-
-        // Phase 6: Canonical commit (92-95%) — handled by the completion
-        // handler. Build the import payload with REAL metadata from the
-        // probe (BLOCKER 2).
+        // Build the import payload and derive ALL metadata from the probe.
         auto result = std::shared_ptr<ImportPayload>(new ImportPayload{
             .dataset = domain::terrain::TerrainDataset{},
             .projectUuid = payload->projectUuid,
             .projectDirectory = payload->projectDirectory,
-            .tempFile = finalRaster,
+            .tempFile = tempRaster,  // .importing file; commit renames it
             .grid = world_.grid(),
             .project = payload->project,
         });
@@ -1240,34 +1328,119 @@ JobRecord TerrainService::startDownload(
         domain::terrain::TerrainDataset& dataset = result->dataset;
         dataset.id = domain::terrain::entityIdFromUuidText(datasetId);
         dataset.displayName = payload->displayName;
-        // Derive metadata from the probe, not fabricated.
+        // Derive metadata from the probe — never fabricated.
         dataset.sourceFormat = sourceInfo.format;
         dataset.sourceCrs = sourceInfo.crsDefinition;
         dataset.rasterWidth = sourceInfo.width;
         dataset.rasterHeight = sourceInfo.height;
+        dataset.originX = sourceInfo.originX;
+        dataset.originY = sourceInfo.originY;
+        dataset.cellSizeX = sourceInfo.pixelSizeX;
+        dataset.cellSizeY = sourceInfo.pixelSizeY;
         dataset.elevationUnit = sourceInfo.elevationUnit;
         dataset.elevationUnitToMetre = sourceInfo.elevationUnitToMetre;
         dataset.hasNodata = sourceInfo.hasNodata;
         dataset.nodataValue = sourceInfo.nodataValue;
-        // Bounds from the assembled raster (Web Mercator → project global).
-        // The canonical bounds are in project-global coordinates.
-        // For now, use the source bounds directly (the commit handler
-        // will transform if needed).
-        dataset.bounds = domain::world::SpatialBounds::ofEdges(
-            assembled.minX, assembled.minY, assembled.maxX, assembled.maxY);
-
-        // Compute min/max Z from the source info if available.
-        dataset.minZ = 0.0;
-        dataset.maxZ = 1000.0;
-
-        // Set the storage path (BLOCKER 3).
+        dataset.sourceBytes = sourceInfo.fileBytes;
         dataset.storagePath = "terrain/elevation/" + datasetId + ".tif";
-
-        // Store provenance/attribution.
         dataset.sourceAttribution = provider->info().attribution;
+        dataset.createdAt = runtime::utcTimestampNow();
+        dataset.modifiedAt = dataset.createdAt;
 
-        context.reportProgress(static_cast<int>(kDlCommitEnd * 100), 100, "Committing");
+        // Worker-confined transform service (PROJ objects are thread-bound).
+        const domain::geo::GeoTransformService workerTransforms;
+        const domain::geo::ProjectGeoreference& project = payload->project;
+        const domain::geo::SourceSpatialReference sourceSrs{
+            .horizontalCrs = dataset.sourceCrs, .verticalCrs = ""};
 
+        // Coverage transform: compute bounds from the SELECTED application
+        // coverage, not the full raster extent (BLOCKER 2: clip ONLY to
+        // selected application coverage; BLOCKER 4: unselected gaps must
+        // stay outside canonical coverage). Each selected tile's WGS84
+        // bounds are transformed to EPSG:3857, then to project-global via
+        // GeoTransformService. This ensures:
+        //   - world_.chunksIntersecting only generates chunks for selected area
+        //   - terrain.sample in gaps returns OutsideCoverage
+        //   - tile generation only covers selected area
+        domain::world::SpatialBounds coverage = domain::world::SpatialBounds::empty();
+        for (const auto& tile : payload->selectedTiles) {
+            // Transform all four corners of the selected tile to project-global.
+            for (std::int64_t corner = 0; corner < 4; ++corner) {
+                const double lon = (corner % 2 == 1) ? tile.bounds.east : tile.bounds.west;
+                const double lat = (corner / 2 == 1) ? tile.bounds.south : tile.bounds.north;
+                const auto wm = toWebMercatorMeters(lon, lat);
+                const auto position = workerTransforms.sourceToProjectGlobal(
+                    project, sourceSrs,
+                    domain::geo::GeoCoordinate{.x = wm.x, .y = wm.y, .z = 0.0});
+                if (!domain::geo::isFinite(position)) {
+                    failImport(TerrainErrorCode::InvalidCoverage,
+                        "downloaded coverage corner transforms to a non-finite canonical position");
+                }
+                coverage.expandTo(position);
+            }
+        }
+        if (coverage.isEmpty()) {
+            failImport(TerrainErrorCode::InvalidCoverage,
+                "downloaded coverage is empty after transform");
+        }
+        dataset.bounds = coverage;
+
+        // Elevation scan: read the assembled raster in bounded strips and
+        // compute the real min/max Z and NoData cell count (same as local
+        // import). Progress is by scanned rows.
+        const std::uint64_t totalScanRows = static_cast<std::uint64_t>(dataset.rasterHeight);
+        bool anyValid = false;
+        double minZSource = std::numeric_limits<double>::infinity();
+        double maxZSource = -std::numeric_limits<double>::infinity();
+        std::uint64_t nodataCells = 0;
+        const double scanRange = kDlValidateEnd - kDlAssembleEnd;
+
+        for (std::int64_t row = 0; row < dataset.rasterHeight; row += kElevationScanRows) {
+            context.throwIfCancelled();
+            const ports::TerrainElevationBlock block = reader_.readBlock(tempRaster, 0, row,
+                dataset.rasterWidth,
+                std::min<std::int64_t>(kElevationScanRows, dataset.rasterHeight - row));
+            for (const double value : block.elevations) {
+                if (std::isnan(value)) {
+                    ++nodataCells;
+                    continue;
+                }
+                anyValid = true;
+                minZSource = std::min(minZSource, value);
+                maxZSource = std::max(maxZSource, value);
+            }
+            const double scanProgress =
+                static_cast<double>(std::min(row + kElevationScanRows, dataset.rasterHeight))
+                / static_cast<double>(totalScanRows);
+            context.reportNormalizedProgress(
+                kDlAssembleEnd + scanProgress * scanRange,
+                "measuring elevation range (" + std::to_string(row + kElevationScanRows) +
+                "/" + std::to_string(totalScanRows) + " rows)");
+        }
+        if (!anyValid) {
+            failImport(TerrainErrorCode::UnsupportedRaster,
+                "downloaded raster contains no valid elevation cells");
+        }
+        dataset.minZ = minZSource * dataset.elevationUnitToMetre / project.linearUnit.toMetre;
+        dataset.maxZ = maxZSource * dataset.elevationUnitToMetre / project.linearUnit.toMetre;
+        if (nodataCells > 0) {
+            dataset.hasNodata = true;
+            dataset.diagnostics.push_back({TerrainErrorCode::NodataCells,
+                std::to_string(nodataCells) + " NoData cells are excluded from sampling and rendering"});
+        }
+
+        // SHA-256 provenance of the assembled raster (same as local import).
+        dataset.sourceSha256 = runtime::sha256HexOfFile(tempRaster);
+
+        context.reportNormalizedProgress(kDlValidateEnd, "Validation complete");
+
+        // Phase 6: Canonical commit (92-95%) — handled by the completion
+        // handler (commitImportedDataset), which renames the .importing
+        // file to the final .tif path and commits the DB row.
+        context.reportNormalizedProgress(kDlCommitEnd, "Committing");
+
+        // Release the raster guard: onComplete takes ownership of the file.
+        rasterGuard.release();
         return result;
     };
 

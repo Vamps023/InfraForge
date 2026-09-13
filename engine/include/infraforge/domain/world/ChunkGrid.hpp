@@ -122,7 +122,11 @@ public:
     // Closed footprint of one cell: [x*size, (x+1)*size] x
     // [y*size, (y+1)*size] — note the closed upper edge so that
     // chunkBounds(cell).contains(...) matches chunkAt boundary semantics
-    // for the shared edge position.
+    // for the shared edge position. ChunkCoord is a public value type
+    // spanning all of int64, so coordinates outside the documented
+    // supported range (±maxChunkIndex) are rejected with
+    // WorldPartitionError (CoordinateOutOfRange) instead of producing a
+    // collapsed footprint.
     [[nodiscard]] SpatialBounds chunkBounds(ChunkCoord chunk) const;
 
 private:

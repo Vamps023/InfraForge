@@ -5,6 +5,7 @@
 #include "infraforge/domain/world/ChunkGrid.hpp"
 #include "infraforge/domain/world/WorldPartitionError.hpp"
 
+#include <cstdint>
 #include <limits>
 #include <string>
 #include <vector>
@@ -239,6 +240,29 @@ TEST_SUITE("logical chunk grid") {
             [&] { static_cast<void>(unit.chunkAt(9007199254740992.0, 0.0)); });
         REQUIRE(beyond.has_value());
         CHECK(beyond->code() == world::WorldPartitionErrorCode::CoordinateOutOfRange);
+    }
+
+    TEST_CASE("chunk bounds reject coordinates outside the supported index range") {
+        const world::ChunkGrid unit{world::ChunkGridConfig{1.0}};
+
+        // ChunkCoord is public and spans all of int64; chunkBounds must
+        // enforce the documented range itself rather than trusting its
+        // input to have come from chunkAt.
+        for (const auto extreme : {std::numeric_limits<std::int64_t>::max(),
+                 std::numeric_limits<std::int64_t>::min(),
+                 static_cast<std::int64_t>(9007199254740992), // 2^53
+                 static_cast<std::int64_t>(-9007199254740992)}) {
+            CAPTURE(extreme);
+            const auto xError = captureException<world::WorldPartitionError>(
+                [&] { static_cast<void>(unit.chunkBounds(world::ChunkCoord{extreme, 0})); });
+            REQUIRE(xError.has_value());
+            CHECK(xError->code() == world::WorldPartitionErrorCode::CoordinateOutOfRange);
+
+            const auto yError = captureException<world::WorldPartitionError>(
+                [&] { static_cast<void>(unit.chunkBounds(world::ChunkCoord{0, extreme})); });
+            REQUIRE(yError.has_value());
+            CHECK(yError->code() == world::WorldPartitionErrorCode::CoordinateOutOfRange);
+        }
     }
 
     TEST_CASE("bounds spanning more cells than the enumeration cap are rejected") {

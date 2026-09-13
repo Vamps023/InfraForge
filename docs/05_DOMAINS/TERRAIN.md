@@ -1,6 +1,6 @@
 # Domain: Terrain
 
-**Status:** Issue #6 in progress. The local GeoTIFF import/sampling/tiling/renderer path exists on the issue branch, but Issue #6 is **not complete** until the `Download Area` draw/select/selective-acquisition path is implemented and both paths pass the acceptance gates in GitHub issue #6.
+**Status:** Issue #6 in progress. Both the local GeoTIFF import/sampling/tiling/renderer path and the `Download Area` draw/select/download-selected path are implemented on the issue branch. The Download Area path uses a mock terrain provider for deterministic testing; production providers will be added as verified adapters. Issue #6 remains open pending another full review of PR #28.
 
 The Terrain domain owns canonical elevation datasets imported from real georeferenced rasters or acquired from supported remote DEM providers. It is the first authoring-scale domain built on the World partition (issue #4) and the Geo service's single canonical georeference (ADR-0007).
 

@@ -158,6 +158,12 @@ void VulkanRenderer::setTerrainScene(const TerrainScene& scene) {
     {
         std::lock_guard lock{stateMutex_};
         pendingScene_ = scene;
+        // Reset camera fit so a new project's terrain is re-framed.
+        // BLOCKER 2/3: prevents stale camera origin from a previous project
+        // leaking into the new scene.
+        cameraFitted_ = false;
+        renderOriginE_ = 0.0;
+        renderOriginN_ = 0.0;
     }
     terrainPass_.setScene(scene);
 }
@@ -245,15 +251,21 @@ void VulkanRenderer::runLoop(std::atomic_bool& running) {
                 pendingScene_.reset();
             }
             if (!cameraFitted_ && fitScene.has_value() && !fitScene->tiles.empty()) {
-                double minE = fitScene->tiles.front().minEasting;
-                double maxE = fitScene->tiles.front().maxEasting;
-                double minN = fitScene->tiles.front().minNorthing;
-                double maxN = fitScene->tiles.front().maxNorthing;
+                // Capture the render origin from the scene so the camera
+                // operates in render-local coordinates (matching terrain
+                // vertices). BLOCKER 2: prevents canonical vs render-local
+                // coordinate mismatch for projects with large origins.
+                renderOriginE_ = fitScene->originEasting;
+                renderOriginN_ = fitScene->originNorthing;
+                double minE = fitScene->tiles.front().minEasting - renderOriginE_;
+                double maxE = fitScene->tiles.front().maxEasting - renderOriginE_;
+                double minN = fitScene->tiles.front().minNorthing - renderOriginN_;
+                double maxN = fitScene->tiles.front().maxNorthing - renderOriginN_;
                 for (const TerrainSceneTile& tile : fitScene->tiles) {
-                    minE = std::min(minE, tile.minEasting);
-                    maxE = std::max(maxE, tile.maxEasting);
-                    minN = std::min(minN, tile.minNorthing);
-                    maxN = std::max(maxN, tile.maxNorthing);
+                    minE = std::min(minE, tile.minEasting - renderOriginE_);
+                    maxE = std::max(maxE, tile.maxEasting - renderOriginE_);
+                    minN = std::min(minN, tile.minNorthing - renderOriginN_);
+                    maxN = std::max(maxN, tile.maxNorthing - renderOriginN_);
                 }
                 const double extentX = std::max(1.0, maxE - minE);
                 const double extentY = std::max(1.0, maxN - minN);
@@ -262,6 +274,7 @@ void VulkanRenderer::runLoop(std::atomic_bool& running) {
                         extentY / static_cast<double>(height)),
                     0.05, 100000.0);
                 camera_.setMetersPerPixel(mpp);
+                // Camera center in render-local coordinates.
                 camera_.setCenter((minE + maxE) * 0.5, (minN + maxN) * 0.5);
                 cameraFitted_ = true;
             }

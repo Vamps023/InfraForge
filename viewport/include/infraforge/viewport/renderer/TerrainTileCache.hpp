@@ -23,6 +23,12 @@ struct TerrainCameraState {
     double metersPerPixel{1.0};
     double viewportWidth{0.0};
     double viewportHeight{0.0};
+    // Render origin in canonical space; tile bounds (which are canonical)
+    // are converted to render-local by subtracting this origin before
+    // distance/residency calculations. This keeps the camera and tile
+    // distance math in the same render-local space as the GPU vertices.
+    double originEasting{0.0};
+    double originNorthing{0.0};
 };
 
 // GPU-independent terrain tile streaming policy (docs/04_RENDERER/

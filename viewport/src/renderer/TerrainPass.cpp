@@ -608,6 +608,8 @@ void TerrainPass::update(const GridCamera& camera) {
         .metersPerPixel = camera.metersPerPixel(),
         .viewportWidth = static_cast<double>(camera.viewportWidth()),
         .viewportHeight = static_cast<double>(camera.viewportHeight()),
+        .originEasting = renderFrame_.has_value() ? renderFrame_->renderOrigin().easting : 0.0,
+        .originNorthing = renderFrame_.has_value() ? renderFrame_->renderOrigin().northing : 0.0,
     };
 
     const TerrainTileCache::UpdateResult result = cache_.update(state);

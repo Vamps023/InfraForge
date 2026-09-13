@@ -90,6 +90,12 @@ private:
     GridPass gridPass_;
     GridCamera camera_;
     bool cameraFitted_{false};
+    // Render origin in canonical space, captured from the first scene so
+    // the camera fit and mouse-pan math operate in render-local coordinates
+    // (matching the terrain vertices). BLOCKER 2: prevents canonical vs
+    // render-local coordinate mismatch for projects with large origins.
+    double renderOriginE_{0.0};
+    double renderOriginN_{0.0};
 
     // Frame-in-flight synchronization (double buffered). Acquire semaphores
     // and fences are per frame slot; render-finished semaphores are per

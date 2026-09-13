@@ -84,6 +84,7 @@ The product is divided into Project, Geo, Terrain, Road, Lane, Junction, Infrast
 - Global command palette.
 - Keyboard shortcuts for common authoring actions.
 - No critical operation represented only by transient toast notification.
+- 2D map and 3D viewport are equal-quality views of the same canonical world. Supported editing, selection, snapping, diagnostics, undo/redo, and revision behavior must remain semantically equivalent across both views; projection and camera differences are presentation concerns only.
 
 ## 8. Reliability requirements
 

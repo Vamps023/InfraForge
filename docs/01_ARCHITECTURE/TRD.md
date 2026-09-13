@@ -80,6 +80,8 @@ Canonical structured data is stored transactionally. Generated cache, mesh, and 
 
 Global domain coordinates use double precision. GPU-facing coordinates use camera-relative/local representations appropriate for precision. World partitioning limits resident scene data. Dirty tracking distinguishes geometry, material, topology, terrain, and simulation invalidations.
 
+2D and 3D are view adapters over the same canonical domain and application command path. They may have independent camera and input controllers, but they must share entity identifiers, snapping/constraint services, selection resolution, diagnostics, revisions, undo records, and invalidation results. A view must not introduce a second road, lane, junction, CRS, or mesh-authoring model. Quality parity is verified with paired 2D/3D acceptance tests for every authoring capability.
+
 ## 11. Security
 
 The local engine binds only to loopback by default. Desktop launch supplies a cryptographically random session token. The WebSocket connection must authenticate during handshake before command processing. Electron renderer context has no direct Node access; preload exposes narrow validated APIs.

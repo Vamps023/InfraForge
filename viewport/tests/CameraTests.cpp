@@ -113,8 +113,8 @@ TEST_CASE("scene refresh and resize preserve an established user camera") {
     EditorCameraController controller;
     controller.camera().setViewport(1200,800);
     controller.adoptScene(sceneAt(380000.0));
-    controller.handleInput(SurfaceInputEvent{.gesture=PointerGesture::Orbit,.deltaX=25.0,.deltaY=-12.0});
-    controller.handleInput(SurfaceInputEvent{.gesture=PointerGesture::Pan,.deltaX=8.0,.deltaY=4.0});
+    controller.handleInput(SurfaceInputEvent{.gesture=PointerGesture::Orbit,.deltaX=25.0,.deltaY=-12.0,.datasetUuid={}});
+    controller.handleInput(SurfaceInputEvent{.gesture=PointerGesture::Pan,.deltaX=8.0,.deltaY=4.0,.datasetUuid={}});
     const auto target=controller.camera().target(); const double yaw=controller.camera().yaw();
     const double pitch=controller.camera().pitch(), distance=controller.camera().distance();
     controller.adoptScene(sceneAt(380000.0,2));
@@ -130,7 +130,7 @@ TEST_CASE("focus selected frames one dataset and frame all covers the scene") {
     controller.adoptScene(sceneAt(380000.0));
     controller.handleInput(SurfaceInputEvent{.action=ViewportAction::FocusTerrain,.datasetUuid="b"});
     CHECK(controller.camera().target().x == doctest::Approx(380350.0));
-    controller.handleInput(SurfaceInputEvent{.action=ViewportAction::FrameAllTerrain});
+    controller.handleInput(SurfaceInputEvent{.action=ViewportAction::FrameAllTerrain,.datasetUuid={}});
     CHECK(controller.camera().target().x == doctest::Approx(380200.0));
 }
 }

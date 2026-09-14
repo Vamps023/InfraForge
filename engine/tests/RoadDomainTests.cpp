@@ -330,7 +330,10 @@ ReferenceAlignment buildLineArc() {
     const double arcLen = radius * kPi / 4.0;
     CircularArcSegment arc{.start = lineEnd.position, .startHeading = lineEnd.heading,
         .curvature = kappa, .length = arcLen};
-    auto built = ReferenceAlignment::build({line, arc});
+    auto built = ReferenceAlignment::build({line, arc},
+        infraforge::domain::road::kDefaultPositionTolerance,
+        infraforge::domain::road::kDefaultHeadingTolerance,
+        1.0); // relax curvature tolerance: line->arc has an intentional curvature step
     REQUIRE(built.has_value());
     return *built;
 }

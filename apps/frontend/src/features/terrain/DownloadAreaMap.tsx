@@ -169,6 +169,39 @@ function MapResizer({ token }: { token?: number }) {
   return null
 }
 
+function MapDiagnostics({ onSnapshot }: { onSnapshot: (snapshot: MapSnapshot) => void }) {
+  const map = useMap()
+  useEffect(() => {
+    const report = () => {
+      const container = map.getContainer()
+      const center = typeof map.getCenter === 'function' ? map.getCenter() : { lat: 0, lng: 0 }
+      const zoom = typeof map.getZoom === 'function' ? map.getZoom() : 0
+      onSnapshot({
+        width: container.clientWidth,
+        height: container.clientHeight,
+        tileDomCount: container.querySelectorAll('.leaflet-tile').length,
+        center: `${center.lat.toFixed(4)},${center.lng.toFixed(4)}`,
+        zoom,
+      })
+    }
+    report()
+    if (typeof map.whenReady === 'function') map.whenReady(report)
+    if (typeof map.on === 'function') map.on('load moveend zoomend resize', report)
+    return () => {
+      if (typeof map.off === 'function') map.off('load moveend zoomend resize', report)
+    }
+  }, [map, onSnapshot])
+  return null
+}
+
+interface MapSnapshot {
+  width: number
+  height: number
+  tileDomCount: number
+  center: string
+  zoom: number
+}
+
 export function DownloadAreaMap({
   area,
   onAreaChange,
@@ -194,6 +227,11 @@ export function DownloadAreaMap({
   const [tileLayerKey, setTileLayerKey] = useState(0)
   const [tileLifecycle, setTileLifecycle] = useState<'idle' | 'started' | 'completed' | 'failed'>('idle')
   const [tileFailureReason, setTileFailureReason] = useState<string | null>(null)
+  const [tileRequestCount, setTileRequestCount] = useState(0)
+  const [tileCompletedCount, setTileCompletedCount] = useState(0)
+  const [tileFailedCount, setTileFailedCount] = useState(0)
+  const [lastTileDiagnostic, setLastTileDiagnostic] = useState<string | null>(null)
+  const [mapSnapshot, setMapSnapshot] = useState<MapSnapshot | null>(null)
   const tileUrl = mapTileConfig.url
 
   // Reset error state when the tile provider URL changes.
@@ -201,19 +239,30 @@ export function DownloadAreaMap({
     setTileErrorCount(0)
     setTileLifecycle('idle')
     setTileFailureReason(null)
+    setTileRequestCount(0)
+    setTileCompletedCount(0)
+    setTileFailedCount(0)
+    setLastTileDiagnostic(null)
   }, [tileUrl])
 
   useEffect(() => window.infraforgeDesktop?.onMapTileDiagnostic?.((diagnostic) => {
     const diagnosticUrl = diagnostic.url
     const configuredPrefix = tileUrl.split('{')[0] ?? tileUrl
     if (diagnosticUrl && !diagnosticUrl.startsWith(configuredPrefix)) return
-    if (diagnostic.state === 'started') setTileLifecycle('started')
+    setLastTileDiagnostic(`${diagnostic.state} ${diagnostic.statusCode ?? diagnostic.error ?? ''}`.trim())
+    console.info('[InfraForge map tile]', diagnostic)
+    if (diagnostic.state === 'started') {
+      setTileLifecycle('started')
+      setTileRequestCount((count) => count + 1)
+    }
     if (diagnostic.state === 'completed') {
+      setTileCompletedCount((count) => count + 1)
       setTileLifecycle('completed')
       setTileFailureReason(diagnostic.statusCode && diagnostic.statusCode >= 400
         ? `HTTP ${diagnostic.statusCode}` : null)
     }
     if (diagnostic.state === 'failed') {
+      setTileFailedCount((count) => count + 1)
       setTileLifecycle('failed')
       setTileFailureReason(diagnostic.error || 'network unavailable')
       setTileErrorCount((count) => count + 1)
@@ -314,6 +363,11 @@ export function DownloadAreaMap({
     setTileLifecycle('idle')
     setTileFailureReason(null)
     setTileLayerKey((k) => k + 1)
+  }, [])
+
+  const reportMapSnapshot = useCallback((snapshot: MapSnapshot) => {
+    setMapSnapshot(snapshot)
+    console.info('[InfraForge map state]', snapshot)
   }, [])
 
   const hasTileError = tileErrorCount > 0
@@ -431,17 +485,29 @@ export function DownloadAreaMap({
           }}
         >
           <MapResizer token={resizeToken} />
+          <MapDiagnostics onSnapshot={reportMapSnapshot} />
           <TileLayer
             key={tileLayerKey}
             attribution={mapTileConfig.attribution}
             url={mapTileConfig.url}
             maxZoom={mapTileConfig.maxZoom}
             eventHandlers={{
-              tileloadstart: () => setTileLifecycle((state) => state === 'idle' ? 'started' : state),
-              tileload: () => setTileLifecycle('completed'),
-              tileerror: () => {
+              tileloadstart: (event: { tile?: HTMLImageElement }) => {
+                setTileLifecycle((state) => state === 'idle' ? 'started' : state)
+                setTileRequestCount((count) => count + 1)
+                if (event.tile?.src) setLastTileDiagnostic(`leaflet started ${event.tile.src}`)
+              },
+              tileload: (event: { tile?: HTMLImageElement }) => {
+                setTileLifecycle('completed')
+                setTileCompletedCount((count) => count + 1)
+                if (event.tile?.src) setLastTileDiagnostic(`leaflet loaded ${event.tile.src}`)
+              },
+              tileerror: (event: { tile?: HTMLImageElement; error?: unknown } = {}) => {
                 setTileLifecycle('failed')
                 setTileErrorCount((c) => c + 1)
+                setTileFailedCount((count) => count + 1)
+                const detail = event.error instanceof Error ? event.error.message : 'tileerror'
+                if (event.tile?.src) setLastTileDiagnostic(`leaflet failed ${detail}: ${event.tile.src}`)
               },
             }}
           />
@@ -501,6 +567,9 @@ export function DownloadAreaMap({
           Map: {mapTileConfig.provider || 'configured provider'} · {tileLifecycle}
           {mapTileConfig.configSource ? ` · ${mapTileConfig.configSource}` : ''}
           {mapTileConfig.buildMarker ? ` · build ${mapTileConfig.buildMarker}` : ''}
+        </span>
+        <span className="map-footer-item map-debug" title={lastTileDiagnostic || undefined}>
+          Debug: {mapSnapshot ? `${mapSnapshot.width}×${mapSnapshot.height}, ${mapSnapshot.tileDomCount} tiles` : 'map pending'} · {tileRequestCount} req / {tileCompletedCount} ok / {tileFailedCount} err
         </span>
       </div>
     </div>

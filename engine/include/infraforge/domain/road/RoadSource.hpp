@@ -137,4 +137,10 @@ struct AlignmentFitResult {
     std::vector<RoadDiagnostic> diagnostics;
 };
 
+// Validates source geometry coordinates: x and y must be finite; z must
+// be absent or finite. NaN is never a valid sentinel for missing elevation
+// (use std::nullopt). Returns typed diagnostics for any invalid vertex.
+[[nodiscard]] std::vector<RoadDiagnostic> validateRoadSource(
+    const RoadSource& source) noexcept;
+
 } // namespace infraforge::domain::road

@@ -30,6 +30,12 @@ std::expected<Road, std::vector<RoadDiagnostic>> Road::build(BuildInput input) {
         diagnostics.push_back(std::move(d));
     }
 
+    // Validate source geometry coordinates.
+    auto sourceDiagnostics = validateRoadSource(input.source);
+    for (auto& d : sourceDiagnostics) {
+        diagnostics.push_back(std::move(d));
+    }
+
     if (!diagnostics.empty()) {
         return std::unexpected(std::move(diagnostics));
     }
@@ -87,6 +93,26 @@ std::vector<RoadDiagnostic> validateProtectedAnchors(
             diagnostics.push_back({RoadErrorCode::PositionDiscontinuity,
                 "protected anchor at station " + std::to_string(anchor.station)
                     + " does not match alignment position"});
+        }
+    }
+    return diagnostics;
+}
+
+std::vector<RoadDiagnostic> validateRoadSource(const RoadSource& source) noexcept {
+    std::vector<RoadDiagnostic> diagnostics;
+    for (std::size_t i = 0; i < source.geometry.vertices.size(); ++i) {
+        const auto& v = source.geometry.vertices[i];
+        if (!std::isfinite(v.x)) {
+            diagnostics.push_back({RoadErrorCode::NonFiniteParameter,
+                "source vertex " + std::to_string(i) + " x is not finite"});
+        }
+        if (!std::isfinite(v.y)) {
+            diagnostics.push_back({RoadErrorCode::NonFiniteParameter,
+                "source vertex " + std::to_string(i) + " y is not finite"});
+        }
+        if (v.z.has_value() && !std::isfinite(*v.z)) {
+            diagnostics.push_back({RoadErrorCode::NonFiniteParameter,
+                "source vertex " + std::to_string(i) + " z is not finite (use nullopt for missing elevation)"});
         }
     }
     return diagnostics;

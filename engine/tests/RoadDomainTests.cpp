@@ -610,9 +610,17 @@ using infraforge::domain::road::ReferenceAlignment;
 using infraforge::domain::road::ProtectedAnchor;
 using infraforge::domain::road::AnchorKind;
 using infraforge::domain::road::validateProtectedAnchors;
+using infraforge::domain::road::RoadSource;
+using infraforge::domain::road::SourceProvider;
+using infraforge::domain::road::buildElevationProfile;
+using infraforge::domain::road::buildSuperelevationProfile;
 
 RoadId makeId() {
     return infraforge::domain::road::roadIdFromUuidText("12345678-1234-1234-1234-123456789abc");
+}
+
+RoadId makeRoadId(const std::string& uuid) {
+    return infraforge::domain::road::roadIdFromUuidText(uuid);
 }
 
 ReferenceAlignment makeAlignment() {
@@ -798,6 +806,473 @@ TEST_CASE("alignment with huge heading does not hang angle normalization") {
         }
     }
     CHECK(foundHeading);
+}
+
+// ---- Regression tests for review pass 2 ----
+
+TEST_CASE("clothoid with large finite phase (~1e20) does not overflow long long") {
+    using infraforge::domain::road::ClothoidSegment;
+    using infraforge::domain::road::ReferenceAlignment;
+    // phaseChange = |kappa0 * s + alpha * s^2| ~ 1e20, finite but exceeds long long max.
+    // This must not cause UB in the static_cast<long long> conversion. The builder
+    // must either safely evaluate (finite result) or reject (non-finite diagnostic).
+    ClothoidSegment spiral{.start = {0.0, 0.0}, .startHeading = 0.0,
+        .startCurvature = 0.0, .endCurvature = 1e10, .length = 1e10};
+    auto built = ReferenceAlignment::build({spiral});
+    if (built.has_value()) {
+        // Safe evaluation: verify the result is finite and deterministic.
+        const auto sample = built->evaluate(0.0);
+        CHECK(std::isfinite(sample.position.easting));
+        CHECK(std::isfinite(sample.position.northing));
+        CHECK(std::isfinite(sample.heading));
+        CHECK(std::isfinite(sample.curvature));
+    } else {
+        // Rejection: verify a non-finite diagnostic was reported.
+        bool foundNonFinite = false;
+        for (const auto& d : built.error()) {
+            if (d.code == infraforge::domain::road::RoadErrorCode::NonFiniteParameter) {
+                foundNonFinite = true;
+                break;
+            }
+        }
+        CHECK(foundNonFinite);
+    }
+}
+
+TEST_CASE("alignment evaluate(NaN) returns default sample") {
+    using infraforge::domain::road::ReferenceAlignment;
+    LineSegment line{.start = {100.0, 200.0}, .heading = 0.5, .length = 150.0};
+    auto built = ReferenceAlignment::build({line});
+    REQUIRE(built.has_value());
+    const auto& alignment = *built;
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    auto sample = alignment.evaluate(nan);
+    // NaN policy: returns a default (zero) sample, not an arbitrary segment.
+    CHECK(sample.position.easting == 0.0);
+    CHECK(sample.position.northing == 0.0);
+    CHECK(sample.heading == 0.0);
+    CHECK(sample.curvature == 0.0);
+}
+
+TEST_CASE("alignment evaluate(+inf) clamps to end") {
+    using infraforge::domain::road::ReferenceAlignment;
+    LineSegment line{.start = {100.0, 200.0}, .heading = 0.0, .length = 150.0};
+    auto built = ReferenceAlignment::build({line});
+    REQUIRE(built.has_value());
+    const auto& alignment = *built;
+    const double inf = std::numeric_limits<double>::infinity();
+    auto sample = alignment.evaluate(inf);
+    // +inf clamps to end: start + length * (cos, sin)
+    CHECK(sample.position.easting == doctest::Approx(250.0));
+    CHECK(sample.position.northing == doctest::Approx(200.0));
+    CHECK(sample.heading == doctest::Approx(0.0));
+}
+
+TEST_CASE("alignment evaluate(-inf) clamps to start") {
+    using infraforge::domain::road::ReferenceAlignment;
+    LineSegment line{.start = {100.0, 200.0}, .heading = 0.0, .length = 150.0};
+    auto built = ReferenceAlignment::build({line});
+    REQUIRE(built.has_value());
+    const auto& alignment = *built;
+    const double negInf = -std::numeric_limits<double>::infinity();
+    auto sample = alignment.evaluate(negInf);
+    // -inf clamps to start.
+    CHECK(sample.position.easting == doctest::Approx(100.0));
+    CHECK(sample.position.northing == doctest::Approx(200.0));
+    CHECK(sample.heading == doctest::Approx(0.0));
+}
+
+TEST_CASE("alignment segmentIndexAt(NaN) returns nullopt") {
+    using infraforge::domain::road::ReferenceAlignment;
+    LineSegment line{.start = {0.0, 0.0}, .heading = 0.0, .length = 100.0};
+    auto built = ReferenceAlignment::build({line});
+    REQUIRE(built.has_value());
+    const auto& alignment = *built;
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    CHECK_FALSE(alignment.segmentIndexAt(nan).has_value());
+}
+
+TEST_CASE("alignment segmentIndexAt(+inf) returns nullopt") {
+    using infraforge::domain::road::ReferenceAlignment;
+    LineSegment line{.start = {0.0, 0.0}, .heading = 0.0, .length = 100.0};
+    auto built = ReferenceAlignment::build({line});
+    REQUIRE(built.has_value());
+    const auto& alignment = *built;
+    const double inf = std::numeric_limits<double>::infinity();
+    CHECK_FALSE(alignment.segmentIndexAt(inf).has_value());
+}
+
+TEST_CASE("alignment segmentIndexAt(-inf) returns nullopt") {
+    using infraforge::domain::road::ReferenceAlignment;
+    LineSegment line{.start = {0.0, 0.0}, .heading = 0.0, .length = 100.0};
+    auto built = ReferenceAlignment::build({line});
+    REQUIRE(built.has_value());
+    const auto& alignment = *built;
+    const double negInf = -std::numeric_limits<double>::infinity();
+    CHECK_FALSE(alignment.segmentIndexAt(negInf).has_value());
+}
+
+TEST_CASE("elevation profile evaluate(NaN) returns 0.0") {
+    using infraforge::domain::road::buildElevationProfile;
+    auto elev = buildElevationProfile({{0.0, 100.0}, {200.0, 120.0}});
+    REQUIRE(elev.has_value());
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    CHECK(elev->evaluate(nan) == 0.0);
+}
+
+TEST_CASE("elevation profile evaluate(+inf) returns last value") {
+    using infraforge::domain::road::buildElevationProfile;
+    auto elev = buildElevationProfile({{0.0, 100.0}, {200.0, 120.0}});
+    REQUIRE(elev.has_value());
+    const double inf = std::numeric_limits<double>::infinity();
+    CHECK(elev->evaluate(inf) == doctest::Approx(120.0));
+}
+
+TEST_CASE("elevation profile evaluate(-inf) returns first value") {
+    using infraforge::domain::road::buildElevationProfile;
+    auto elev = buildElevationProfile({{0.0, 100.0}, {200.0, 120.0}});
+    REQUIRE(elev.has_value());
+    const double negInf = -std::numeric_limits<double>::infinity();
+    CHECK(elev->evaluate(negInf) == doctest::Approx(100.0));
+}
+
+TEST_CASE("superelevation profile evaluate(NaN) returns 0.0") {
+    using infraforge::domain::road::buildSuperelevationProfile;
+    auto sup = buildSuperelevationProfile({{0.0, 0.0}, {100.0, 0.05}});
+    REQUIRE(sup.has_value());
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    CHECK(sup->evaluate(nan) == 0.0);
+}
+
+TEST_CASE("road evaluate(NaN) returns default sample") {
+    using infraforge::domain::road::Road;
+    using infraforge::domain::road::ReferenceAlignment;
+    LineSegment line{.start = {0.0, 0.0}, .heading = 0.0, .length = 100.0};
+    auto alignment = ReferenceAlignment::build({line});
+    REQUIRE(alignment.has_value());
+    Road::BuildInput input{
+        .id = makeRoadId("aaaa0000-bbbb-cccc-dddd-eeeeeeeeeeee"),
+        .displayName = "NaN Test Road",
+        .alignment = *alignment,
+    };
+    auto road = Road::build(std::move(input));
+    REQUIRE(road.has_value());
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    auto sample = road->evaluate(nan);
+    CHECK(sample.position.easting == 0.0);
+    CHECK(sample.position.northing == 0.0);
+    CHECK(sample.heading == 0.0);
+    CHECK(sample.curvature == 0.0);
+    CHECK(sample.height == 0.0);
+    CHECK(sample.crossSlope == 0.0);
+}
+
+TEST_CASE("NaN position tolerance is rejected") {
+    using infraforge::domain::road::ReferenceAlignment;
+    LineSegment line{.start = {0.0, 0.0}, .heading = 0.0, .length = 100.0};
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    auto built = ReferenceAlignment::build({line}, nan);
+    REQUIRE_FALSE(built.has_value());
+    CHECK(built.error()[0].code == infraforge::domain::road::RoadErrorCode::InvalidArgument);
+}
+
+TEST_CASE("inf position tolerance is rejected") {
+    using infraforge::domain::road::ReferenceAlignment;
+    LineSegment line{.start = {0.0, 0.0}, .heading = 0.0, .length = 100.0};
+    const double inf = std::numeric_limits<double>::infinity();
+    auto built = ReferenceAlignment::build({line}, inf);
+    REQUIRE_FALSE(built.has_value());
+    CHECK(built.error()[0].code == infraforge::domain::road::RoadErrorCode::InvalidArgument);
+}
+
+TEST_CASE("negative position tolerance is rejected") {
+    using infraforge::domain::road::ReferenceAlignment;
+    LineSegment line{.start = {0.0, 0.0}, .heading = 0.0, .length = 100.0};
+    auto built = ReferenceAlignment::build({line}, -1e-9);
+    REQUIRE_FALSE(built.has_value());
+    CHECK(built.error()[0].code == infraforge::domain::road::RoadErrorCode::InvalidArgument);
+}
+
+TEST_CASE("zero position tolerance works correctly") {
+    using infraforge::domain::road::ReferenceAlignment;
+    LineSegment line{.start = {0.0, 0.0}, .heading = 0.0, .length = 100.0};
+    auto built = ReferenceAlignment::build({line}, 0.0);
+    REQUIRE(built.has_value());
+}
+
+TEST_CASE("NaN heading tolerance is rejected") {
+    using infraforge::domain::road::ReferenceAlignment;
+    LineSegment line{.start = {0.0, 0.0}, .heading = 0.0, .length = 100.0};
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    auto built = ReferenceAlignment::build({line},
+        infraforge::domain::road::kDefaultPositionTolerance, nan);
+    REQUIRE_FALSE(built.has_value());
+    CHECK(built.error()[0].code == infraforge::domain::road::RoadErrorCode::InvalidArgument);
+}
+
+TEST_CASE("inf heading tolerance is rejected") {
+    using infraforge::domain::road::ReferenceAlignment;
+    LineSegment line{.start = {0.0, 0.0}, .heading = 0.0, .length = 100.0};
+    const double inf = std::numeric_limits<double>::infinity();
+    auto built = ReferenceAlignment::build({line},
+        infraforge::domain::road::kDefaultPositionTolerance, inf);
+    REQUIRE_FALSE(built.has_value());
+    CHECK(built.error()[0].code == infraforge::domain::road::RoadErrorCode::InvalidArgument);
+}
+
+TEST_CASE("negative heading tolerance is rejected") {
+    using infraforge::domain::road::ReferenceAlignment;
+    LineSegment line{.start = {0.0, 0.0}, .heading = 0.0, .length = 100.0};
+    auto built = ReferenceAlignment::build({line},
+        infraforge::domain::road::kDefaultPositionTolerance, -1e-9);
+    REQUIRE_FALSE(built.has_value());
+    CHECK(built.error()[0].code == infraforge::domain::road::RoadErrorCode::InvalidArgument);
+}
+
+TEST_CASE("NaN curvature tolerance is rejected") {
+    using infraforge::domain::road::ReferenceAlignment;
+    LineSegment line{.start = {0.0, 0.0}, .heading = 0.0, .length = 100.0};
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    auto built = ReferenceAlignment::build({line},
+        infraforge::domain::road::kDefaultPositionTolerance,
+        infraforge::domain::road::kDefaultHeadingTolerance, nan);
+    REQUIRE_FALSE(built.has_value());
+    CHECK(built.error()[0].code == infraforge::domain::road::RoadErrorCode::InvalidArgument);
+}
+
+TEST_CASE("inf curvature tolerance is rejected") {
+    using infraforge::domain::road::ReferenceAlignment;
+    LineSegment line{.start = {0.0, 0.0}, .heading = 0.0, .length = 100.0};
+    const double inf = std::numeric_limits<double>::infinity();
+    auto built = ReferenceAlignment::build({line},
+        infraforge::domain::road::kDefaultPositionTolerance,
+        infraforge::domain::road::kDefaultHeadingTolerance, inf);
+    REQUIRE_FALSE(built.has_value());
+    CHECK(built.error()[0].code == infraforge::domain::road::RoadErrorCode::InvalidArgument);
+}
+
+TEST_CASE("negative curvature tolerance is rejected") {
+    using infraforge::domain::road::ReferenceAlignment;
+    LineSegment line{.start = {0.0, 0.0}, .heading = 0.0, .length = 100.0};
+    auto built = ReferenceAlignment::build({line},
+        infraforge::domain::road::kDefaultPositionTolerance,
+        infraforge::domain::road::kDefaultHeadingTolerance, -1e-12);
+    REQUIRE_FALSE(built.has_value());
+    CHECK(built.error()[0].code == infraforge::domain::road::RoadErrorCode::InvalidArgument);
+}
+
+TEST_CASE("source vertex with NaN x is rejected by Road::build") {
+    using infraforge::domain::road::Road;
+    using infraforge::domain::road::RoadSource;
+    using infraforge::domain::road::ReferenceAlignment;
+    LineSegment line{.start = {0.0, 0.0}, .heading = 0.0, .length = 100.0};
+    auto alignment = ReferenceAlignment::build({line});
+    REQUIRE(alignment.has_value());
+    RoadSource source;
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    source.geometry.vertices = {{nan, 37.8, std::optional<double>{}}};
+    source.provenance.provider = SourceProvider::Osm;
+    Road::BuildInput input{
+        .id = makeRoadId("bbbb0000-cccc-dddd-eeee-ffffffffffff"),
+        .displayName = "NaN X Road",
+        .alignment = *alignment,
+        .source = source,
+    };
+    auto road = Road::build(std::move(input));
+    REQUIRE_FALSE(road.has_value());
+    bool found = false;
+    for (const auto& d : road.error()) {
+        if (d.code == infraforge::domain::road::RoadErrorCode::NonFiniteParameter) {
+            found = true;
+            break;
+        }
+    }
+    CHECK(found);
+}
+
+TEST_CASE("source vertex with inf x is rejected by Road::build") {
+    using infraforge::domain::road::Road;
+    using infraforge::domain::road::RoadSource;
+    using infraforge::domain::road::ReferenceAlignment;
+    LineSegment line{.start = {0.0, 0.0}, .heading = 0.0, .length = 100.0};
+    auto alignment = ReferenceAlignment::build({line});
+    REQUIRE(alignment.has_value());
+    RoadSource source;
+    const double inf = std::numeric_limits<double>::infinity();
+    source.geometry.vertices = {{inf, 37.8, std::optional<double>{}}};
+    source.provenance.provider = SourceProvider::Osm;
+    Road::BuildInput input{
+        .id = makeRoadId("cccc0000-dddd-eeee-ffff-aaaaaaaaaaaa"),
+        .displayName = "Inf X Road",
+        .alignment = *alignment,
+        .source = source,
+    };
+    auto road = Road::build(std::move(input));
+    REQUIRE_FALSE(road.has_value());
+    bool found = false;
+    for (const auto& d : road.error()) {
+        if (d.code == infraforge::domain::road::RoadErrorCode::NonFiniteParameter) {
+            found = true;
+            break;
+        }
+    }
+    CHECK(found);
+}
+
+TEST_CASE("source vertex with NaN y is rejected by Road::build") {
+    using infraforge::domain::road::Road;
+    using infraforge::domain::road::RoadSource;
+    using infraforge::domain::road::ReferenceAlignment;
+    LineSegment line{.start = {0.0, 0.0}, .heading = 0.0, .length = 100.0};
+    auto alignment = ReferenceAlignment::build({line});
+    REQUIRE(alignment.has_value());
+    RoadSource source;
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    source.geometry.vertices = {{-122.4, nan, std::optional<double>{}}};
+    source.provenance.provider = SourceProvider::Osm;
+    Road::BuildInput input{
+        .id = makeRoadId("dddd0000-eeee-ffff-aaaa-bbbbbbbbbbbb"),
+        .displayName = "NaN Y Road",
+        .alignment = *alignment,
+        .source = source,
+    };
+    auto road = Road::build(std::move(input));
+    REQUIRE_FALSE(road.has_value());
+    bool found = false;
+    for (const auto& d : road.error()) {
+        if (d.code == infraforge::domain::road::RoadErrorCode::NonFiniteParameter) {
+            found = true;
+            break;
+        }
+    }
+    CHECK(found);
+}
+
+TEST_CASE("source vertex with inf y is rejected by Road::build") {
+    using infraforge::domain::road::Road;
+    using infraforge::domain::road::RoadSource;
+    using infraforge::domain::road::ReferenceAlignment;
+    LineSegment line{.start = {0.0, 0.0}, .heading = 0.0, .length = 100.0};
+    auto alignment = ReferenceAlignment::build({line});
+    REQUIRE(alignment.has_value());
+    RoadSource source;
+    const double inf = std::numeric_limits<double>::infinity();
+    source.geometry.vertices = {{-122.4, inf, std::optional<double>{}}};
+    source.provenance.provider = SourceProvider::Osm;
+    Road::BuildInput input{
+        .id = makeRoadId("eeee0000-ffff-aaaa-bbbb-cccccccccccc"),
+        .displayName = "Inf Y Road",
+        .alignment = *alignment,
+        .source = source,
+    };
+    auto road = Road::build(std::move(input));
+    REQUIRE_FALSE(road.has_value());
+    bool found = false;
+    for (const auto& d : road.error()) {
+        if (d.code == infraforge::domain::road::RoadErrorCode::NonFiniteParameter) {
+            found = true;
+            break;
+        }
+    }
+    CHECK(found);
+}
+
+TEST_CASE("source vertex with NaN z is rejected by Road::build") {
+    using infraforge::domain::road::Road;
+    using infraforge::domain::road::RoadSource;
+    using infraforge::domain::road::ReferenceAlignment;
+    LineSegment line{.start = {0.0, 0.0}, .heading = 0.0, .length = 100.0};
+    auto alignment = ReferenceAlignment::build({line});
+    REQUIRE(alignment.has_value());
+    RoadSource source;
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    source.geometry.vertices = {{-122.4, 37.8, std::optional<double>{nan}}};
+    source.provenance.provider = SourceProvider::Osm;
+    Road::BuildInput input{
+        .id = makeRoadId("ffff0000-aaaa-bbbb-cccc-dddddddddddd"),
+        .displayName = "NaN Z Road",
+        .alignment = *alignment,
+        .source = source,
+    };
+    auto road = Road::build(std::move(input));
+    REQUIRE_FALSE(road.has_value());
+    bool found = false;
+    for (const auto& d : road.error()) {
+        if (d.code == infraforge::domain::road::RoadErrorCode::NonFiniteParameter) {
+            found = true;
+            break;
+        }
+    }
+    CHECK(found);
+}
+
+TEST_CASE("source vertex with inf z is rejected by Road::build") {
+    using infraforge::domain::road::Road;
+    using infraforge::domain::road::RoadSource;
+    using infraforge::domain::road::ReferenceAlignment;
+    LineSegment line{.start = {0.0, 0.0}, .heading = 0.0, .length = 100.0};
+    auto alignment = ReferenceAlignment::build({line});
+    REQUIRE(alignment.has_value());
+    RoadSource source;
+    const double inf = std::numeric_limits<double>::infinity();
+    source.geometry.vertices = {{-122.4, 37.8, std::optional<double>{inf}}};
+    source.provenance.provider = SourceProvider::Osm;
+    Road::BuildInput input{
+        .id = makeRoadId("0000aaaa-bbbb-cccc-dddd-eeeeeeeeeeee"),
+        .displayName = "Inf Z Road",
+        .alignment = *alignment,
+        .source = source,
+    };
+    auto road = Road::build(std::move(input));
+    REQUIRE_FALSE(road.has_value());
+    bool found = false;
+    for (const auto& d : road.error()) {
+        if (d.code == infraforge::domain::road::RoadErrorCode::NonFiniteParameter) {
+            found = true;
+            break;
+        }
+    }
+    CHECK(found);
+}
+
+TEST_CASE("source vertex with absent z is accepted by Road::build") {
+    using infraforge::domain::road::Road;
+    using infraforge::domain::road::RoadSource;
+    using infraforge::domain::road::ReferenceAlignment;
+    LineSegment line{.start = {0.0, 0.0}, .heading = 0.0, .length = 100.0};
+    auto alignment = ReferenceAlignment::build({line});
+    REQUIRE(alignment.has_value());
+    RoadSource source;
+    source.geometry.vertices = {{-122.4, 37.8, std::optional<double>{}}};
+    source.provenance.provider = SourceProvider::Osm;
+    Road::BuildInput input{
+        .id = makeRoadId("1111aaaa-bbbb-cccc-dddd-eeeeeeeeeeee"),
+        .displayName = "Absent Z Road",
+        .alignment = *alignment,
+        .source = source,
+    };
+    auto road = Road::build(std::move(input));
+    REQUIRE(road.has_value());
+}
+
+TEST_CASE("source vertex with finite z is accepted by Road::build") {
+    using infraforge::domain::road::Road;
+    using infraforge::domain::road::RoadSource;
+    using infraforge::domain::road::ReferenceAlignment;
+    LineSegment line{.start = {0.0, 0.0}, .heading = 0.0, .length = 100.0};
+    auto alignment = ReferenceAlignment::build({line});
+    REQUIRE(alignment.has_value());
+    RoadSource source;
+    source.geometry.vertices = {{-122.4, 37.8, std::optional<double>{10.0}}};
+    source.provenance.provider = SourceProvider::Osm;
+    Road::BuildInput input{
+        .id = makeRoadId("2222aaaa-bbbb-cccc-dddd-eeeeeeeeeeee"),
+        .displayName = "Finite Z Road",
+        .alignment = *alignment,
+        .source = source,
+    };
+    auto road = Road::build(std::move(input));
+    REQUIRE(road.has_value());
 }
 
 } // TEST_SUITE

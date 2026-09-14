@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <utility>
 
 namespace infraforge::domain::road {
@@ -24,6 +25,25 @@ std::expected<ReferenceAlignment, std::vector<RoadDiagnostic>> ReferenceAlignmen
     const double headingTolerance,
     const double curvatureTolerance) {
     std::vector<RoadDiagnostic> diagnostics;
+
+    // Validate tolerances before using them for continuity checks. A NaN
+    // or infinite tolerance would disable validation (NaN comparisons are
+    // always false), so they must be rejected explicitly.
+    if (!std::isfinite(positionTolerance) || positionTolerance < 0.0) {
+        diagnostics.push_back({RoadErrorCode::InvalidArgument,
+            "position tolerance must be finite and non-negative"});
+    }
+    if (!std::isfinite(headingTolerance) || headingTolerance < 0.0) {
+        diagnostics.push_back({RoadErrorCode::InvalidArgument,
+            "heading tolerance must be finite and non-negative"});
+    }
+    if (!std::isfinite(curvatureTolerance) || curvatureTolerance < 0.0) {
+        diagnostics.push_back({RoadErrorCode::InvalidArgument,
+            "curvature tolerance must be finite and non-negative"});
+    }
+    if (!diagnostics.empty()) {
+        return std::unexpected(std::move(diagnostics));
+    }
 
     if (segments.empty()) {
         diagnostics.push_back({RoadErrorCode::EmptyAlignment, "alignment must contain at least one segment"});
@@ -115,6 +135,20 @@ AlignmentSample ReferenceAlignment::evaluate(const Station s) const noexcept {
     if (segments_.empty()) {
         return AlignmentSample{};
     }
+    // Non-finite station policy: NaN returns a default (zero) sample rather
+    // than silently falling through to an arbitrary segment. +inf clamps to
+    // the end; -inf clamps to the start. This keeps evaluation deterministic
+    // and avoids undefined behavior in downstream comparisons.
+    if (!std::isfinite(s)) {
+        if (s == std::numeric_limits<double>::infinity()) {
+            return segmentEndSample(segments_.back().segment);
+        }
+        if (s == -std::numeric_limits<double>::infinity()) {
+            return evaluateSegment(segments_.front().segment, 0.0);
+        }
+        // NaN: return a zero/default sample.
+        return AlignmentSample{};
+    }
     Station clamped = s;
     if (clamped <= 0.0) {
         return evaluateSegment(segments_.front().segment, 0.0);
@@ -132,7 +166,14 @@ AlignmentSample ReferenceAlignment::evaluate(const Station s) const noexcept {
 }
 
 std::optional<std::size_t> ReferenceAlignment::segmentIndexAt(const Station s) const noexcept {
-    if (segments_.empty() || s < 0.0 || s > totalLength_) {
+    if (segments_.empty()) {
+        return std::nullopt;
+    }
+    // Non-finite station policy: NaN and infinities are outside the valid
+    // station range [0, totalLength]. NaN comparisons are always false, so
+    // it would fall through to returning the last segment — that is wrong.
+    // +inf and -inf are also outside the closed range.
+    if (!std::isfinite(s) || s < 0.0 || s > totalLength_) {
         return std::nullopt;
     }
     for (std::size_t i = 0; i < segments_.size(); ++i) {

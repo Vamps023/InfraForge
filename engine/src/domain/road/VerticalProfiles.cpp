@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <utility>
 
 namespace infraforge::domain::road {
@@ -27,6 +28,18 @@ std::optional<RoadDiagnostic> PiecewiseLinearProfile::validate() const noexcept 
 
 double PiecewiseLinearProfile::evaluate(const Station s) const noexcept {
     if (breakpoints_.empty()) {
+        return 0.0;
+    }
+    // Non-finite station policy: NaN returns 0.0 (the empty-profile default)
+    // rather than reaching std::upper_bound with an invalid ordering.
+    // +inf clamps to the last breakpoint value; -inf to the first.
+    if (!std::isfinite(s)) {
+        if (s == std::numeric_limits<double>::infinity()) {
+            return breakpoints_.back().value;
+        }
+        if (s == -std::numeric_limits<double>::infinity()) {
+            return breakpoints_.front().value;
+        }
         return 0.0;
     }
     if (s <= breakpoints_.front().station) {

@@ -127,11 +127,18 @@ void integrateClothoid(double theta0, double kappa0, double alpha, double s,
         return;
     }
     constexpr double kMaxPhasePerSub = kPi / 4.0;
-    long long m = static_cast<long long>(phaseChange / kMaxPhasePerSub) + 1;
-    constexpr long long kMaxSub = 4096;
-    if (m > kMaxSub) {
-        m = kMaxSub;
+    constexpr double kMaxSub = 4096.0;
+    // Compute the requested subdivision count as a double and clamp against
+    // kMaxSub while still in floating-point, so a finite-but-large phase
+    // (e.g. 1e20) never reaches an out-of-range static_cast<long long>.
+    double mAsDouble = phaseChange / kMaxPhasePerSub + 1.0;
+    if (!std::isfinite(mAsDouble) || mAsDouble > kMaxSub) {
+        mAsDouble = kMaxSub;
     }
+    if (mAsDouble < 1.0) {
+        mAsDouble = 1.0;
+    }
+    const long long m = static_cast<long long>(mAsDouble);
     const double h = s / static_cast<double>(m);
 
     double sumCos = 0.0;

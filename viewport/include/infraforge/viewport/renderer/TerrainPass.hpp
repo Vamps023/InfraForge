@@ -2,7 +2,7 @@
 
 #include "infraforge/domain/geo/RenderLocalFrame.hpp"
 #include "infraforge/domain/terrain/TerrainTileFile.hpp"
-#include "infraforge/viewport/renderer/GridCamera.hpp"
+#include "infraforge/viewport/renderer/EditorCamera.hpp"
 #include "infraforge/viewport/renderer/TerrainScene.hpp"
 #include "infraforge/viewport/renderer/TerrainTileCache.hpp"
 #include "infraforge/viewport/renderer/Vulkan.hpp"
@@ -47,10 +47,10 @@ public:
 
     // Render thread: adopt pending scene, advance residency, execute the
     // bounded load/release lists (file decode + buffer upload/release).
-    void update(const GridCamera& camera);
+    void update(const EditorCamera& camera);
 
     // Render thread: bind the pipeline and draw resident tiles.
-    void record(const VkCommandBuffer command, const GridCamera& camera) const;
+    void record(const VkCommandBuffer command, const EditorCamera& camera) const;
 
     [[nodiscard]] bool created() const noexcept { return device_ != VK_NULL_HANDLE; }
     [[nodiscard]] std::size_t residentCount() const noexcept { return cache_.residentTiles().size(); }

@@ -134,7 +134,7 @@ bool VulkanRenderer::start(const std::uint32_t initialWidth, const std::uint32_t
         return false;
     }
 
-    camera_.setViewport(requestedWidth_, requestedHeight_);
+    cameraController_.camera().setViewport(requestedWidth_, requestedHeight_);
     initialized_ = true;
     renderThread_.start([this](std::atomic_bool& running) { runLoop(running); });
     return true;
@@ -158,12 +158,6 @@ void VulkanRenderer::setTerrainScene(const TerrainScene& scene) {
     {
         std::lock_guard lock{stateMutex_};
         pendingScene_ = scene;
-        // Reset camera fit so a new project's terrain is re-framed.
-        // BLOCKER 2/3: prevents stale camera origin from a previous project
-        // leaking into the new scene.
-        cameraFitted_ = false;
-        renderOriginE_ = 0.0;
-        renderOriginN_ = 0.0;
     }
     terrainPass_.setScene(scene);
 }
@@ -212,7 +206,7 @@ void VulkanRenderer::recreateSwapchain() {
         device_.physical(), device_.get(), surface_.get(), device_.queueFamily(),
         swapchain_.renderPass(), requestedWidth_, requestedHeight_);
     ensureRenderFinishedSemaphores();
-    camera_.setViewport(requestedWidth_, requestedHeight_);
+    cameraController_.camera().setViewport(requestedWidth_, requestedHeight_);
 }
 
 void VulkanRenderer::runLoop(std::atomic_bool& running) {
@@ -241,46 +235,18 @@ void VulkanRenderer::runLoop(std::atomic_bool& running) {
             continue;
         }
 
-        // Fit the camera to the first non-empty scene so imported terrain is
-        // framed on arrival; user input takes over afterwards.
+        // Adopt scene metadata without resetting an established user camera.
+        // An empty scene marks a project/session boundary. The first terrain
+        // of the next session is framed once only if the user has not moved.
         {
-            std::optional<TerrainScene> fitScene;
+            std::optional<TerrainScene> adoptedScene;
             {
                 std::lock_guard lock{stateMutex_};
-                fitScene = std::move(pendingScene_);
+                adoptedScene = std::move(pendingScene_);
                 pendingScene_.reset();
             }
-            if (!cameraFitted_ && fitScene.has_value() && !fitScene->tiles.empty()) {
-                // Capture the render origin from the scene so the camera
-                // operates in render-local coordinates (matching terrain
-                // vertices). BLOCKER 2: prevents canonical vs render-local
-                // coordinate mismatch for projects with large origins.
-                // BLOCKER 12: terrain vertices use Render Y = -north, so the
-                // camera center and extent must use the same negation to
-                // avoid a Y-axis mirror between geometry and camera.
-                renderOriginE_ = fitScene->originEasting;
-                renderOriginN_ = fitScene->originNorthing;
-                double minE = fitScene->tiles.front().minEasting - renderOriginE_;
-                double maxE = fitScene->tiles.front().maxEasting - renderOriginE_;
-                // Render Y = -(northing - originN), so min/max swap.
-                double minR = -(fitScene->tiles.front().maxNorthing - renderOriginN_);
-                double maxR = -(fitScene->tiles.front().minNorthing - renderOriginN_);
-                for (const TerrainSceneTile& tile : fitScene->tiles) {
-                    minE = std::min(minE, tile.minEasting - renderOriginE_);
-                    maxE = std::max(maxE, tile.maxEasting - renderOriginE_);
-                    minR = std::min(minR, -(tile.maxNorthing - renderOriginN_));
-                    maxR = std::max(maxR, -(tile.minNorthing - renderOriginN_));
-                }
-                const double extentX = std::max(1.0, maxE - minE);
-                const double extentY = std::max(1.0, maxR - minR);
-                const double mpp = std::clamp(
-                    std::max(extentX / static_cast<double>(width),
-                        extentY / static_cast<double>(height)),
-                    0.05, 100000.0);
-                camera_.setMetersPerPixel(mpp);
-                // Camera center in render-local coordinates (Y negated).
-                camera_.setCenter((minE + maxE) * 0.5, (minR + maxR) * 0.5);
-                cameraFitted_ = true;
+            if (adoptedScene.has_value()) {
+                cameraController_.adoptScene(*adoptedScene);
             }
         }
 
@@ -294,12 +260,7 @@ void VulkanRenderer::runLoop(std::atomic_bool& running) {
                 events.swap(inputQueue_);
             }
             for (const SurfaceInputEvent& event : events) {
-                const double mpp = std::clamp(
-                    camera_.metersPerPixel() * std::exp(-0.25 * event.wheelSteps), 0.05, 100000.0);
-                camera_.setMetersPerPixel(mpp);
-                camera_.setCenter(
-                    camera_.centerWorldX() - event.dragDx * mpp,
-                    camera_.centerWorldY() + event.dragDy * mpp);
+                cameraController_.handleInput(event);
             }
         }
 
@@ -421,9 +382,10 @@ void VulkanRenderer::renderFrame(std::atomic_bool& running) {
     passBegin.pClearValues = clearValues.data();
     vkCmdBeginRenderPass(command, &passBegin, VK_SUBPASS_CONTENTS_INLINE);
 
-    terrainPass_.update(camera_);
-    terrainPass_.record(command, camera_);
-    gridPass_.record(command, camera_);
+    const EditorCamera& camera = cameraController_.camera();
+    terrainPass_.update(camera);
+    terrainPass_.record(command, camera);
+    gridPass_.record(command, camera);
 
     vkCmdEndRenderPass(command);
     VK_CHECK(vkEndCommandBuffer(command), "command buffer end");

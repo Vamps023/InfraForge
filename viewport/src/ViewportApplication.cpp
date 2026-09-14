@@ -315,6 +315,10 @@ int runViewportApplication(const ApplicationArguments& arguments) {
             } else if (auto* scene = std::get_if<SceneCommand>(&command)) {
                 // Engine-derived terrain scene hand-off to the render thread.
                 renderer.setTerrainScene(scene->scene);
+            } else if (auto* camera = std::get_if<CameraCommand>(&command)) {
+                renderer.postCameraInput(SurfaceInputEvent{
+                    .action = camera->action,
+                    .datasetUuid = camera->datasetUuid});
             }
         }
     }

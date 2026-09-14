@@ -1,8 +1,10 @@
 #pragma once
 
 #include <filesystem>
+#include <cmath>
 #include <mutex>
 #include <string>
+#include <vector>
 
 #include <gdal_priv.h>
 #include <ogr_spatialref.h>
@@ -60,11 +62,31 @@ struct TerrainDemSpec {
     std::string elevationUnit{"metre"};
     double sampleScale{1.0};
     double sampleOffset{0.0};
+    bool reliefSurface{false};
 };
 
 [[nodiscard]] inline double demHeightAt(int row, int col) {
     // Definition point of the fixture elevation surface (metres).
     return 100.0 + 0.5 * col + 0.25 * row;
+}
+
+[[nodiscard]] inline double reliefHeightAt(const int row, const int col, const TerrainDemSpec& spec) {
+    const double x = (static_cast<double>(col) / static_cast<double>(spec.width - 1)) * 2.0 - 1.0;
+    const double y = (static_cast<double>(row) / static_cast<double>(spec.height - 1)) * 2.0 - 1.0;
+    const double hill = 220.0 * std::exp(-7.0 * ((x + 0.28) * (x + 0.28) + (y + 0.12) * (y + 0.12)));
+    const double valley = 90.0 * std::exp(-10.0 * ((x - 0.38) * (x - 0.38) + (y - 0.22) * (y - 0.22)));
+    const double ridge = 55.0 * std::exp(-18.0 * (y + 0.42) * (y + 0.42));
+    return 500.0 + hill - valley + ridge;
+}
+
+[[nodiscard]] inline TerrainDemSpec knownGoodReliefDemSpec() {
+    TerrainDemSpec spec;
+    spec.width = 129;
+    spec.height = 129;
+    spec.originY = 4651290.0;
+    spec.withNodata = false;
+    spec.reliefSurface = true;
+    return spec;
 }
 
 inline void writeDemGeoTiff(const std::filesystem::path& file, const TerrainDemSpec& spec) {
@@ -105,7 +127,7 @@ inline void writeDemGeoTiff(const std::filesystem::path& file, const TerrainDemS
         for (int c = 0; c < spec.width; ++c) {
             const bool nodata = spec.withNodata && r == spec.nodataRow && c == spec.nodataCol;
             row[static_cast<std::size_t>(c)] = nodata ? -9999.0F
-                : static_cast<float>(demHeightAt(r, c));
+                : static_cast<float>(spec.reliefSurface ? reliefHeightAt(r, c, spec) : demHeightAt(r, c));
         }
         const CPLErr status = band->RasterIO(
             GF_Write, 0, r, spec.width, 1, row.data(), spec.width, 1, GDT_Float32, 0, 0, nullptr);

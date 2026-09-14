@@ -1,6 +1,7 @@
 #pragma once
 
 #include "infraforge/viewport/renderer/TerrainScene.hpp"
+#include "infraforge/viewport/platform/SurfaceInput.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -48,7 +49,11 @@ struct ShutdownCommand {
 struct SceneCommand {
     TerrainScene scene;
 };
-using ControlCommand = std::variant<PlaceCommand, VisibilityCommand, ShutdownCommand, SceneCommand>;
+struct CameraCommand {
+    ViewportAction action{ViewportAction::None};
+    std::string datasetUuid;
+};
+using ControlCommand = std::variant<PlaceCommand, VisibilityCommand, ShutdownCommand, SceneCommand, CameraCommand>;
 
 struct CommandParseError : std::runtime_error {
     explicit CommandParseError(std::string message)

@@ -1,7 +1,7 @@
 #pragma once
 
 #include "infraforge/viewport/platform/SurfaceInput.hpp"
-#include "infraforge/viewport/renderer/GridCamera.hpp"
+#include "infraforge/viewport/renderer/EditorCameraController.hpp"
 #include "infraforge/viewport/renderer/GridPass.hpp"
 #include "infraforge/viewport/renderer/RenderThread.hpp"
 #include "infraforge/viewport/renderer/SwapchainState.hpp"
@@ -88,14 +88,7 @@ private:
     VulkanSwapchain swapchain_;
     TerrainPass terrainPass_;
     GridPass gridPass_;
-    GridCamera camera_;
-    bool cameraFitted_{false};
-    // Render origin in canonical space, captured from the first scene so
-    // the camera fit and mouse-pan math operate in render-local coordinates
-    // (matching the terrain vertices). BLOCKER 2: prevents canonical vs
-    // render-local coordinate mismatch for projects with large origins.
-    double renderOriginE_{0.0};
-    double renderOriginN_{0.0};
+    EditorCameraController cameraController_;
 
     // Frame-in-flight synchronization (double buffered). Acquire semaphores
     // and fences are per frame slot; render-finished semaphores are per

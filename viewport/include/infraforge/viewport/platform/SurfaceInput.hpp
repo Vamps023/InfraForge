@@ -1,15 +1,33 @@
 #pragma once
 
 #include <functional>
+#include <string>
 
 namespace infraforge::viewport {
 
-// Raw mouse input of the native child surface. The renderer owns the
-// camera; this event only carries deltas (wheel steps, drag pixels).
+enum class PointerGesture {
+    None,
+    Pan,
+    Orbit,
+};
+
+enum class ViewportAction {
+    None,
+    FocusTerrain,
+    FrameAllTerrain,
+    Perspective,
+    Top,
+};
+
+// Neutral native-surface input. Platform procedures translate OS messages;
+// the renderer owns all camera semantics.
 struct SurfaceInputEvent {
-    double wheelSteps{0.0}; // positive = wheel up (zoom in)
-    double dragDx{0.0};     // pixels dragged left/right while left button held
-    double dragDy{0.0};     // pixels dragged up/down while left button held
+    PointerGesture gesture{PointerGesture::None};
+    ViewportAction action{ViewportAction::None};
+    double wheelSteps{0.0};
+    double deltaX{0.0};
+    double deltaY{0.0};
+    std::string datasetUuid;
 };
 
 using SurfaceInputHandler = std::function<void(const SurfaceInputEvent&)>;

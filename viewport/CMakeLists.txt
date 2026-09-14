@@ -9,7 +9,8 @@ if(WIN32)
 endif()
 
 set(INFRAFORGE_VIEWPORT_RENDERER_SOURCES
-    src/renderer/GridCamera.cpp
+    src/renderer/EditorCamera.cpp
+    src/renderer/EditorCameraController.cpp
     src/renderer/GridPass.cpp
     src/renderer/SelectionId.cpp
     src/renderer/SwapchainState.cpp
@@ -77,6 +78,7 @@ add_executable(infraforge-viewport-tests
     tests/RenderThreadTests.cpp
     tests/SelectionIdTests.cpp
     tests/SwapchainStateTests.cpp
+    tests/SurfaceInputTests.cpp
     tests/TerrainSceneTests.cpp
     tests/TerrainTileCacheTests.cpp
     tests/VulkanFlushRangeTests.cpp

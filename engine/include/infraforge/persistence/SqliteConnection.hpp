@@ -75,6 +75,7 @@ public:
     void bindText(int index, std::string_view value);
     void bindInt64(int index, std::int64_t value);
     void bindDouble(int index, double value);
+    void bindNull(int index);
 
     // Returns true when a row is available; false on SQLITE_DONE.
     [[nodiscard]] bool step();

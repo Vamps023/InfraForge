@@ -11,7 +11,7 @@
 namespace infraforge::persistence {
 namespace {
 
-constexpr std::array<MigrationDefinition, 6> kCanonicalMigrations{{
+constexpr std::array<MigrationDefinition, 7> kCanonicalMigrations{{
     {
         .id = 1,
         .name = "core project foundation",
@@ -116,6 +116,83 @@ ALTER TABLE terrain_datasets ADD COLUMN horizontal_unit_is_angular INTEGER NOT N
 ALTER TABLE terrain_datasets ADD COLUMN elevation_unit_source TEXT NOT NULL DEFAULT 'legacy';
 ALTER TABLE terrain_datasets ADD COLUMN sample_scale REAL NOT NULL DEFAULT 1.0;
 ALTER TABLE terrain_datasets ADD COLUMN sample_offset REAL NOT NULL DEFAULT 0.0;
+)sql",
+    },
+    {
+        .id = 7,
+        .name = "road canonical geometry",
+        .sql = R"sql(
+CREATE TABLE roads (
+    id TEXT PRIMARY KEY,
+    display_name TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    modified_at TEXT NOT NULL
+);
+
+CREATE TABLE road_segments (
+    road_id TEXT NOT NULL,
+    segment_index INTEGER NOT NULL CHECK (segment_index >= 0),
+    segment_kind TEXT NOT NULL CHECK (segment_kind IN ('line','circular_arc','clothoid')),
+    start_easting REAL NOT NULL,
+    start_northing REAL NOT NULL,
+    start_heading REAL NOT NULL,
+    length REAL NOT NULL CHECK (length > 0),
+    curvature REAL NOT NULL DEFAULT 0.0,
+    start_curvature REAL NOT NULL DEFAULT 0.0,
+    end_curvature REAL NOT NULL DEFAULT 0.0,
+    PRIMARY KEY (road_id, segment_index),
+    FOREIGN KEY (road_id) REFERENCES roads(id) ON DELETE CASCADE
+);
+CREATE INDEX idx_road_segments_road ON road_segments(road_id);
+
+CREATE TABLE road_elevation_breakpoints (
+    road_id TEXT NOT NULL,
+    breakpoint_index INTEGER NOT NULL CHECK (breakpoint_index >= 0),
+    station REAL NOT NULL,
+    value REAL NOT NULL,
+    PRIMARY KEY (road_id, breakpoint_index),
+    FOREIGN KEY (road_id) REFERENCES roads(id) ON DELETE CASCADE
+);
+
+CREATE TABLE road_superelevation_breakpoints (
+    road_id TEXT NOT NULL,
+    breakpoint_index INTEGER NOT NULL CHECK (breakpoint_index >= 0),
+    station REAL NOT NULL,
+    value REAL NOT NULL,
+    PRIMARY KEY (road_id, breakpoint_index),
+    FOREIGN KEY (road_id) REFERENCES roads(id) ON DELETE CASCADE
+);
+
+CREATE TABLE road_source (
+    road_id TEXT PRIMARY KEY,
+    provider TEXT NOT NULL CHECK (provider IN ('osm','opendrive','authored','other')),
+    source_id TEXT NOT NULL DEFAULT '',
+    source_crs TEXT NOT NULL DEFAULT '',
+    imported_at TEXT NOT NULL DEFAULT '',
+    tags TEXT NOT NULL DEFAULT '[]',
+    FOREIGN KEY (road_id) REFERENCES roads(id) ON DELETE CASCADE
+);
+
+CREATE TABLE road_source_vertices (
+    road_id TEXT NOT NULL,
+    vertex_index INTEGER NOT NULL CHECK (vertex_index >= 0),
+    x REAL NOT NULL,
+    y REAL NOT NULL,
+    z REAL,
+    PRIMARY KEY (road_id, vertex_index),
+    FOREIGN KEY (road_id) REFERENCES road_source(road_id) ON DELETE CASCADE
+);
+
+CREATE TABLE road_protected_anchors (
+    road_id TEXT NOT NULL,
+    anchor_index INTEGER NOT NULL CHECK (anchor_index >= 0),
+    station REAL NOT NULL,
+    easting REAL NOT NULL,
+    northing REAL NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('junction','endpoint','user_pinned','semantic')),
+    PRIMARY KEY (road_id, anchor_index),
+    FOREIGN KEY (road_id) REFERENCES roads(id) ON DELETE CASCADE
+);
 )sql",
     },
 }};

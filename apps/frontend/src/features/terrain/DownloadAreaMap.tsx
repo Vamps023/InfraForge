@@ -8,6 +8,7 @@ import {
 } from 'react-leaflet'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
+import { Hand, Square, Search, Crosshair, RotateCw, AlertTriangle } from 'lucide-react'
 import {
   type LocationSearchClient,
   type SearchResult,
@@ -62,6 +63,10 @@ interface DownloadAreaMapProps {
   tileSize: number
   searchClient?: LocationSearchClient
   mapTileConfig?: MapTileConfig
+  // Token that changes when the host dialog/tab becomes visible so the
+  // map can refresh its size (Leaflet needs invalidateSize when mounted
+  // in hidden tabs or resized dialogs).
+  resizeToken?: number
 }
 
 // Convert WebMercator lat/lon to leaflet LatLngBounds.
@@ -141,6 +146,26 @@ function FitBounds({ bounds }: { bounds: GeoBounds | null }) {
   return null
 }
 
+// Refresh Leaflet's internal size when the host container resizes or
+// becomes visible. Leaflet caches the container size at init; without an
+// explicit invalidateSize() the tile pane can render blank or clipped
+// when the map is mounted inside a dialog/hidden tab.
+function MapResizer({ token }: { token?: number }) {
+  const map = useMap()
+  useEffect(() => {
+    map.invalidateSize()
+  }, [map, token])
+  useEffect(() => {
+    const container = map.getContainer()
+    const observer = new ResizeObserver(() => {
+      map.invalidateSize()
+    })
+    observer.observe(container)
+    return () => observer.disconnect()
+  }, [map])
+  return null
+}
+
 export function DownloadAreaMap({
   area,
   onAreaChange,
@@ -149,11 +174,27 @@ export function DownloadAreaMap({
   tileSize,
   searchClient,
   mapTileConfig = defaultMapTileConfig,
+  resizeToken,
 }: DownloadAreaMapProps) {
   const [goToLat, setGoToLat] = useState('')
   const [goToLon, setGoToLon] = useState('')
+  const [goToError, setGoToError] = useState<string | null>(null)
+  const [goToExpanded, setGoToExpanded] = useState(false)
   const [mode, setMode] = useState<MapMode>('navigate')
   const fitRef = useRef<L.Map | null>(null)
+
+  // Tile load-error state. Leaflet fires `tileerror` when a remote tile
+  // image cannot be loaded (network failure, CSP block, bad provider).
+  // We surface a visible overlay with a Retry action instead of leaving
+  // the user staring at a blank gray pane.
+  const [tileErrorCount, setTileErrorCount] = useState(0)
+  const [tileLayerKey, setTileLayerKey] = useState(0)
+  const tileUrl = mapTileConfig.url
+
+  // Reset error state when the tile provider URL changes.
+  useEffect(() => {
+    setTileErrorCount(0)
+  }, [tileUrl])
 
   // Location search state (Issue #6).
   // Explicit search: user enters a location, presses Search or Enter,
@@ -222,9 +263,20 @@ export function DownloadAreaMap({
   const handleGoTo = useCallback(() => {
     const lat = parseFloat(goToLat)
     const lon = parseFloat(goToLon)
-    if (Number.isFinite(lat) && Number.isFinite(lon)) {
-      fitRef.current?.panTo([lat, lon])
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+      setGoToError('Enter numeric latitude and longitude.')
+      return
     }
+    if (lat < -90 || lat > 90) {
+      setGoToError('Latitude must be between -90 and 90.')
+      return
+    }
+    if (lon < -180 || lon > 180) {
+      setGoToError('Longitude must be between -180 and 180.')
+      return
+    }
+    setGoToError(null)
+    fitRef.current?.panTo([lat, lon])
   }, [goToLat, goToLon])
 
   const handleDraw = useCallback((bounds: GeoBounds) => {
@@ -233,13 +285,21 @@ export function DownloadAreaMap({
     setMode('navigate')
   }, [onAreaChange])
 
+  const retryTiles = useCallback(() => {
+    setTileErrorCount(0)
+    setTileLayerKey((k) => k + 1)
+  }, [])
+
+  const hasTileError = tileErrorCount > 0
+
   return (
-    <div className="download-area-map">
-      <div className="map-controls">
+    <div className={`download-area-map ${mode === 'draw' ? 'mode-draw' : ''}`}>
+      <div className="map-toolbar" role="toolbar" aria-label="Map controls">
         {searchClient && (
-          <div className="search-controls">
+          <div className="map-search">
             <input
               type="text"
+              className="map-search-input"
               placeholder="Enter a location name..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
@@ -249,23 +309,25 @@ export function DownloadAreaMap({
                   handleSearch()
                 }
               }}
+              aria-label="Search a location"
             />
             <button
               type="button"
+              className="button secondary map-search-btn"
               onClick={handleSearch}
               disabled={searching || searchQuery.trim().length < 2}
             >
-              Search
+              <Search size={14} /> Search
             </button>
-            {searching && <span className="search-status">Searching...</span>}
+            {searching && <span className="map-search-status" aria-live="polite">Searching...</span>}
             {!searching && hasSearched && !searchError && searchResults.length === 0 && (
-              <span className="search-no-results">No results found</span>
+              <span className="map-search-no-results" aria-live="polite">No results found</span>
             )}
-            {searchError && <span className="search-error">{searchError}</span>}
+            {searchError && <span className="map-search-error" aria-live="polite">{searchError}</span>}
             {searchResults.length > 0 && (
-              <ul className="search-results">
+              <ul className="map-search-results" role="listbox" aria-label="Search results">
                 {searchResults.map((result, i) => (
-                  <li key={i}>
+                  <li key={i} role="option">
                     <button
                       type="button"
                       onClick={() => handleSearchResultClick(result)}
@@ -276,89 +338,134 @@ export function DownloadAreaMap({
                 ))}
               </ul>
             )}
-            <span className="search-attribution">{searchClient.attribution}</span>
           </div>
         )}
-        <div className="go-to-controls">
-          <input
-            type="number"
-            placeholder="Lat"
-            value={goToLat}
-            onChange={(e) => setGoToLat(e.target.value)}
-            step={0.01}
-          />
-          <input
-            type="number"
-            placeholder="Lon"
-            value={goToLon}
-            onChange={(e) => setGoToLon(e.target.value)}
-            step={0.01}
-          />
-          <button type="button" onClick={handleGoTo}>
-            Go To
-          </button>
-        </div>
-        <div className="mode-controls">
+        <div className="map-tools" role="group" aria-label="Map mode">
           <button
             type="button"
-            className={mode === 'navigate' ? 'mode-active' : ''}
+            className={`map-tool ${mode === 'navigate' ? 'active' : ''}`}
+            aria-pressed={mode === 'navigate'}
             onClick={() => setMode('navigate')}
           >
-            Navigate
+            <Hand size={14} /> Navigate
           </button>
           <button
             type="button"
-            className={mode === 'draw' ? 'mode-active' : ''}
+            className={`map-tool ${mode === 'draw' ? 'active' : ''}`}
+            aria-pressed={mode === 'draw'}
             onClick={() => setMode('draw')}
           >
-            Draw Area
+            <Square size={14} /> Draw Area
           </button>
         </div>
-        <div className="map-hint">
-          {mode === 'draw'
-            ? 'Click and drag on the map to draw a rectangular area.'
-            : 'Pan and zoom normally. Click "Draw Area" to draw a rectangle.'}
+        <div className="map-goto">
+          <button
+            type="button"
+            className="map-goto-toggle"
+            aria-expanded={goToExpanded}
+            aria-controls="map-goto-fields"
+            onClick={() => setGoToExpanded((v) => !v)}
+          >
+            <Crosshair size={12} /> Go to coordinates
+          </button>
+          {goToExpanded && (
+            <div className="map-goto-fields" id="map-goto-fields">
+              <input
+                type="number"
+                placeholder="Lat"
+                value={goToLat}
+                onChange={(e) => setGoToLat(e.target.value)}
+                step={0.01}
+                aria-label="Latitude"
+              />
+              <input
+                type="number"
+                placeholder="Lon"
+                value={goToLon}
+                onChange={(e) => setGoToLon(e.target.value)}
+                step={0.01}
+                aria-label="Longitude"
+              />
+              <button type="button" className="button secondary" onClick={handleGoTo}>
+                Go To
+              </button>
+              {goToError && <span className="map-goto-error" role="alert">{goToError}</span>}
+            </div>
+          )}
         </div>
       </div>
-      <MapContainer
-        center={[39.7, -105.2]}
-        zoom={10}
-        style={{ height: '400px', width: '100%' }}
-        ref={(m) => {
-          fitRef.current = m
-        }}
-      >
-        <TileLayer
-          attribution={mapTileConfig.attribution}
-          url={mapTileConfig.url}
-          maxZoom={mapTileConfig.maxZoom}
-        />
-        <DrawHandler onDraw={handleDraw} mode={mode} />
-        <FitBounds bounds={area} />
-        {area && (
-          <Rectangle
-            bounds={toLeafletBounds(area)}
-            pathOptions={{ color: '#2563eb', fillOpacity: 0.05 }}
-          />
-        )}
-        {selectionTiles.map((tile) => (
-          <Rectangle
-            key={tile.index}
-            bounds={toLeafletBounds(tile.bounds)}
-            pathOptions={{
-              color: tile.selected ? '#16a34a' : '#94a3b8',
-              fillColor: tile.selected ? '#16a34a' : '#cbd5e1',
-              fillOpacity: tile.selected ? 0.3 : 0.1,
-              weight: 1,
-            }}
+
+      <div className="map-stage">
+        <MapContainer
+          center={[39.7, -105.2]}
+          zoom={10}
+          style={{ height: '100%', width: '100%' }}
+          ref={(m) => {
+            fitRef.current = m
+          }}
+        >
+          <MapResizer token={resizeToken} />
+          <TileLayer
+            key={tileLayerKey}
+            attribution={mapTileConfig.attribution}
+            url={mapTileConfig.url}
+            maxZoom={mapTileConfig.maxZoom}
             eventHandlers={{
-              click: () => onTileToggle(tile.index),
+              tileerror: () => setTileErrorCount((c) => c + 1),
             }}
           />
-        ))}
-      </MapContainer>
-      <div className="tile-size-info">
-        Tile size: {tileSize >= 1000 ? `${tileSize / 1000} km` : `${tileSize} m`}
+          <DrawHandler onDraw={handleDraw} mode={mode} />
+          <FitBounds bounds={area} />
+          {area && (
+            <Rectangle
+              bounds={toLeafletBounds(area)}
+              pathOptions={{ color: '#2563eb', fillOpacity: 0.05 }}
+            />
+          )}
+          {selectionTiles.map((tile) => (
+            <Rectangle
+              key={tile.index}
+              bounds={toLeafletBounds(tile.bounds)}
+              pathOptions={{
+                color: tile.selected ? '#16a34a' : '#94a3b8',
+                fillColor: tile.selected ? '#16a34a' : '#cbd5e1',
+                fillOpacity: tile.selected ? 0.3 : 0.1,
+                weight: 1,
+              }}
+              eventHandlers={{
+                click: () => onTileToggle(tile.index),
+              }}
+            />
+          ))}
+        </MapContainer>
+        {hasTileError && (
+          <div className="map-error-overlay" role="alert">
+            <div className="map-error-content">
+              <AlertTriangle size={20} />
+              <div className="map-error-text">
+                <strong>Map tiles could not be loaded</strong>
+                <span>Check your internet connection or map provider configuration.</span>
+              </div>
+              <button type="button" className="button secondary" onClick={retryTiles}>
+                <RotateCw size={14} /> Retry
+              </button>
+            </div>
+          </div>
+        )}
+        {mode === 'draw' && !hasTileError && (
+          <div className="map-helper" aria-live="polite">
+            Drag on the map to define the working area.
+          </div>
+        )}
+      </div>
+
+      <div className="map-footer">
+        <span className="map-footer-item">
+          Tile size: {tileSize >= 1000 ? `${tileSize / 1000} km` : `${tileSize} m`}
+        </span>
+        {searchClient && (
+          <span className="map-footer-attribution">{searchClient.attribution}</span>
+        )}
       </div>
     </div>
   )

@@ -8,9 +8,17 @@ import type { LocationSearchClient, SearchResult } from './locationSearch'
 // These tests render the REAL DownloadAreaMap component (not a mock),
 // mocking only Leaflet/react-leaflet at the minimal boundary.
 
+// Hoisted ref so the react-leaflet mock can expose the TileLayer
+// eventHandlers to tests (e.g. to simulate a tile load failure).
+const { tileLayerHandlers } = vi.hoisted(() => ({
+  tileLayerHandlers: { current: null as Record<string, ((...a: any[]) => void) | undefined> | null },
+}))
+
 const mockMap = {
   fitBounds: vi.fn(),
   panTo: vi.fn(),
+  invalidateSize: vi.fn(),
+  getContainer: () => document.createElement('div'),
   dragging: { disable: vi.fn(), enable: vi.fn() },
 }
 
@@ -19,13 +27,15 @@ vi.mock('react-leaflet', () => {
   return {
     MapContainer: ({ children }: any) =>
       React.createElement('div', { 'data-testid': 'map-container' }, children),
-    TileLayer: ({ url, attribution, maxZoom }: any) =>
-      React.createElement('div', {
+    TileLayer: ({ url, attribution, maxZoom, eventHandlers }: any) => {
+      tileLayerHandlers.current = eventHandlers ?? null
+      return React.createElement('div', {
         'data-testid': 'tile-layer',
         'data-url': url,
         'data-attribution': attribution,
         'data-max-zoom': String(maxZoom),
-      }),
+      })
+    },
     Rectangle: ({ bounds, eventHandlers }: any) =>
       React.createElement('div', {
         'data-testid': 'rectangle',
@@ -260,5 +270,56 @@ describe('BLOCKER 6: DownloadAreaMap tile config', () => {
     expect(tileLayer.getAttribute('data-url')).toBe(customConfig.url)
     expect(tileLayer.getAttribute('data-attribution')).toBe('Custom Tiles')
     expect(tileLayer.getAttribute('data-max-zoom')).toBe('15')
+  })
+})
+
+describe('DownloadAreaMap tile load-error handling', () => {
+  it('shows a visible error overlay when a tile fails to load', () => {
+    render(<DownloadAreaMap {...defaultProps} />)
+    // No overlay before any error.
+    expect(screen.queryByText('Map tiles could not be loaded')).toBeNull()
+    // Simulate Leaflet firing tileerror for a failed tile image.
+    expect(tileLayerHandlers.current).not.toBeNull()
+    act(() => {
+      tileLayerHandlers.current!.tileerror?.()
+    })
+    expect(screen.getByText('Map tiles could not be loaded')).toBeInTheDocument()
+    expect(screen.getByText(/Check your internet connection or map provider configuration/)).toBeInTheDocument()
+  })
+
+  it('Retry clears the error and remounts the tile layer', () => {
+    render(<DownloadAreaMap {...defaultProps} />)
+    act(() => {
+      tileLayerHandlers.current!.tileerror?.()
+    })
+    expect(screen.getByText('Map tiles could not be loaded')).toBeInTheDocument()
+    // The TileLayer mock captures handlers on each render/remount.
+    const firstHandlers = tileLayerHandlers.current
+    act(() => {
+      screen.getByRole('button', { name: /Retry/i }).click()
+    })
+    // Overlay cleared.
+    expect(screen.queryByText('Map tiles could not be loaded')).toBeNull()
+    // A new TileLayer instance was mounted (handlers object replaced).
+    expect(tileLayerHandlers.current).not.toBe(firstHandlers)
+  })
+
+  it('resets error state when the tile provider URL changes', () => {
+    const { rerender } = render(<DownloadAreaMap {...defaultProps} />)
+    act(() => {
+      tileLayerHandlers.current!.tileerror?.()
+    })
+    expect(screen.getByText('Map tiles could not be loaded')).toBeInTheDocument()
+    rerender(
+      <DownloadAreaMap
+        {...defaultProps}
+        mapTileConfig={{
+          url: 'https://other.example.com/{z}/{x}/{y}.png',
+          attribution: 'Other',
+          maxZoom: 18,
+        }}
+      />,
+    )
+    expect(screen.queryByText('Map tiles could not be loaded')).toBeNull()
   })
 })

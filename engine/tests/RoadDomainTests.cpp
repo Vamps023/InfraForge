@@ -2,6 +2,8 @@
 
 #include "infraforge/domain/road/AlignmentPrimitives.hpp"
 #include "infraforge/domain/road/ReferenceAlignment.hpp"
+#include "infraforge/domain/road/Road.hpp"
+#include "infraforge/domain/road/RoadSource.hpp"
 #include "infraforge/domain/road/RoadTypes.hpp"
 #include "infraforge/domain/road/VerticalProfiles.hpp"
 
@@ -529,6 +531,180 @@ TEST_CASE("superelevation profile is independent of terrain") {
     auto built = buildSuperelevationProfile({{0.0, 0.0}, {100.0, 0.08}});
     REQUIRE(built.has_value());
     CHECK(built->evaluate(50.0) == doctest::Approx(0.04));
+}
+
+} // TEST_SUITE
+
+TEST_SUITE("road source geometry and provenance") {
+
+using infraforge::domain::road::SourceVertex;
+using infraforge::domain::road::SourceTag;
+using infraforge::domain::road::RoadProvenance;
+using infraforge::domain::road::SourcePolyline;
+using infraforge::domain::road::RoadSource;
+using infraforge::domain::road::ProtectedAnchor;
+using infraforge::domain::road::AnchorKind;
+using infraforge::domain::road::SourceProvider;
+
+TEST_CASE("authored road has empty source geometry") {
+    RoadSource source;
+    CHECK(source.geometry.vertices.empty());
+    CHECK(source.provenance.provider == SourceProvider::Authored);
+    CHECK(source.protectedAnchors.empty());
+}
+
+TEST_CASE("imported road retains source polyline and provenance") {
+    RoadSource source;
+    source.geometry.sourceCrs = "EPSG:4326";
+    source.geometry.vertices = {{-122.4, 37.8, 10.0}, {-122.41, 37.81, 12.0}};
+    source.provenance.provider = SourceProvider::Osm;
+    source.provenance.sourceId = "way/123456";
+    source.provenance.tags = {{"highway", "motorway"}, {"lanes", "2"}};
+    source.provenance.importedAt = "2026-09-14T00:00:00Z";
+
+    CHECK(source.geometry.vertices.size() == 2);
+    CHECK(source.provenance.provider == SourceProvider::Osm);
+    CHECK(source.provenance.sourceId == "way/123456");
+    CHECK(source.provenance.tags.size() == 2);
+    CHECK(source.geometry.sourceCrs == "EPSG:4326");
+}
+
+TEST_CASE("source geometry is distinct from canonical alignment") {
+    // Source polyline in WGS84 is NOT the canonical alignment.
+    RoadSource source;
+    source.geometry.vertices = {{-122.4, 37.8}, {-122.41, 37.81}};
+    source.provenance.provider = SourceProvider::Osm;
+
+    // Canonical alignment is in project coordinates, separate.
+    LineSegment line{.start = {1000.0, 2000.0}, .heading = 0.5, .length = 100.0};
+    auto alignment = infraforge::domain::road::ReferenceAlignment::build({line});
+    REQUIRE(alignment.has_value());
+
+    // The source polyline coordinates are in a different space (WGS84).
+    CHECK(source.geometry.vertices[0].x != alignment->evaluate(0.0).position.easting);
+}
+
+TEST_CASE("protected anchors are stored and compared by value") {
+    ProtectedAnchor a{.station = 50.0, .position = {100.0, 200.0}, .kind = AnchorKind::Junction};
+    ProtectedAnchor b = a;
+    CHECK(a == b);
+    b.kind = AnchorKind::Endpoint;
+    CHECK(a != b);
+}
+
+} // TEST_SUITE
+
+TEST_SUITE("road entity") {
+
+using infraforge::domain::road::Road;
+using infraforge::domain::road::RoadId;
+using infraforge::domain::road::LineSegment;
+using infraforge::domain::road::ReferenceAlignment;
+using infraforge::domain::road::ProtectedAnchor;
+using infraforge::domain::road::AnchorKind;
+using infraforge::domain::road::validateProtectedAnchors;
+
+RoadId makeId() {
+    return infraforge::domain::road::roadIdFromUuidText("12345678-1234-1234-1234-123456789abc");
+}
+
+ReferenceAlignment makeAlignment() {
+    LineSegment line{.start = {0.0, 0.0}, .heading = 0.0, .length = 100.0};
+    auto built = ReferenceAlignment::build({line});
+    REQUIRE(built.has_value());
+    return *built;
+}
+
+TEST_CASE("road build succeeds with valid input") {
+    auto alignment = makeAlignment();
+    Road::BuildInput input{
+        .id = makeId(),
+        .displayName = "Highway 1",
+        .alignment = alignment,
+        .elevation = {},
+        .superelevation = {},
+        .source = {},
+    };
+    auto road = Road::build(std::move(input));
+    REQUIRE(road.has_value());
+    CHECK(road->displayName() == "Highway 1");
+    CHECK_FALSE(road->id().isNull());
+    CHECK(road->alignment().totalLength() == doctest::Approx(100.0));
+}
+
+TEST_CASE("road build rejects null id") {
+    auto alignment = makeAlignment();
+    Road::BuildInput input{
+        .id = RoadId{},
+        .displayName = "Road",
+        .alignment = alignment,
+    };
+    auto road = Road::build(std::move(input));
+    REQUIRE_FALSE(road.has_value());
+    bool found = false;
+    for (const auto& d : road.error()) {
+        if (d.code == infraforge::domain::road::RoadErrorCode::InvalidArgument) { found = true; }
+    }
+    CHECK(found);
+}
+
+TEST_CASE("road build rejects empty display name") {
+    auto alignment = makeAlignment();
+    Road::BuildInput input{
+        .id = makeId(),
+        .displayName = "",
+        .alignment = alignment,
+    };
+    auto road = Road::build(std::move(input));
+    REQUIRE_FALSE(road.has_value());
+}
+
+TEST_CASE("road evaluate combines alignment and profiles") {
+    auto alignment = makeAlignment();
+    auto elev = infraforge::domain::road::buildElevationProfile({{0.0, 100.0}, {100.0, 110.0}});
+    REQUIRE(elev.has_value());
+    auto sup = infraforge::domain::road::buildSuperelevationProfile({{0.0, 0.0}, {100.0, 0.05}});
+    REQUIRE(sup.has_value());
+
+    Road::BuildInput input{
+        .id = makeId(),
+        .displayName = "Road",
+        .alignment = alignment,
+        .elevation = *elev,
+        .superelevation = *sup,
+    };
+    auto road = Road::build(std::move(input));
+    REQUIRE(road.has_value());
+
+    const auto sample = road->evaluate(50.0);
+    CHECK(sample.position.easting == doctest::Approx(50.0));
+    CHECK(sample.position.northing == doctest::Approx(0.0));
+    CHECK(sample.heading == doctest::Approx(0.0));
+    CHECK(sample.height == doctest::Approx(105.0));
+    CHECK(sample.crossSlope == doctest::Approx(0.025));
+}
+
+TEST_CASE("protected anchor in range passes validation") {
+    auto alignment = makeAlignment();
+    ProtectedAnchor anchor{.station = 50.0, .position = {50.0, 0.0}, .kind = AnchorKind::Endpoint};
+    auto diagnostics = validateProtectedAnchors(alignment, {anchor});
+    CHECK(diagnostics.empty());
+}
+
+TEST_CASE("protected anchor out of range is detected") {
+    auto alignment = makeAlignment();
+    ProtectedAnchor anchor{.station = 200.0, .position = {200.0, 0.0}, .kind = AnchorKind::Junction};
+    auto diagnostics = validateProtectedAnchors(alignment, {anchor});
+    REQUIRE_FALSE(diagnostics.empty());
+    CHECK(diagnostics[0].code == infraforge::domain::road::RoadErrorCode::AnchorOutOfRange);
+}
+
+TEST_CASE("protected anchor with displaced position is detected") {
+    auto alignment = makeAlignment();
+    ProtectedAnchor anchor{.station = 50.0, .position = {55.0, 0.0}, .kind = AnchorKind::UserPinned};
+    auto diagnostics = validateProtectedAnchors(alignment, {anchor});
+    REQUIRE_FALSE(diagnostics.empty());
+    CHECK(diagnostics[0].code == infraforge::domain::road::RoadErrorCode::PositionDiscontinuity);
 }
 
 } // TEST_SUITE

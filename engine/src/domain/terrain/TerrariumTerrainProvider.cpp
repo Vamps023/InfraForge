@@ -80,6 +80,10 @@ TileBounds tileBoundsWebMercator(int z, int x, int y) {
 }
 
 // Convert WGS84 bounds to the set of XYZ tiles at a given zoom.
+// Uses half-open interval [min, max) for the east/north edges so that
+// an area ending exactly on a tile boundary does not request an extra
+// adjacent tile (Finding 9). The south/west edges use closed [min, max]
+// semantics (floor) to ensure full coverage.
 struct XyzTile { int z, x, y; };
 std::vector<XyzTile> tilesForBounds(
     const GeoBounds& bounds, int zoom) {
@@ -89,12 +93,31 @@ std::vector<XyzTile> tilesForBounds(
 
     const double tileSize = (2.0 * kOriginShift) / static_cast<double>(1 << zoom);
 
-    // Tile x range.
+    // Tile x range: closed on min (floor), half-open on max.
+    // If ne.x falls exactly on a tile boundary, floor(ne.x/tileSize)
+    // would give the tile starting at ne.x, which we don't need.
+    // Use std::nextafter to nudge just below the boundary so floor
+    // gives the last tile we actually need.
     int xMin = static_cast<int>(std::floor((sw.x + kOriginShift) / tileSize));
-    int xMax = static_cast<int>(std::floor((ne.x + kOriginShift) / tileSize));
-    // Tile y range (Y is flipped).
+    double neXAdjusted = ne.x;
+    if (ne.x > -kOriginShift && ne.x < kOriginShift) {
+        // Check if ne.x is exactly on a tile boundary.
+        const double tileIdxD = (ne.x + kOriginShift) / tileSize;
+        if (std::abs(tileIdxD - std::round(tileIdxD)) < 1e-9) {
+            neXAdjusted = std::nextafter(ne.x, -kOriginShift);
+        }
+    }
+    int xMax = static_cast<int>(std::floor((neXAdjusted + kOriginShift) / tileSize));
+    // Tile y range (Y is flipped): closed on min, half-open on max.
     int yMin = static_cast<int>(std::floor((kOriginShift - ne.y) / tileSize));
-    int yMax = static_cast<int>(std::floor((kOriginShift - sw.y) / tileSize));
+    double swYAdjusted = sw.y;
+    if (sw.y > -kOriginShift && sw.y < kOriginShift) {
+        const double tileIdxD = (kOriginShift - sw.y) / tileSize;
+        if (std::abs(tileIdxD - std::round(tileIdxD)) < 1e-9) {
+            swYAdjusted = std::nextafter(sw.y, -kOriginShift);
+        }
+    }
+    int yMax = static_cast<int>(std::floor((kOriginShift - swYAdjusted) / tileSize));
 
     const int maxTile = (1 << zoom) - 1;
     xMin = std::max(0, std::min(xMin, maxTile));
@@ -246,8 +269,18 @@ void writeTerrariumGeoTiff(
     }
 }
 
-// Classify HTTP status code into a typed provider error.
-ProviderErrorCode classifyHttpError(int statusCode, const std::string& errorMsg) {
+// Classify HTTP status code and transport error into a typed provider error.
+// Uses the port-level TransportError to distinguish DNS/connect/timeout/
+// cancellation instead of collapsing all transport failures to "timeout"
+// (Finding 10).
+ProviderErrorCode classifyHttpError(
+    int statusCode, const std::string& errorMsg,
+    infraforge::ports::TransportError transportErr) {
+    using infraforge::ports::TransportError;
+    // Cancellation takes priority — must map to Cancelled, not timeout.
+    if (transportErr == TransportError::Cancelled) {
+        return ProviderErrorCode::Cancelled;
+    }
     if (statusCode == 401 || statusCode == 403) {
         return ProviderErrorCode::AuthenticationFailed;
     }
@@ -257,15 +290,28 @@ ProviderErrorCode classifyHttpError(int statusCode, const std::string& errorMsg)
     if (statusCode == 404 || statusCode == 410) {
         return ProviderErrorCode::SourceUnavailable;
     }
-    if (statusCode == 0) {
-        // No response (timeout, DNS, connection failure).
-        return ProviderErrorCode::NetworkTimeout;
-    }
     if (statusCode >= 500) {
         return ProviderErrorCode::SourceUnavailable;
     }
+    if (statusCode == 0) {
+        // Transport-level failure: use the typed transport error.
+        switch (transportErr) {
+        case TransportError::Timeout:
+            return ProviderErrorCode::NetworkTimeout;
+        case TransportError::DnsFailure:
+        case TransportError::ConnectionFailure:
+        case TransportError::TlsFailure:
+        case TransportError::ProtocolFailure:
+        case TransportError::UnknownNetworkFailure:
+            return ProviderErrorCode::SourceUnavailable;
+        case TransportError::None:
+        case TransportError::Cancelled:
+        default:
+            return ProviderErrorCode::NetworkTimeout;
+        }
+    }
     if (!errorMsg.empty()) {
-        return ProviderErrorCode::NetworkTimeout;
+        return ProviderErrorCode::InvalidProviderResponse;
     }
     return ProviderErrorCode::InvalidProviderResponse;
 }
@@ -294,11 +340,26 @@ TerrariumTerrainProvider::TerrariumTerrainProvider(
     : httpClient_(std::move(httpClient)) {
     info_.providerId = "terrarium-aws";
     info_.displayName = "AWS Terrain Tiles (Terrarium)";
+    // Attribution: The AWS Terrain Tiles / Mapzen Terrarium dataset is a
+    // composite of multiple elevation sources. The authoritative
+    // attribution reference is the joerd project documentation, which
+    // lists all contributing sources and their licenses.
+    // Verified 2026-09-14 against:
+    //   https://github.com/tilezen/joerd/blob/master/docs/attribution.md
+    // The dataset includes: SRTM, SRTM-Plus, USGS 3DEP, GMTED2010, NED,
+    // and other open elevation data. See the joerd attribution page for
+    // the full source list and license details.
     info_.attribution =
-        "Terrain data © Mapzen, USGS, NASA, and other open data sources. "
-        "See https://github.com/tilezen/joerd/blob/master/docs/attribution.md";
+        "Elevation data © Mapzen, USGS, NASA, and other open data sources. "
+        "Full attribution: https://github.com/tilezen/joerd/blob/master/docs/attribution.md";
     info_.requiresAuth = false;
-    info_.maxResolutionMpp = 76.0; // ~76 m/pixel at zoom 11
+    // Provider native maximum resolution is not a single fixed value —
+    // the Terrarium dataset is available at zoom 0-15, and the effective
+    // ground resolution varies with latitude (Web Mercator). We set this
+    // to 0 (unknown) rather than a misleading single value (Finding 5).
+    // The effective plan resolution is computed from the selected zoom
+    // and latitude in planDownload.
+    info_.maxResolutionMpp = 0.0;
     // Global coverage (empty bounds = global).
     info_.coverage = GeoBounds{};
 }
@@ -353,8 +414,10 @@ std::vector<ProviderRequest> TerrariumTerrainProvider::planRequests(
         const auto ne = fromWebMercator(tb.maxX, tb.maxY);
         req.bounds = GeoBounds{sw.lon, sw.lat, ne.lon, ne.lat};
 
-        // Estimated bytes: 256x256 PNG ≈ 50-100 KB.
-        req.estimatedBytes = 100 * 1024;
+        // Estimated bytes: unknown (Finding 4). The protocol defines 0 =
+        // unknown. We do not fabricate a size estimate; the actual size
+        // depends on PNG compression which varies per tile.
+        req.estimatedBytes = 0;
         requests.push_back(req);
     }
     return requests;
@@ -372,7 +435,8 @@ std::filesystem::path TerrariumTerrainProvider::fetchRequest(
     }
 
     // Parse the request ID (z/x/y) with strict validation (BLOCKER: harden
-    // provider request parsing — reject trailing garbage).
+    // provider request parsing — reject trailing garbage and out-of-range
+    // x/y for the given zoom level, Finding 8).
     int z, x, y;
     {
         char slash1, slash2;
@@ -388,10 +452,19 @@ std::filesystem::path TerrariumTerrainProvider::fetchRequest(
             throw ProviderError(ProviderErrorCode::InvalidProviderResponse,
                 "trailing garbage in Terrarium request ID: " + request.requestId);
         }
-        // Validate z/x/y ranges.
+        // Validate z/x/y ranges. z must be in [0, 20]. x and y must be
+        // in [0, 2^z) — overflow-safe check (Finding 8).
         if (z < 0 || z > 20 || x < 0 || y < 0) {
             throw ProviderError(ProviderErrorCode::InvalidProviderResponse,
                 "Terrarium tile coordinates out of range: " + request.requestId);
+        }
+        // 2^z as int64 to avoid overflow for z up to 20 (2^20 = 1M).
+        const std::int64_t maxXY = std::int64_t{1} << z;
+        if (static_cast<std::int64_t>(x) >= maxXY ||
+            static_cast<std::int64_t>(y) >= maxXY) {
+            throw ProviderError(ProviderErrorCode::InvalidProviderResponse,
+                "Terrarium tile x/y exceeds 2^z for zoom " +
+                std::to_string(z) + ": " + request.requestId);
         }
     }
 
@@ -426,7 +499,8 @@ std::filesystem::path TerrariumTerrainProvider::fetchRequest(
             throw ProviderError(ProviderErrorCode::Cancelled, "download cancelled after failed request");
         }
 
-        const auto errorCode = classifyHttpError(response.statusCode, response.errorMessage);
+        const auto errorCode = classifyHttpError(
+            response.statusCode, response.errorMessage, response.transportError);
 
         // Check if this is the last attempt or non-retryable.
         if (attempt >= kMaxRetries || !isRetryable(errorCode)) {

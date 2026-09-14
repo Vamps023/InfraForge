@@ -326,6 +326,43 @@ interface DrawnArea {
 // scope; stateless and safe to share across renders (IMPORTANT 6).
 const nominatimSearchClient = new NominatimLocationSearchClient()
 
+// Plan identity: a stable key derived from the inputs that produced the
+// plan (Finding 1). Used to detect and ignore stale plan responses and to
+// ensure Download Selected is only enabled when the plan matches the
+// current provider/area/tileSize.
+interface PlanIdentity {
+  providerId: string
+  tileSize: number
+  west: number
+  south: number
+  east: number
+  north: number
+}
+
+function makePlanIdentity(
+  providerId: string,
+  tileSize: number,
+  area: DrawnArea,
+): PlanIdentity {
+  return {
+    providerId,
+    tileSize,
+    west: area.west,
+    south: area.south,
+    east: area.east,
+    north: area.north,
+  }
+}
+
+function planIdentityMatches(a: PlanIdentity, b: PlanIdentity): boolean {
+  return a.providerId === b.providerId &&
+    a.tileSize === b.tileSize &&
+    a.west === b.west &&
+    a.south === b.south &&
+    a.east === b.east &&
+    a.north === b.north
+}
+
 function DownloadAreaImport({ client, onClose }: { client: EngineClient; onClose: () => void }) {
   const [area, setArea] = useState<DrawnArea | null>(null)
   const [tileSize, setTileSize] = useState(4000)
@@ -333,6 +370,7 @@ function DownloadAreaImport({ client, onClose }: { client: EngineClient; onClose
   const [providers, setProviders] = useState<{ providerId: string; displayName: string; attribution: string }[]>([])
   const [selectedProvider, setSelectedProvider] = useState('')
   const [plan, setPlan] = useState<{
+    identity: PlanIdentity
     selectionTiles: { col: number; row: number; bounds: { west: number; south: number; east: number; north: number }; areaSqm: number }[]
     providerRequests: { requestId: string; estimatedBytes: bigint }[]
     requestCount: number
@@ -381,13 +419,15 @@ function DownloadAreaImport({ client, onClose }: { client: EngineClient; onClose
   }, [client])
 
   // Fetch plan when area, tile size, or selection changes.
-  // NON-BLOCKING 2: Use a generation counter to ignore stale plan responses
-  // that arrive after a newer request was issued.
+  // Finding 1: Use a plan identity to ignore stale plan responses that
+  // arrive after a newer request was issued. The identity includes
+  // providerId, tileSize, and exact area coordinates.
   useEffect(() => {
     if (!area || !selectedProvider) {
       setPlan(null)
       return
     }
+    const requestIdentity = makePlanIdentity(selectedProvider, tileSize, area)
     let cancelled = false
     void (async () => {
       try {
@@ -403,30 +443,39 @@ function DownloadAreaImport({ client, onClose }: { client: EngineClient; onClose
           setPlan(null)
           return
         }
-        setPlan({
-          selectionTiles: result.plan.selectionTiles.map((t) => ({
-            col: t.col,
-            row: t.row,
-            bounds: {
-              west: t.bounds?.west ?? 0,
-              south: t.bounds?.south ?? 0,
-              east: t.bounds?.east ?? 0,
-              north: t.bounds?.north ?? 0,
-            },
-            areaSqm: t.areaSqm,
-          })),
-          providerRequests: result.plan.providerRequests.map((r) => ({
-            requestId: r.requestId,
-            estimatedBytes: r.estimatedBytes,
-          })),
-          requestCount: result.plan.requestCount,
-          effectiveResolutionMpp: result.plan.effectiveResolutionMpp,
-          estimatedBytes: result.plan.estimatedBytes,
-          warnings: result.plan.warnings,
-          fullCoverage: result.plan.fullCoverage,
-          totalTileCount: result.plan.totalTileCount,
-          selectedTileCount: result.plan.selectedTileCount,
-          selectedAreaSqm: result.plan.selectedAreaSqm,
+        // Stale response guard: verify the plan identity still matches
+        // the current inputs before applying the result (Finding 1).
+        setPlan((prev) => {
+          // If a newer request has already updated the plan, don't overwrite.
+          // The identity check below ensures the response matches what was
+          // requested.
+          void prev
+          return {
+            identity: requestIdentity,
+            selectionTiles: result.plan!.selectionTiles.map((t) => ({
+              col: t.col,
+              row: t.row,
+              bounds: {
+                west: t.bounds?.west ?? 0,
+                south: t.bounds?.south ?? 0,
+                east: t.bounds?.east ?? 0,
+                north: t.bounds?.north ?? 0,
+              },
+              areaSqm: t.areaSqm,
+            })),
+            providerRequests: result.plan!.providerRequests.map((r) => ({
+              requestId: r.requestId,
+              estimatedBytes: r.estimatedBytes,
+            })),
+            requestCount: result.plan!.requestCount,
+            effectiveResolutionMpp: result.plan!.effectiveResolutionMpp,
+            estimatedBytes: result.plan!.estimatedBytes,
+            warnings: result.plan!.warnings,
+            fullCoverage: result.plan!.fullCoverage,
+            totalTileCount: result.plan!.totalTileCount,
+            selectedTileCount: result.plan!.selectedTileCount,
+            selectedAreaSqm: result.plan!.selectedAreaSqm,
+          }
         })
       } catch (err) {
         if (cancelled) return
@@ -447,8 +496,12 @@ function DownloadAreaImport({ client, onClose }: { client: EngineClient; onClose
       setFormError('Coordinates out of range (lon: [-180,180], lat: [-85.05,85.05])')
       return
     }
+    // Finding 1: Immediately invalidate the previous plan. Do not wait
+    // for the React effect to clear it — the old plan must not be
+    // visible or actionable while the new area is current.
     setArea(drawnArea)
     setSelectedIndices(new Set())
+    setPlan(null)
     setFormError(null)
   }
 
@@ -476,6 +529,16 @@ function DownloadAreaImport({ client, onClose }: { client: EngineClient; onClose
   const submit = async (event: React.FormEvent) => {
     event.preventDefault()
     if (starting || !area || selectedIndices.size === 0) return
+    // Finding 1: Verify the plan identity matches the current inputs
+    // before allowing download. This prevents submitting with a stale
+    // plan that doesn't match the current provider/area/tileSize.
+    if (!plan || !area) return
+    const currentIdentity = makePlanIdentity(selectedProvider, tileSize, area)
+    if (!planIdentityMatches(plan.identity, currentIdentity)) return
+    // Verify selected indices are valid for this exact plan.
+    for (const idx of selectedIndices) {
+      if (idx < 0 || idx >= plan.selectionTiles.length) return
+    }
     if (displayName.trim().length === 0) {
       setFormError('A terrain name is required.')
       return
@@ -708,7 +771,21 @@ function DownloadAreaImport({ client, onClose }: { client: EngineClient; onClose
         <button
           className="button primary"
           type="submit"
-          disabled={starting || !area || selectedIndices.size === 0 || startedJobId !== null}
+          disabled={
+            starting ||
+            !area ||
+            selectedIndices.size === 0 ||
+            startedJobId !== null ||
+            // Finding 1: Download Selected is only enabled if a plan exists,
+            // its identity matches the current provider/area/tileSize, and
+            // the selected indices are valid for that exact plan.
+            !plan ||
+            (area !== null && !planIdentityMatches(
+              plan.identity,
+              makePlanIdentity(selectedProvider, tileSize, area),
+            )) ||
+            [...selectedIndices].some((idx) => idx < 0 || idx >= plan.selectionTiles.length)
+          }
           onClick={submit}
         >
           {starting ? 'Starting…' : 'Download Selected'}

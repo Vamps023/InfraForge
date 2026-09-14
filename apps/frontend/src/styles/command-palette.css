@@ -1,0 +1,106 @@
+/* =========================================================================
+   InfraForge Command Palette Styles
+   -------------------------------------------------------------------------
+   Modern command launcher overlay with search input and results list.
+   ========================================================================= */
+
+.command-palette-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--if-z-command-palette);
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 88px;
+  background: rgba(0, 0, 0, 0.32);
+}
+
+.command-palette {
+  width: 480px;
+  max-width: calc(100vw - 48px);
+  max-height: 360px;
+  display: flex;
+  flex-direction: column;
+  background: var(--if-bg-panel);
+  border: 1px solid var(--if-border-default);
+  border-radius: var(--if-radius-lg);
+  box-shadow: var(--if-shadow-lg);
+  overflow: hidden;
+}
+
+.command-palette-search {
+  display: flex;
+  align-items: center;
+  gap: var(--if-space-4);
+  padding: var(--if-space-6) var(--if-space-8);
+  border-bottom: 1px solid var(--if-border-default);
+}
+
+.command-palette-search input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--if-text-primary);
+  font-size: var(--if-font-body-lg);
+}
+
+.command-palette-search input::placeholder {
+  color: var(--if-text-disabled);
+}
+
+.command-palette-empty {
+  padding: var(--if-space-8) var(--if-space-6);
+  color: var(--if-text-muted);
+  font-size: var(--if-font-body);
+  text-align: center;
+}
+
+.command-palette-list {
+  list-style: none;
+  margin: 0;
+  padding: var(--if-space-2);
+  overflow-y: auto;
+  flex: 1;
+}
+
+.command-palette-entry {
+  display: flex;
+  align-items: center;
+  gap: var(--if-space-4);
+  padding: var(--if-space-3) var(--if-space-6);
+  border-radius: var(--if-radius-md);
+  font-size: var(--if-font-body);
+  transition: background var(--if-transition-fast);
+}
+
+.command-palette-entry.active {
+  background: var(--if-bg-hover);
+}
+
+.command-palette-entry.disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.command-palette-label {
+  flex: 1;
+  color: var(--if-text-primary);
+}
+
+.command-palette-entry.disabled .command-palette-label {
+  color: var(--if-text-disabled);
+}
+
+.command-palette-category {
+  font-size: var(--if-font-label);
+  color: var(--if-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.command-palette-shortcut {
+  font-size: var(--if-font-label);
+  color: var(--if-text-muted);
+  font-variant-numeric: tabular-nums;
+}

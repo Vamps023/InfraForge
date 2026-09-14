@@ -24,7 +24,40 @@ export function registerTerrainCommands(deps: TerrainCommandDeps): void {
       requiresProject: true,
       requiresNotBusy: true,
       execute: () => {
-        useShellUiStore.getState().openDialogCommand('import-terrain')
+        // The generic Import Terrain command always opens in local-file
+        // mode. Using openDialogCommand('import-terrain') would inherit
+        // whatever terrainImportMode was last set by a dedicated toolbar
+        // deep link (e.g. 'download-area'), so closing the Download Area
+        // tab and reopening via menu/palette could show the wrong tab.
+        useShellUiStore.getState().openTerrainImport('local-file')
+      },
+    },
+    {
+      id: 'terrain.import-local',
+      label: 'Import Local File',
+      description: 'Import a georeferenced GeoTIFF DEM from a local file.',
+      category: 'Terrain',
+      group: 'terrain',
+      surfaces: ['toolbar'],
+      requiresEngine: true,
+      requiresProject: true,
+      requiresNotBusy: true,
+      execute: () => {
+        useShellUiStore.getState().openTerrainImport('local-file')
+      },
+    },
+    {
+      id: 'terrain.download-area',
+      label: 'Download Area',
+      description: 'Download terrain DEM for a selected geographic area.',
+      category: 'Terrain',
+      group: 'terrain',
+      surfaces: ['toolbar'],
+      requiresEngine: true,
+      requiresProject: true,
+      requiresNotBusy: true,
+      execute: () => {
+        useShellUiStore.getState().openTerrainImport('download-area')
       },
     },
     {
@@ -60,5 +93,7 @@ export function registerTerrainCommands(deps: TerrainCommandDeps): void {
 
 export function unregisterTerrainCommands(): void {
   commandRegistry.unregister('terrain.import')
+  commandRegistry.unregister('terrain.import-local')
+  commandRegistry.unregister('terrain.download-area')
   commandRegistry.unregister('terrain.regenerate-tiles')
 }

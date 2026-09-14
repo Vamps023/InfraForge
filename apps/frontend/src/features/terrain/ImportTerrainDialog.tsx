@@ -11,6 +11,7 @@ import {
   probeTerrainSource,
 } from './terrainApi'
 import { useTerrainStore } from './terrainStore'
+import { useShellUiStore } from '../../editor/shell/shellUiStore'
 import { DownloadAreaMap, type GeoBounds, type SelectionTileInfo } from './DownloadAreaMap'
 import { createLocationSearchClient } from './locationSearch'
 import { initTerrainConfig, getTerrainMapTileConfig } from './terrainConfig'
@@ -55,8 +56,9 @@ const TILE_SIZES = [
 // downloads only the selected tiles from a remote DEM provider. The engine
 // owns provider planning, network acquisition, decoding, clipping, and
 // canonical raster assembly.
-export function ImportTerrainDialog({ client, onClose }: ImportTerrainDialogProps) {
-  const [sourceMode, setSourceMode] = useState<SourceMode>('local-file')
+export function ImportTerrainDialog({ client, busy, onClose }: ImportTerrainDialogProps) {
+  const initialMode = useShellUiStore((state) => state.terrainImportMode)
+  const [sourceMode, setSourceMode] = useState<SourceMode>(initialMode)
 
   return (
     <div className="dialog-overlay" role="presentation">
@@ -97,9 +99,9 @@ export function ImportTerrainDialog({ client, onClose }: ImportTerrainDialogProp
 
         <div className="dialog-body">
           {sourceMode === 'local-file' ? (
-            <LocalFileImport client={client} onClose={onClose} />
+            <LocalFileImport client={client} busy={busy} onClose={onClose} />
           ) : (
-            <DownloadAreaImport client={client} onClose={onClose} />
+            <DownloadAreaImport client={client} busy={busy} onClose={onClose} />
           )}
         </div>
       </div>
@@ -107,7 +109,7 @@ export function ImportTerrainDialog({ client, onClose }: ImportTerrainDialogProp
   )
 }
 
-function LocalFileImport({ client, onClose }: { client: EngineClient; onClose: () => void }) {
+function LocalFileImport({ client, busy, onClose }: { client: EngineClient; busy: boolean; onClose: () => void }) {
   const [path, setPath] = useState('')
   const [displayName, setDisplayName] = useState('')
   const [probing, setProbing] = useState(false)
@@ -182,7 +184,7 @@ function LocalFileImport({ client, onClose }: { client: EngineClient; onClose: (
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault()
-    if (submitInFlightRef.current || starting || !probe) {
+    if (submitInFlightRef.current || starting || busy || !probe) {
       return
     }
     if (path.trim().length === 0) {
@@ -376,7 +378,7 @@ function LocalFileImport({ client, onClose }: { client: EngineClient; onClose: (
         <button className="button secondary" type="button" onClick={onClose}>
           {importFinished || startedJobId !== null ? 'Close' : 'Cancel'}
         </button>
-        <button className="button primary" type="submit" disabled={starting || !probe || startedJobId !== null || (probe.source?.elevationUnit === 'unknown' && !elevationUnitOverride)} onClick={submit}>
+        <button className="button primary" type="submit" disabled={starting || busy || !probe || startedJobId !== null || (probe.source?.elevationUnit === 'unknown' && !elevationUnitOverride)} onClick={submit}>
           {starting ? 'Starting…' : 'Import Terrain'}
         </button>
       </div>
@@ -465,7 +467,7 @@ function AttributionDisplay({ attribution }: { attribution: string }) {
   )
 }
 
-function DownloadAreaImport({ client, onClose }: { client: EngineClient; onClose: () => void }) {
+function DownloadAreaImport({ client, busy, onClose }: { client: EngineClient; busy: boolean; onClose: () => void }) {
   const [area, setArea] = useState<DrawnArea | null>(null)
   const [tileSize, setTileSize] = useState(4000)
   const [selectedIndices, setSelectedIndices] = useState<Set<number>>(new Set())
@@ -652,7 +654,7 @@ function DownloadAreaImport({ client, onClose }: { client: EngineClient; onClose
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault()
-    if (starting || !area || selectedIndices.size === 0) return
+    if (starting || busy || !area || selectedIndices.size === 0) return
     // Finding 1: Verify the plan identity matches the current inputs
     // before allowing download. This prevents submitting with a stale
     // plan that doesn't match the current provider/area/tileSize.
@@ -701,6 +703,7 @@ function DownloadAreaImport({ client, onClose }: { client: EngineClient; onClose
 
   const downloadDisabled =
     starting ||
+    busy ||
     !area ||
     selectedIndices.size === 0 ||
     startedJobId !== null ||

@@ -1,0 +1,232 @@
+/* =========================================================================
+   InfraForge Viewport Styles
+   -------------------------------------------------------------------------
+   Viewport area, native host container, overlay states, empty states,
+   and viewport overlay HUD elements.
+   ========================================================================= */
+
+.viewport-area {
+  position: absolute;
+  inset: 0;
+  min-width: 0;
+  background: var(--if-bg-canvas);
+}
+
+.viewport-host {
+  position: absolute;
+  inset: 0;
+}
+
+.viewport-overlay {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+}
+
+.viewport-grid {
+  position: absolute;
+  inset: 0;
+  opacity: 0.22;
+  background-image:
+    linear-gradient(var(--if-border-default) 1px, transparent 1px),
+    linear-gradient(90deg, var(--if-border-default) 1px, transparent 1px);
+  background-size: 32px 32px;
+  mask-image: radial-gradient(circle at center, black, transparent 78%);
+}
+
+/* ---- Empty / error states ---- */
+.empty-state {
+  position: relative;
+  max-width: 460px;
+  padding: var(--if-space-12);
+  text-align: center;
+  color: var(--if-text-muted);
+}
+
+.empty-state-icon {
+  width: 42px;
+  height: 42px;
+  margin: 0 auto var(--if-space-6);
+  display: grid;
+  place-items: center;
+  border-radius: var(--if-radius-lg);
+  background: var(--if-bg-elevated);
+  border: 1px solid var(--if-border-strong);
+  color: var(--if-text-secondary);
+}
+
+.empty-state h1 {
+  margin: 0 0 var(--if-space-3);
+  color: var(--if-text-primary);
+  font-size: var(--if-font-heading);
+  font-weight: var(--if-weight-semibold);
+}
+
+.empty-state p {
+  margin: 0;
+  font-size: var(--if-font-body);
+  line-height: var(--if-leading-relaxed);
+}
+
+.empty-state-error {
+  color: var(--if-danger);
+}
+
+.empty-state-actions {
+  display: flex;
+  gap: var(--if-space-6);
+  justify-content: center;
+  margin-top: var(--if-space-8);
+}
+
+.empty-state-note {
+  margin-top: var(--if-space-6);
+  color: var(--if-text-disabled);
+  font-size: var(--if-font-metadata);
+}
+
+/* ---- Project home screen ---- */
+.home-screen {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: var(--if-bg-canvas);
+  overflow: auto;
+  padding: var(--if-space-16);
+}
+
+.home-screen-content {
+  max-width: 520px;
+  width: 100%;
+  text-align: center;
+}
+
+.home-logo {
+  display: grid;
+  place-items: center;
+  width: 64px;
+  height: 64px;
+  margin: 0 auto var(--if-space-6);
+  border: 2px solid var(--if-accent-border);
+  background: var(--if-accent-subtle);
+  color: var(--if-accent);
+  border-radius: var(--if-radius-xl);
+  font-size: 18px;
+  font-weight: var(--if-weight-bold);
+}
+
+.home-title {
+  margin: 0 0 var(--if-space-3);
+  font-size: var(--if-font-display);
+  font-weight: var(--if-weight-semibold);
+  color: var(--if-text-primary);
+  letter-spacing: var(--if-tracking-tight);
+}
+
+.home-subtitle {
+  margin: 0 0 var(--if-space-12);
+  font-size: var(--if-font-body-lg);
+  color: var(--if-text-muted);
+  line-height: var(--if-leading-relaxed);
+}
+
+.home-actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--if-space-4);
+  align-items: center;
+}
+
+.home-action-row {
+  display: flex;
+  gap: var(--if-space-6);
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.home-section {
+  margin-top: var(--if-space-12);
+  width: 100%;
+}
+
+.home-section-title {
+  text-transform: uppercase;
+  letter-spacing: var(--if-tracking-label);
+  font-size: var(--if-font-label);
+  font-weight: var(--if-weight-semibold);
+  color: var(--if-text-muted);
+  margin-bottom: var(--if-space-4);
+  text-align: left;
+}
+
+.home-recent-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--if-space-2);
+  text-align: left;
+}
+
+.home-recent-item {
+  display: flex;
+  align-items: center;
+  gap: var(--if-space-4);
+  padding: var(--if-space-4) var(--if-space-6);
+  border: 1px solid var(--if-border-default);
+  border-radius: var(--if-radius-md);
+  background: var(--if-bg-panel);
+  color: var(--if-text-primary);
+  font-size: var(--if-font-body);
+  cursor: pointer;
+  transition: border-color var(--if-transition-fast), background var(--if-transition-fast);
+}
+
+.home-recent-item:hover {
+  border-color: var(--if-accent);
+  background: var(--if-bg-hover);
+}
+
+.home-recent-name {
+  font-weight: var(--if-weight-medium);
+}
+
+.home-recent-path {
+  color: var(--if-text-muted);
+  font-size: var(--if-font-metadata);
+  margin-left: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 300px;
+}
+
+.home-getting-started {
+  display: flex;
+  flex-direction: column;
+  gap: var(--if-space-3);
+  text-align: left;
+}
+
+.home-getting-started-item {
+  display: flex;
+  align-items: center;
+  gap: var(--if-space-4);
+  padding: var(--if-space-3) var(--if-space-4);
+  color: var(--if-text-secondary);
+  font-size: var(--if-font-body);
+}
+
+.home-getting-started-item svg {
+  color: var(--if-accent);
+  flex-shrink: 0;
+}
+
+.home-version {
+  margin-top: var(--if-space-12);
+  color: var(--if-text-disabled);
+  font-size: var(--if-font-metadata);
+}

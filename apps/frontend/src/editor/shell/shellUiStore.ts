@@ -8,14 +8,23 @@ import { create } from 'zustand'
 
 export type ShellDialog = 'new-project' | 'georeference' | 'command-palette' | 'import-terrain' | 'diagnostics' | null
 
+// When the import-terrain dialog is open, this controls which source tab
+// is initially active ('local-file' or 'download-area'). Set before opening
+// the dialog so the ContextToolbar can deep-link to a specific mode.
+export type TerrainImportMode = 'local-file' | 'download-area'
+
 interface ShellUiState {
   openDialog: ShellDialog
+  terrainImportMode: TerrainImportMode
   openDialogCommand: (dialog: ShellDialog) => void
+  openTerrainImport: (mode: TerrainImportMode) => void
   closeDialog: () => void
 }
 
 export const useShellUiStore = create<ShellUiState>((set) => ({
   openDialog: null,
+  terrainImportMode: 'local-file',
   openDialogCommand: (openDialog) => set({ openDialog }),
+  openTerrainImport: (terrainImportMode) => set({ openDialog: 'import-terrain', terrainImportMode }),
   closeDialog: () => set({ openDialog: null }),
 }))

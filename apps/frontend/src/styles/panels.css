@@ -20,6 +20,43 @@
   border-left: 1px solid var(--if-border-default);
 }
 
+/* ---- Panel tabs (Scene / Layers / Assets) ---- */
+.panel-tabs {
+  display: flex;
+  gap: var(--if-space-1);
+  padding: 0 var(--if-space-4);
+  height: 28px;
+  align-items: stretch;
+  border-bottom: 1px solid var(--if-border-subtle);
+}
+
+.panel-tab {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--if-text-muted);
+  font-size: var(--if-font-metadata);
+  font-weight: 500;
+  padding: 0 var(--if-space-2);
+  cursor: pointer;
+  transition: color var(--if-transition-fast), border-color var(--if-transition-fast);
+  margin-bottom: -1px;
+}
+
+.panel-tab:hover:not(:disabled):not(.active) {
+  color: var(--if-text-secondary);
+}
+
+.panel-tab.active {
+  color: var(--if-text-primary);
+  border-bottom-color: var(--if-accent);
+}
+
+.panel-tab:disabled {
+  color: var(--if-text-disabled);
+  cursor: default;
+}
+
 .panel-title-row {
   height: var(--if-header-panel);
   display: flex;
@@ -167,14 +204,33 @@
 }
 
 .inspector-section-title {
+  display: flex;
+  align-items: center;
+  gap: var(--if-space-2);
+  width: 100%;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--if-border-default);
   text-transform: uppercase;
   letter-spacing: var(--if-tracking-label);
   font-size: var(--if-font-label);
   font-weight: var(--if-weight-semibold);
   color: var(--if-text-muted);
-  padding-bottom: var(--if-space-3);
-  border-bottom: 1px solid var(--if-border-default);
+  padding: 0 0 var(--if-space-3) 0;
   margin-bottom: var(--if-space-4);
+  cursor: pointer;
+  text-align: left;
+  transition: color var(--if-transition-fast);
+}
+
+.inspector-section-title:hover {
+  color: var(--if-text-secondary);
+}
+
+.inspector-section-title:focus-visible {
+  outline: 1px solid var(--if-accent);
+  outline-offset: 2px;
+  border-radius: var(--if-radius-sm);
 }
 
 .inspector-section-body {

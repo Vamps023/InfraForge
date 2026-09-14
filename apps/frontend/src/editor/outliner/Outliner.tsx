@@ -312,8 +312,41 @@ export function Outliner() {
   return (
     <aside className="panel outliner-panel" aria-label="Outliner">
       <div className="panel-title-row">
-        <span>Outliner</span>
+        <span>Scene</span>
       </div>
+      {projectOpen ? (
+        <div className="panel-tabs" role="tablist" aria-label="Outliner views">
+          <button
+            className="panel-tab active"
+            type="button"
+            role="tab"
+            aria-selected="true"
+            aria-controls="outliner-scene-panel"
+          >
+            Scene
+          </button>
+          <button
+            className="panel-tab"
+            type="button"
+            role="tab"
+            aria-selected="false"
+            disabled
+            title="Layers — coming later"
+          >
+            Layers
+          </button>
+          <button
+            className="panel-tab"
+            type="button"
+            role="tab"
+            aria-selected="false"
+            disabled
+            title="Assets — coming later"
+          >
+            Assets
+          </button>
+        </div>
+      ) : null}
       <div className="search-box">
         <Search size={14} />
         <input
@@ -326,6 +359,7 @@ export function Outliner() {
       </div>
       <div
         className="outliner-body"
+        id="outliner-scene-panel"
         ref={scrollRef}
         onScroll={onScroll}
         onClick={onBackgroundClick}

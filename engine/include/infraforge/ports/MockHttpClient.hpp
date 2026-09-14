@@ -47,8 +47,8 @@ public:
     }
 
     [[nodiscard]] HttpResponse get(
-        const std::string& url, const std::atomic<bool>& cancelled) override {
-        if (cancelled.load()) {
+        const std::string& url, const std::function<bool()>& cancelled) override {
+        if (cancelled && cancelled()) {
             HttpResponse r;
             r.statusCode = 0;
             r.errorMessage = "cancelled";

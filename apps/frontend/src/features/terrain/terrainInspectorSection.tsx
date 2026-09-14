@@ -72,6 +72,12 @@ export function registerTerrainInspectorSection(deps: TerrainInspectorDeps): voi
             <dd>{dataset.hasNodata ? `present (${dataset.nodataValue})` : 'none'}</dd>
             <dt>Storage Path</dt>
             <dd className="mono small">{dataset.storagePath}</dd>
+            {dataset.sourceAttribution ? (
+              <>
+                <dt>Source Attribution</dt>
+                <dd className="small">{dataset.sourceAttribution}</dd>
+              </>
+            ) : null}
             <dt>Revision</dt>
             <dd>{dataset.revision.toString()}</dd>
             {dataset.diagnostics.length > 0 ? (

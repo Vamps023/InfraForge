@@ -103,7 +103,7 @@ public:
 
     TerrainService(ports::ProjectStore& store, const domain::geo::GeoTransformService& transforms,
         ports::TerrainSourceReader& reader, WorldState& world, JobSystem& jobs,
-        EventSink eventSink);
+        domain::terrain::TerrainProviderRegistry providers, EventSink eventSink);
 
     // Rebuilds session state after project create/open (georeference
     // resolution, world partition, dataset registry replay).
@@ -215,3 +215,12 @@ private:
 };
 
 } // namespace infraforge::application
+
+namespace infraforge::application::production {
+
+// Build the production terrain provider registry. Contains only real
+// providers (currently TerrariumTerrainProvider). MockTerrainProvider is
+// never registered in production; tests inject their own registry.
+[[nodiscard]] domain::terrain::TerrainProviderRegistry makeProductionTerrainProviders();
+
+} // namespace infraforge::application::production

@@ -278,7 +278,9 @@ int run_terrain_self_check(const std::filesystem::path& parentDirectory) {
             tasks.push_back(std::move(task));
         }};
         application::TerrainService terrain{
-            store, transforms, reader, world, jobs, [](const application::TerrainServiceEvent&) {}};
+            store, transforms, reader, world, jobs,
+            application::production::makeProductionTerrainProviders(),
+            [](const application::TerrainServiceEvent&) {}};
         terrain.onProjectOpened();
 
         const auto importJob = terrain.startImport({.sourcePath = demPath, .displayName = "Self Check DEM"});

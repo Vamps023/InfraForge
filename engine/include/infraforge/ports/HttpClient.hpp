@@ -1,7 +1,7 @@
 #pragma once
 
-#include <atomic>
 #include <cstddef>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -29,10 +29,11 @@ public:
     //   - return a typed error on failure (timeout, DNS, connection)
     [[nodiscard]] virtual HttpResponse get(const std::string& url) = 0;
 
-    // Synchronous GET with cancellation. If the cancel flag is set to
-    // true by another thread, the request should abort promptly.
+    // Synchronous GET with cancellation. The canceller is polled during
+    // the transfer via the ixwebsocket progress callback; returning true
+    // aborts the in-flight request promptly (BLOCKER 2).
     [[nodiscard]] virtual HttpResponse get(
-        const std::string& url, const std::atomic<bool>& cancelled) = 0;
+        const std::string& url, const std::function<bool()>& cancelled) = 0;
 };
 
 } // namespace infraforge::ports

@@ -4,7 +4,7 @@
 
 #include <ixwebsocket/IXHttpClient.h>
 #include <ixwebsocket/IXSocketTLSOptions.h>
-#include <atomic>
+#include <functional>
 #include <memory>
 
 namespace infraforge::ports {
@@ -31,20 +31,36 @@ public:
     }
 
     [[nodiscard]] HttpResponse get(
-        const std::string& url, const std::atomic<bool>& cancelled) override {
+        const std::string& url, const std::function<bool()>& cancelled) override {
         auto args = client_->createRequest(url, ix::HttpClient::kGet);
         args->connectTimeout = 15;
         args->transferTimeout = 60;
         args->followRedirects = true;
         args->maxRedirects = 5;
         // Check cancellation before the request.
-        if (cancelled.load()) {
+        if (cancelled && cancelled()) {
             HttpResponse r;
             r.statusCode = 0;
             r.errorMessage = "cancelled before request";
             return r;
         }
+        // Wire the canceller into the ixwebsocket progress callback so
+        // that an in-flight request aborts promptly when cancellation is
+        // requested by another thread (BLOCKER 2). ixwebsocket invokes
+        // the progress callback during the transfer; returning false
+        // causes the request to abort with HttpErrorCode::Cancelled.
+        args->onProgressCallback = [&cancelled](int /*current*/, int /*total*/) -> bool {
+            return !(cancelled && cancelled());
+        };
         auto resp = client_->get(url, args);
+        // If the request was cancelled mid-flight, report it clearly.
+        if (cancelled && cancelled() && resp &&
+            resp->errorCode == ix::HttpErrorCode::Cancelled) {
+            HttpResponse r;
+            r.statusCode = 0;
+            r.errorMessage = "cancelled";
+            return r;
+        }
         return convertResponse(resp);
     }
 

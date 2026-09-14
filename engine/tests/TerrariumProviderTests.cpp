@@ -3,9 +3,14 @@
 #include "infraforge/domain/terrain/TerrainDownloadProvider.hpp"
 
 #include <doctest/doctest.h>
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <filesystem>
 #include <fstream>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <gdal.h>
@@ -307,4 +312,181 @@ TEST_SUITE("terrarium terrain provider") {
         std::error_code ec;
         std::filesystem::remove_all(tempDir, ec);
     }
+}
+
+// ---- BLOCKER 2: Real interruptible HTTP cancellation ----
+
+namespace {
+
+// Mock HTTP client that blocks until the canceller returns true or a
+// timeout. Simulates an in-flight request that must abort promptly when
+// cancellation is requested (BLOCKER 2).
+class BlockingMockHttpClient final : public infraforge::ports::HttpClient {
+public:
+    HttpResponse get(const std::string& /*url*/) override {
+        HttpResponse r;
+        r.statusCode = 200;
+        r.body = "blocked";
+        return r;
+    }
+
+    HttpResponse get(const std::string& /*url*/,
+        const std::function<bool()>& cancelled) override {
+        // Simulate a long-running transfer that checks cancellation via
+        // the progress callback. If the canceller is wired correctly,
+        // this returns promptly when cancel() returns true.
+        if (cancelled && cancelled()) {
+            HttpResponse r;
+            r.statusCode = 0;
+            r.errorMessage = "cancelled before request";
+            return r;
+        }
+        // Poll cancellation in a tight loop (simulates ixwebsocket
+        // progress callback polling). Must return within a bounded time
+        // after cancellation is requested.
+        const auto deadline = std::chrono::steady_clock::now() +
+            std::chrono::seconds{30};  // safety: test must cancel before this
+        while (std::chrono::steady_clock::now() < deadline) {
+            if (cancelled && cancelled()) {
+                HttpResponse r;
+                r.statusCode = 0;
+                r.errorMessage = "cancelled";
+                return r;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds{10});
+        }
+        HttpResponse r;
+        r.statusCode = 200;
+        r.body = "timeout";
+        return r;
+    }
+};
+
+} // namespace
+
+TEST_CASE("Terrarium provider: cancellation before request returns promptly") {
+    BlockingMockHttpClient http;
+    TerrariumTerrainProvider provider{std::make_shared<BlockingMockHttpClient>(http)};
+
+    const std::filesystem::path tempDir =
+        std::filesystem::temp_directory_path() / "terrarium_cancel_before";
+    std::filesystem::create_directories(tempDir);
+
+    ProviderRequest req;
+    req.requestId = "11/123/456";
+    req.bounds = GeoBounds{.west = -180, .south = -85.05, .east = -179.99, .north = -85.04};
+    req.estimatedBytes = 100 * 1024;
+
+    // Cancel immediately: the callback returns true on first call.
+    std::atomic<bool> cancelled{true};
+    auto cancelCb = [&cancelled] { return cancelled.load(); };
+
+    const auto start = std::chrono::steady_clock::now();
+    bool threw = false;
+    try {
+        (void)provider.fetchRequest(req, tempDir, "", cancelCb);
+    } catch (const ProviderError& e) {
+        threw = true;
+        CHECK(e.code() == ProviderErrorCode::Cancelled);
+    }
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - start);
+
+    CHECK(threw);
+    // Must return promptly (well under the 30s safety deadline).
+    CHECK(elapsed.count() < 1000);
+
+    std::error_code ec;
+    std::filesystem::remove_all(tempDir, ec);
+}
+
+TEST_CASE("Terrarium provider: cancellation during in-flight request returns promptly") {
+    BlockingMockHttpClient http;
+    TerrariumTerrainProvider provider{std::make_shared<BlockingMockHttpClient>(http)};
+
+    const std::filesystem::path tempDir =
+        std::filesystem::temp_directory_path() / "terrarium_cancel_during";
+    std::filesystem::create_directories(tempDir);
+
+    ProviderRequest req;
+    req.requestId = "11/123/456";
+    req.bounds = GeoBounds{.west = -180, .south = -85.05, .east = -179.99, .north = -85.04};
+    req.estimatedBytes = 100 * 1024;
+
+    // Start uncancelled, then cancel from another thread after 200ms.
+    std::atomic<bool> cancelled{false};
+    auto cancelCb = [&cancelled] { return cancelled.load(); };
+
+    std::thread canceller([&cancelled] {
+        std::this_thread::sleep_for(std::chrono::milliseconds{200});
+        cancelled.store(true);
+    });
+
+    const auto start = std::chrono::steady_clock::now();
+    bool threw = false;
+    try {
+        (void)provider.fetchRequest(req, tempDir, "", cancelCb);
+    } catch (const ProviderError& e) {
+        threw = true;
+        CHECK(e.code() == ProviderErrorCode::Cancelled);
+    }
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - start);
+
+    canceller.join();
+    CHECK(threw);
+    // Must return promptly after cancellation (well under 30s).
+    CHECK(elapsed.count() < 2000);
+
+    std::error_code ec;
+    std::filesystem::remove_all(tempDir, ec);
+}
+
+TEST_CASE("Terrarium provider: cancellation during retry backoff returns promptly") {
+    // Use a mock that always returns 503 (retryable) so the provider enters
+    // the backoff loop, then cancel during backoff.
+    auto mockHttp = std::make_shared<MockHttpClient>();
+    // Configure a 503 for all URLs (retryable, triggers backoff).
+    mockHttp->setErrorResponse(
+        "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/11/123/456.png",
+        503, "service unavailable");
+
+    TerrariumTerrainProvider provider{mockHttp};
+
+    const std::filesystem::path tempDir =
+        std::filesystem::temp_directory_path() / "terrarium_cancel_backoff";
+    std::filesystem::create_directories(tempDir);
+
+    ProviderRequest req;
+    req.requestId = "11/123/456";
+    req.bounds = GeoBounds{.west = -180, .south = -85.05, .east = -179.99, .north = -85.04};
+    req.estimatedBytes = 100 * 1024;
+
+    // Cancel after 150ms (during the first backoff, which is 500ms).
+    std::atomic<bool> cancelled{false};
+    auto cancelCb = [&cancelled] { return cancelled.load(); };
+
+    std::thread canceller([&cancelled] {
+        std::this_thread::sleep_for(std::chrono::milliseconds{150});
+        cancelled.store(true);
+    });
+
+    const auto start = std::chrono::steady_clock::now();
+    bool threw = false;
+    try {
+        (void)provider.fetchRequest(req, tempDir, "", cancelCb);
+    } catch (const ProviderError& e) {
+        threw = true;
+        CHECK(e.code() == ProviderErrorCode::Cancelled);
+    }
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - start);
+
+    canceller.join();
+    CHECK(threw);
+    // Must return promptly after cancellation during backoff.
+    CHECK(elapsed.count() < 1000);
+
+    std::error_code ec;
+    std::filesystem::remove_all(tempDir, ec);
 }

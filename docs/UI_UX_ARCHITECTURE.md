@@ -64,7 +64,6 @@ AppShell (grid: 40px / 1fr / 26px)
 | WorkspaceRail | `apps/frontend/src/editor/shell/WorkspaceRail.tsx` |
 | ContextToolbar | `apps/frontend/src/editor/shell/ContextToolbar.tsx` |
 | StatusBar | `apps/frontend/src/editor/shell/StatusBar.tsx` |
-| ViewportOverlay | `apps/frontend/src/editor/shell/ViewportOverlay.tsx` |
 | ProjectHomeScreen | `apps/frontend/src/editor/shell/ProjectHomeScreen.tsx` |
 | Workspace store | `apps/frontend/src/editor/shell/workspaceStore.ts` |
 | Shell UI store | `apps/frontend/src/editor/shell/shellUiStore.ts` |
@@ -76,7 +75,7 @@ AppShell (grid: 40px / 1fr / 26px)
 Workspaces are the primary navigation metaphor. Each workspace represents a domain area (Terrain, Roads, Rail, etc.). The vertical workspace rail on the far left switches between them.
 
 **v0.1 status:**
-- **Home**: functional — shows the project start screen when no project is open
+- **Home**: functional — shows the project start screen when no project is open, and also when the user explicitly navigates to the Home workspace (even with a project open). Navigating to Home hides the native viewport and shows the home screen overlay; switching back to Terrain restores the native viewport.
 - **Terrain**: functional — the only authoring workspace with real actions (Import, Download Area, Georeference)
 - **Roads, Rail, Environment, Traffic, Simulation**: disabled — clearly marked as "Coming later"
 
@@ -159,7 +158,6 @@ Reusable components built on design tokens:
 | `WorkspaceRail` | Vertical workspace navigation |
 | `ContextToolbar` | Workspace-specific action toolbar |
 | `StatusBar` | Simplified status indicators |
-| `ViewportOverlay` | Viewport HUD (renderer/GPU/Vulkan) |
 | `ProjectHomeScreen` | Start screen when no project is open |
 | `AppMenu` | Traditional File/Edit/View menu (inline in header) |
 | `Toolbar` | Legacy toolbar (command-registry-driven) |
@@ -178,14 +176,21 @@ Minimum sizes prevent panels from collapsing to unusable widths. The native view
 
 ## Viewport Overlays
 
-The viewport area hosts the native Vulkan child HWND. CSS overlays cannot occlude the HWND, so blocking dialogs trigger the viewport visibility policy (`blockedByOverlay` in `useViewportHost`).
+The viewport area hosts the native Vulkan child HWND. CSS overlays cannot occlude the HWND, so any overlay that must be visible to the user triggers the viewport visibility policy (`blockedByOverlay` in `useViewportHost`), which tells the desktop shell to hide the native surface.
 
-When the renderer surface is active, the `ViewportOverlay` shows a HUD in the bottom-right corner with:
-- Renderer state
-- GPU name
-- Vulkan version
+### Project home screen (no project open or Home workspace active)
 
-No fake FPS, coordinates, or shading mode controls are shown — those will be wired when the renderer exposes them.
+The `ProjectHomeScreen` is rendered as a CSS overlay over the viewport area when no project is open OR when the user navigates to the Home workspace (even with a project open). Because the native viewport HWND would otherwise cover it, `App` reports `blockedByOverlay = true` for both states, so the desktop shell hides the native viewport and the home screen is visible. When a project is opened and the user is on the Terrain workspace, `blockedByOverlay` returns to `false` and the native viewport is shown again.
+
+The blocking signal is `showHomeScreen = !projectOpen || activeWorkspace === 'home'` (not `surfaceActive && !projectOpen`) so that `blockedByOverlay` is `true` from initial mount — before the viewport process starts — rather than transitioning to `true` only when the renderer reports ready. This avoids a race where the desktop shell's post-readiness `applyViewportVisibilityPlan` runs before the renderer's `setViewportVisible(false)` IPC round-trip lands, which would briefly show the native surface over the home screen.
+
+### Renderer not yet active
+
+While the renderer is starting or has failed, the viewport area shows a CSS empty-state overlay (starting message or error). The native viewport is hidden (`blockedByOverlay = true` because no project is open), so the CSS overlay is visible to the user.
+
+### Viewport HUD (deferred)
+
+An on-screen viewport HUD (renderer state, GPU, Vulkan version, FPS) is not rendered while a project is open. The native viewport HWND covers the full viewport-host area and CSS overlays cannot render above it, so a CSS-based HUD would be invisible to the user. Renderer/GPU/Vulkan status is already surfaced in the `StatusBar`, which is not occluded by the native surface. A visible viewport HUD requires native-side HUD rendering or a separate overlay window and is deferred to a future phase (see `docs/UI_UX_ROADMAP.md`).
 
 ## Command Integration
 
@@ -195,15 +200,15 @@ All user actions flow through the central command registry (`commandRegistry.ts`
 2. **Toolbar**: `Toolbar` renders commands with `surfaces: ['toolbar']`
 3. **Shortcuts**: `useCommandShortcuts` dispatches commands with `surfaces: ['shortcut']`
 4. **Palette**: `CommandPalette` lists commands with `surfaces: ['palette']`
-5. **ContextToolbar**: workspace-specific actions that open dialogs via `shellUiStore`
+5. **ContextToolbar**: workspace-specific actions routed through `useCommandExecutor` so availability gating (engine, project, busy state) is consistent with all other surfaces
 
-The `ContextToolbar` uses `openTerrainImport(mode)` on the `shellUiStore` to deep-link the Import Terrain dialog to either "Local File" or "Download Area" mode.
+The `ContextToolbar` uses dedicated commands (`terrain.import-local`, `terrain.download-area`, `project.georeference`) that call `openTerrainImport(mode)` on the `shellUiStore` to deep-link the Import Terrain dialog to either "Local File" or "Download Area" mode. The toolbar's disabled state is derived from `resolveCommandAvailability()` — the same path every other surface uses — so it cannot drift apart from the command architecture's safety gating.
 
 ## Native Viewport Constraint
 
 InfraForge uses a native Vulkan viewport surface (child HWND on Windows). Key constraints:
 
-1. CSS z-index cannot occlude the native viewport — blocking dialogs trigger `blockedByOverlay` to hide it
+1. CSS z-index cannot occlude the native viewport — blocking dialogs and the home screen (no project or Home workspace) trigger `blockedByOverlay` to hide it
 2. The viewport host div must always be in the DOM for the native viewport process lifecycle
 3. The `useViewportHost` hook reports bounds via `ResizeObserver` and visibility via `document.hidden + blockedByOverlay`
 4. The desktop shell's `ViewportVisibilityPolicy` handles the actual show/hide with placement refresh
@@ -216,6 +221,7 @@ InfraForge uses a native Vulkan viewport surface (child HWND on Windows). Key co
 - Disabled commands use `aria-disabled` (not native `disabled`) in menus so they remain keyboard-navigable
 - Screen reader support via semantic HTML and ARIA roles
 - The workspace rail uses `aria-current="page"` for the active workspace
+- Tooltips use `aria-describedby` to associate the tooltip text with the trigger element; the tooltip element is always rendered in the DOM (hidden via CSS when not visible) so the reference is always valid
 
 ## Interaction Conventions
 

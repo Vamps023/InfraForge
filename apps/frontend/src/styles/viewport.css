@@ -87,65 +87,6 @@
   font-size: var(--if-font-metadata);
 }
 
-/* ---- Viewport HUD overlays ---- */
-.viewport-hud {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  z-index: var(--if-z-sticky);
-}
-
-.viewport-hud > * {
-  pointer-events: auto;
-}
-
-.viewport-hud-tl,
-.viewport-hud-tr,
-.viewport-hud-bl,
-.viewport-hud-br {
-  position: absolute;
-  display: flex;
-  align-items: center;
-  gap: var(--if-space-2);
-  padding: var(--if-space-2) var(--if-space-4);
-  background: rgba(13, 16, 20, 0.72);
-  border: 1px solid var(--if-border-subtle);
-  border-radius: var(--if-radius-md);
-  font-size: var(--if-font-metadata);
-  color: var(--if-text-secondary);
-  backdrop-filter: blur(8px);
-}
-
-.viewport-hud-tl { top: var(--if-space-4); left: var(--if-space-4); }
-.viewport-hud-tr { top: var(--if-space-4); right: var(--if-space-4); }
-.viewport-hud-bl { bottom: var(--if-space-4); left: var(--if-space-4); }
-.viewport-hud-br { bottom: var(--if-space-4); right: var(--if-space-4); }
-
-.viewport-hud-item {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--if-space-2);
-  white-space: nowrap;
-}
-
-.viewport-hud-label {
-  color: var(--if-text-muted);
-  font-size: var(--if-font-label);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.viewport-hud-value {
-  color: var(--if-text-primary);
-  font-variant-numeric: tabular-nums;
-}
-
-.viewport-hud-divider {
-  width: 1px;
-  height: 12px;
-  background: var(--if-border-default);
-}
-
 /* ---- Project home screen ---- */
 .home-screen {
   position: absolute;

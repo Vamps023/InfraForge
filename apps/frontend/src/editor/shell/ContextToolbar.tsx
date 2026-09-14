@@ -1,8 +1,10 @@
 import { Download, FolderOpen, MapPin } from 'lucide-react'
 import { useWorkspaceStore } from './workspaceStore'
-import { useShellUiStore } from './shellUiStore'
-import { useProjectStore } from '../../features/project/projectStore'
 import { Tooltip } from '../../ui/Tooltip'
+import {
+  useCommandExecutor,
+  type CommandContext,
+} from '../commands/useCommands'
 
 // ContextToolbar — context-aware toolbar that shows workspace-specific
 // actions. Only renders actions for the active workspace that have real
@@ -10,53 +12,59 @@ import { Tooltip } from '../../ui/Tooltip'
 //
 // Terrain workspace: Import (local file), Download Area, Georeference.
 // Other workspaces: no actions yet (future modules).
-export function ContextToolbar() {
+//
+// All buttons route through the central command registry via
+// executeCommand() so availability gating (engine, project, busy state)
+// is consistent with the menu, shortcuts, and command palette. The
+// disabled state is derived from resolveCommandAvailability() — the same
+// path every other surface uses — so the toolbar cannot drift apart from
+// the command architecture's safety gating.
+export function ContextToolbar({ context }: { context: CommandContext }) {
   const activeWorkspace = useWorkspaceStore((state) => state.activeWorkspace)
 
   if (activeWorkspace === 'terrain') {
-    return <TerrainContextToolbar />
+    return <TerrainContextToolbar context={context} />
   }
 
   // Home and future workspaces have no context toolbar actions yet.
   return null
 }
 
-function TerrainContextToolbar() {
-  const openTerrainImport = useShellUiStore((state) => state.openTerrainImport)
-  const openDialogCommand = useShellUiStore((state) => state.openDialogCommand)
-  const summary = useProjectStore((state) => state.summary)
-  const projectOpen = summary !== null
+function TerrainContextToolbar({ context }: { context: CommandContext }) {
+  const importLocal = useCommandExecutor('terrain.import-local', context)
+  const downloadArea = useCommandExecutor('terrain.download-area', context)
+  const georeference = useCommandExecutor('project.georeference', context)
 
   return (
     <div className="context-toolbar" aria-label="Terrain workspace actions">
       <span className="context-toolbar-label">Terrain</span>
       <div className="context-toolbar-divider" />
-      <Tooltip label="Import a local GeoTIFF DEM file">
+      <Tooltip label={importLocal.availability.disabledReason ?? 'Import a local GeoTIFF DEM file'}>
         <button
           type="button"
           className="tool-button"
-          disabled={!projectOpen}
-          onClick={() => openTerrainImport('local-file')}
+          disabled={!importLocal.availability.enabled}
+          onClick={() => void importLocal.run()}
         >
           <FolderOpen size={14} /> Import
         </button>
       </Tooltip>
-      <Tooltip label="Download terrain DEM for a selected area">
+      <Tooltip label={downloadArea.availability.disabledReason ?? 'Download terrain DEM for a selected area'}>
         <button
           type="button"
           className="tool-button"
-          disabled={!projectOpen}
-          onClick={() => openTerrainImport('download-area')}
+          disabled={!downloadArea.availability.enabled}
+          onClick={() => void downloadArea.run()}
         >
           <Download size={14} /> Download Area
         </button>
       </Tooltip>
-      <Tooltip label="Open canonical georeference settings">
+      <Tooltip label={georeference.availability.disabledReason ?? 'Open canonical georeference settings'}>
         <button
           type="button"
           className="tool-button"
-          disabled={!projectOpen}
-          onClick={() => openDialogCommand('georeference')}
+          disabled={!georeference.availability.enabled}
+          onClick={() => void georeference.run()}
         >
           <MapPin size={14} /> Georeference
         </button>

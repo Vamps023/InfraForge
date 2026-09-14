@@ -65,7 +65,7 @@ function HeaderStatusGroup() {
     <div className="header-status-group">
       <span className="status-item" title={`Renderer: ${rendererStatus.detail}`}>
         <StatusDot tone={rendererTone} />
-        <span className="viewport-hud-label">Renderer</span>
+        <span className="header-status-label">Renderer</span>
       </span>
     </div>
   )

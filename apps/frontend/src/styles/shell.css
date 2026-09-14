@@ -134,6 +134,13 @@
   gap: var(--if-space-4);
 }
 
+.header-status-label {
+  color: var(--if-text-muted);
+  font-size: var(--if-font-label);
+  text-transform: uppercase;
+  letter-spacing: var(--if-tracking-label);
+}
+
 .build-label {
   color: var(--if-text-disabled);
   font-size: var(--if-font-metadata);
@@ -482,6 +489,14 @@
   white-space: nowrap;
   pointer-events: none;
   box-shadow: var(--if-shadow-sm);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity var(--if-transition-fast) ease, visibility var(--if-transition-fast) ease;
+}
+
+.if-tooltip--visible {
+  opacity: 1;
+  visibility: visible;
 }
 
 .if-tooltip--top {

@@ -28,6 +28,34 @@ export function registerTerrainCommands(deps: TerrainCommandDeps): void {
       },
     },
     {
+      id: 'terrain.import-local',
+      label: 'Import Local File',
+      description: 'Import a georeferenced GeoTIFF DEM from a local file.',
+      category: 'Terrain',
+      group: 'terrain',
+      surfaces: ['toolbar'],
+      requiresEngine: true,
+      requiresProject: true,
+      requiresNotBusy: true,
+      execute: () => {
+        useShellUiStore.getState().openTerrainImport('local-file')
+      },
+    },
+    {
+      id: 'terrain.download-area',
+      label: 'Download Area',
+      description: 'Download terrain DEM for a selected geographic area.',
+      category: 'Terrain',
+      group: 'terrain',
+      surfaces: ['toolbar'],
+      requiresEngine: true,
+      requiresProject: true,
+      requiresNotBusy: true,
+      execute: () => {
+        useShellUiStore.getState().openTerrainImport('download-area')
+      },
+    },
+    {
       id: 'terrain.regenerate-tiles',
       label: 'Regenerate Terrain Tiles',
       description: 'Regenerate missing derived terrain tiles for the selected dataset.',
@@ -60,5 +88,7 @@ export function registerTerrainCommands(deps: TerrainCommandDeps): void {
 
 export function unregisterTerrainCommands(): void {
   commandRegistry.unregister('terrain.import')
+  commandRegistry.unregister('terrain.import-local')
+  commandRegistry.unregister('terrain.download-area')
   commandRegistry.unregister('terrain.regenerate-tiles')
 }

@@ -39,8 +39,9 @@ This document outlines the phased UI/UX modernization plan for InfraForge. Each 
 - Terrain settings panel (resolution, LOD, display options)
 - Download Area UX refinements (progress visualization, cancel feedback, error messaging)
 - Terrain dataset context menu (rename, delete, regenerate tiles)
+- On-screen viewport HUD (renderer/GPU/Vulkan/FPS) — requires native-side HUD rendering or a separate overlay window; CSS overlays are occluded by the native viewport HWND and cannot be used for this
 
-**Dependencies:** Viewport camera framing API (engine-side)
+**Dependencies:** Viewport camera framing API (engine-side), native HUD rendering
 
 ## Phase 3: Road Workspace
 

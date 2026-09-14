@@ -136,7 +136,9 @@ std::filesystem::path MockTerrainProvider::fetchRequest(
     }
 
     // Cancellation checkpoint before decode/write (BLOCKER 4).
-    if (cancel) cancel();
+    if (cancel && cancel()) {
+        throw ProviderError(ProviderErrorCode::Cancelled, "mock provider cancelled");
+    }
 
     ensureGdalRegistered();
 

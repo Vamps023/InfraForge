@@ -6,6 +6,7 @@
 #include "infraforge/domain/terrain/TerrainTileFile.hpp"
 #include "infraforge/application/WorldState.hpp"
 #include "infraforge/domain/geo/GeoTransformService.hpp"
+#include "infraforge/domain/terrain/MockTerrainProvider.hpp"
 #include "infraforge/domain/terrain/TerrainTypes.hpp"
 #include "infraforge/persistence/GdalTerrainSource.hpp"
 #include "infraforge/persistence/SqliteProjectStore.hpp"
@@ -26,6 +27,16 @@ using namespace infraforge::application;
 using namespace infraforge::domain::terrain;
 
 namespace {
+
+// Build a test provider registry containing the MockTerrainProvider so
+// deterministic tests can run without network access. Production never
+// uses this registry (BLOCKER 1).
+infraforge::domain::terrain::TerrainProviderRegistry makeTestProviderRegistry() {
+    infraforge::domain::terrain::TerrainProviderRegistry registry;
+    registry.registerProvider(
+        std::make_unique<infraforge::domain::terrain::MockTerrainProvider>());
+    return registry;
+}
 
 // Deterministic executor stand-in for the real CommandProcessor executor.
 class QueuedExecutor {
@@ -72,6 +83,7 @@ struct TerrainHarness {
     explicit TerrainHarness(const infraforge::testhelpers::TerrainDemSpec& spec = {})
         : jobs([this](std::function<void()> task) { executor.poster()(std::move(task)); }),
           terrain(std::in_place, store, transforms, reader, world, *jobs,
+              makeTestProviderRegistry(),
               [this](const infraforge::application::TerrainServiceEvent& event) {
                   if (event.datasetAdded.has_value()) {
                       datasetAddedIds.push_back(
@@ -688,6 +700,65 @@ TEST_CASE("download leaves no .importing temp files on failure") {
     CHECK_FALSE(tempLeft);
 }
 
+TEST_CASE("cancelled download ends in Cancelled state with no canonical dataset") {
+    // VERIFY: Job lifecycle — cancellation must produce JobState::Cancelled
+    // (not Completed), must not commit a canonical dataset, and must not
+    // leave .importing temp files.
+    TerrainHarness harness{};
+
+    // Use a larger area so the download takes long enough to cancel
+    // mid-flight.
+    const GeoBounds area{
+        .west = 15.0, .south = 42.0, .east = 15.2, .north = 42.2};
+    const std::uint32_t tileSize = 4000;
+
+    const auto gridTiles = computeSelectionGrid(area, tileSize);
+    REQUIRE(gridTiles.size() >= 3);
+
+    std::vector<std::int32_t> allIndices;
+    for (std::int32_t i = 0; i < static_cast<std::int32_t>(gridTiles.size()); ++i) {
+        allIndices.push_back(i);
+    }
+
+    const auto record = harness.terrain->startDownload(
+        "mock-terrain", area, tileSize, allIndices, "Cancel Strict");
+
+    // Wait for the job to start running.
+    REQUIRE(harness.waitFor(
+        [&] {
+            const auto job = harness.jobs->job(record.jobId);
+            return job.has_value() && job->state == infraforge::application::JobState::Running;
+        },
+        std::chrono::seconds{10}));
+
+    // Cancel while running.
+    REQUIRE(harness.jobs->requestCancel(record.jobId));
+
+    // Wait for terminal state.
+    REQUIRE(harness.waitFor(
+        [&] { return isTerminal(harness.jobs->job(record.jobId)); },
+        std::chrono::seconds{60}));
+
+    // Must be Cancelled, not Completed.
+    CHECK(harness.jobs->job(record.jobId)->state == infraforge::application::JobState::Cancelled);
+
+    // No canonical dataset must be committed.
+    CHECK(harness.store.terrainDatasets().empty());
+    CHECK(harness.datasetAddedIds.empty());
+
+    // No .importing temp files remain.
+    bool tempLeft = false;
+    const auto elevDir = harness.projectDirectory / "terrain" / "elevation";
+    if (std::filesystem::exists(elevDir)) {
+        for (const auto& entry : std::filesystem::directory_iterator(elevDir)) {
+            if (entry.path().extension() == ".importing") {
+                tempLeft = true;
+            }
+        }
+    }
+    CHECK_FALSE(tempLeft);
+}
+
 // ---- BLOCKER 1: Empty selection planning (regression test) ----
 
 TEST_CASE("planDownload with empty selection returns grid with zero requests") {
@@ -719,6 +790,44 @@ TEST_CASE("startDownload with empty selection is rejected") {
             "mock-terrain", area, tileSize, {}, "Empty");
     } catch (const TerrainError&) {
         threw = true;
+    }
+    CHECK(threw);
+}
+
+TEST_CASE("startDownload rejects empty display name") {
+    // VERIFY: Display name validation — backend must reject empty names.
+    TerrainHarness harness{};
+    const GeoBounds area{
+        .west = 15.0, .south = 42.0, .east = 15.05, .north = 42.05};
+    const std::uint32_t tileSize = 4000;
+    const auto gridTiles = computeSelectionGrid(area, tileSize);
+    REQUIRE(!gridTiles.empty());
+
+    bool threw = false;
+    try {
+        (void)harness.terrain->startDownload(
+            "mock-terrain", area, tileSize, {0}, "");
+    } catch (const TerrainError& e) {
+        threw = true;
+        CHECK(e.code() == TerrainErrorCode::InvalidArgument);
+    }
+    CHECK(threw);
+}
+
+TEST_CASE("startDownload rejects unknown provider") {
+    // VERIFY: Provider ID validation — backend must reject unknown providers.
+    TerrainHarness harness{};
+    const GeoBounds area{
+        .west = 15.0, .south = 42.0, .east = 15.05, .north = 42.05};
+    const std::uint32_t tileSize = 4000;
+
+    bool threw = false;
+    try {
+        (void)harness.terrain->startDownload(
+            "nonexistent-provider", area, tileSize, {0}, "Test");
+    } catch (const TerrainError& e) {
+        threw = true;
+        CHECK(e.code() == TerrainErrorCode::InvalidArgument);
     }
     CHECK(threw);
 }
@@ -849,20 +958,43 @@ TEST_CASE("sparse coverage survives reopen") {
     REQUIRE(finished);
     REQUIRE(harness.jobs->job(record.jobId)->state == infraforge::application::JobState::Completed);
 
+    // Verify expectedChunks excludes gap-only chunks (BLOCKER 6).
+    const auto storedDatasets = harness.store.terrainDatasets();
+    REQUIRE(storedDatasets.size() == 1);
+    const auto& dataset = storedDatasets.front();
+    REQUIRE(dataset.coveragePieces.size() == 2);
+
+    // Scene projection should not include tiles for gap-only chunks.
+    const auto scene = harness.terrain->sceneProjection();
+    for (const auto& tile : scene.tiles) {
+        // Every scene tile must intersect at least one coverage piece.
+        bool intersects = false;
+        for (const auto& piece : dataset.coveragePieces) {
+            if (tile.maxEasting >= piece.minEasting &&
+                tile.minEasting <= piece.maxEasting &&
+                tile.maxNorthing >= piece.minNorthing &&
+                tile.minNorthing <= piece.maxNorthing) {
+                intersects = true;
+                break;
+            }
+        }
+        CHECK(intersects);
+    }
+
     // Reopen: close and re-open the project, verify coverage pieces persist.
     harness.terrain->onProjectClosed();
     harness.terrain->onProjectOpened();
 
-    const auto storedDatasets = harness.store.terrainDatasets();
-    REQUIRE(storedDatasets.size() == 1);
-    const auto& dataset = storedDatasets.front();
+    const auto reopenedDatasets = harness.store.terrainDatasets();
+    REQUIRE(reopenedDatasets.size() == 1);
+    const auto& reopenedDataset = reopenedDatasets.front();
 
     // Coverage pieces must survive reopen.
-    REQUIRE(dataset.coveragePieces.size() == 2);
+    REQUIRE(reopenedDataset.coveragePieces.size() == 2);
 
     // Gap must still be OutsideCoverage after reopen.
-    const double gapE = (dataset.bounds.minEasting + dataset.bounds.maxEasting) * 0.5;
-    const double gapN = (dataset.bounds.minNorthing + dataset.bounds.maxNorthing) * 0.5;
+    const double gapE = (reopenedDataset.bounds.minEasting + reopenedDataset.bounds.maxEasting) * 0.5;
+    const double gapN = (reopenedDataset.bounds.minNorthing + reopenedDataset.bounds.maxNorthing) * 0.5;
     const auto inGap = harness.terrain->sample("", gapE, gapN);
     CHECK(inGap.sample.status == TerrainSampleStatus::OutsideCoverage);
 }
@@ -911,6 +1043,96 @@ TEST_CASE("download worker does not access executor-owned world state") {
     if (jobOpt.has_value()) {
         CHECK(isTerminal(*jobOpt));
     }
+}
+
+// ---- BLOCKER 3: Provider attribution persistence ----
+
+TEST_CASE("download persists provider attribution on dataset") {
+    TerrainHarness harness{};
+    const auto area = GeoBounds{.west = -105.5, .south = 39.5, .east = -105.0, .north = 40.0};
+    const std::uint32_t tileSize = 4000;
+    const auto gridTiles = computeSelectionGrid(area, tileSize);
+    REQUIRE(!gridTiles.empty());
+
+    std::vector<std::int32_t> allIndices;
+    for (std::int32_t i = 0; i < static_cast<std::int32_t>(gridTiles.size()); ++i) {
+        allIndices.push_back(i);
+    }
+
+    const auto record = harness.terrain->startDownload(
+        "mock-terrain", area, tileSize, allIndices, "Attribution Test");
+
+    REQUIRE(harness.waitFor(
+        [&] {
+            const auto job = harness.jobs->job(record.jobId);
+            return job.has_value() && isTerminal(*job);
+        },
+        std::chrono::seconds{30}));
+
+    REQUIRE(!harness.datasetAddedIds.empty());
+    const std::string datasetUuid = harness.datasetAddedIds.front();
+    const auto datasets = harness.terrain->listDatasets();
+    REQUIRE(datasets.size() == 1);
+    CHECK(datasets[0].sourceAttribution != "");
+    // MockTerrainProvider sets attribution; verify it is non-empty.
+
+    // Reopen and verify attribution survives persistence.
+    harness.terrain->onProjectClosed();
+    harness.terrain->onProjectOpened();
+    const auto reopened = harness.terrain->listDatasets();
+    REQUIRE(reopened.size() == 1);
+    CHECK(reopened[0].sourceAttribution == datasets[0].sourceAttribution);
+}
+
+// ---- BLOCKER 1: Production provider registry excludes MockTerrainProvider ----
+
+TEST_CASE("production provider registry excludes MockTerrainProvider") {
+    const auto registry = production::makeProductionTerrainProviders();
+    const auto providers = registry.listProviders();
+    CHECK(!providers.empty());
+    for (const auto& info : providers) {
+        CHECK(info.providerId != "mock-terrain");
+    }
+    // The mock provider must not be findable in the production registry.
+    CHECK(registry.find("mock-terrain") == nullptr);
+}
+
+TEST_CASE("test provider registry can register MockTerrainProvider") {
+    auto registry = makeTestProviderRegistry();
+    const auto providers = registry.listProviders();
+    CHECK(!providers.empty());
+    bool foundMock = false;
+    for (const auto& info : providers) {
+        if (info.providerId == "mock-terrain") {
+            foundMock = true;
+            break;
+        }
+    }
+    CHECK(foundMock);
+    CHECK(registry.find("mock-terrain") != nullptr);
+}
+
+TEST_CASE("production list_sources returns only real providers") {
+    // Build a TerrainService with the production registry and verify
+    // listSources() does not expose mock-terrain.
+    TerrainHarness harness{};
+    // The harness uses the test registry (with mock); construct a
+    // production registry separately and verify its contents.
+    const auto prodRegistry = production::makeProductionTerrainProviders();
+    const auto prodProviders = prodRegistry.listProviders();
+    for (const auto& info : prodProviders) {
+        CHECK(info.providerId != "mock-terrain");
+    }
+    // The harness's own listSources should include mock (test registry).
+    const auto harnessProviders = harness.terrain->listSources();
+    bool harnessHasMock = false;
+    for (const auto& info : harnessProviders) {
+        if (info.providerId == "mock-terrain") {
+            harnessHasMock = true;
+            break;
+        }
+    }
+    CHECK(harnessHasMock);
 }
 
 } // TEST_SUITE

@@ -3,7 +3,6 @@
 #include "infraforge/application/CommandFailure.hpp"
 #include "infraforge/application/TerrainTileGenerator.hpp"
 #include "infraforge/domain/geo/GeoTransformService.hpp"
-#include "infraforge/domain/terrain/MockTerrainProvider.hpp"
 #include "infraforge/domain/terrain/TerrariumTerrainProvider.hpp"
 #include "infraforge/domain/terrain/TerrainTileFile.hpp"
 #include "infraforge/domain/world/Invalidation.hpp"
@@ -133,6 +132,15 @@ private:
     std::filesystem::path dir_;
 };
 
+// Checkpoint helper for assembly cancellation (BLOCKER 4). The callback
+// returns true if cancellation was requested; we throw JobCancelled so
+// the worker exits cleanly and the job system maps it to Cancelled.
+void checkCancel(const domain::terrain::CancellationCallback& cancel) {
+    if (cancel && cancel()) {
+        throw JobCancelled{};
+    }
+}
+
 // Assemble multiple temporary GeoTIFFs into a single canonical GeoTIFF
 // (BLOCKER 2). Uses GDAL to read each input tile, compute the union bounds,
 // and write a single mosaicked GeoTIFF with NoData in gaps (BLOCKER 4).
@@ -162,7 +170,7 @@ AssembledRaster assembleCanonicalGeoTiff(
     }
 
     // Cancellation checkpoint before opening tiles.
-    if (cancel) cancel();
+    checkCancel(cancel);
 
     // Read all input tiles to compute union bounds and pixel size.
     struct TileInfo {
@@ -323,7 +331,7 @@ AssembledRaster assembleCanonicalGeoTiff(
         std::vector<float> nodataStrip(static_cast<std::size_t>(outWidth) * stripRows,
             static_cast<float>(nodata));
         for (std::int64_t row = 0; row < outHeight; row += stripRows) {
-            if (cancel) cancel();
+            checkCancel(cancel);
             const int stripH = static_cast<int>(
                 std::min(stripRows, static_cast<std::int64_t>(outHeight) - row));
             CPLErr err = GDALRasterIO(outBand, GF_Write,
@@ -339,7 +347,7 @@ AssembledRaster assembleCanonicalGeoTiff(
 
     // Copy each tile's data into the output (tile-by-tile is already bounded).
     for (const auto& tile : tiles) {
-        if (cancel) cancel();
+        checkCancel(cancel);
         GDALDatasetH ds = GDALOpen(tile.path.string().c_str(), GA_ReadOnly);
         if (!ds) continue;
 
@@ -383,7 +391,7 @@ AssembledRaster assembleCanonicalGeoTiff(
         const std::int64_t stripRows = domain::terrain::kAssemblyStripRows;
         std::vector<float> stripBuf(static_cast<std::size_t>(outWidth) * stripRows);
         for (std::int64_t row = 0; row < outHeight; row += stripRows) {
-            if (cancel) cancel();
+            checkCancel(cancel);
             const int stripH = static_cast<int>(
                 std::min(stripRows, static_cast<std::int64_t>(outHeight) - row));
             CPLErr readErr = GDALRasterIO(outBand, GF_Read,
@@ -467,21 +475,27 @@ AssembledRaster assembleCanonicalGeoTiff(
 
 TerrainService::TerrainService(ports::ProjectStore& store,
     const domain::geo::GeoTransformService& transforms, ports::TerrainSourceReader& reader,
-    WorldState& world, JobSystem& jobs, EventSink eventSink)
+    WorldState& world, JobSystem& jobs,
+    domain::terrain::TerrainProviderRegistry providers, EventSink eventSink)
     : store_(store),
       transforms_(transforms),
       reader_(reader),
       world_(world),
       jobs_(jobs),
-      eventSink_(std::move(eventSink)) {
-    // Register terrain providers. The Terrarium provider (AWS Terrain Tiles)
-    // is the production provider — it fetches real DEM data via HTTP and
-    // writes proper GeoTIFFs. The mock provider is registered for
-    // deterministic testing without network access.
+      eventSink_(std::move(eventSink)),
+      providers_(std::move(providers)) {
+    // Providers are injected by the caller. Production uses
+    // makeProductionTerrainProviders(); tests inject their own registry
+    // (which may include MockTerrainProvider). This keeps mock/test
+    // providers out of production `terrain.list_sources` (BLOCKER 1).
+}
+
+domain::terrain::TerrainProviderRegistry production::makeProductionTerrainProviders() {
+    domain::terrain::TerrainProviderRegistry registry;
     auto httpClient = std::make_shared<ports::IxHttpClient>();
-    providers_.registerProvider(
+    registry.registerProvider(
         std::make_unique<domain::terrain::TerrariumTerrainProvider>(httpClient));
-    providers_.registerProvider(std::make_unique<domain::terrain::MockTerrainProvider>());
+    return registry;
 }
 
 void TerrainService::onProjectOpened() {
@@ -1350,6 +1364,12 @@ JobRecord TerrainService::startDownload(
     if (!project_.has_value()) {
         throw CommandFailure(CommandFailureCode::ProjectNotOpen, "no project is open");
     }
+    // Validate display name (same constraints as local import).
+    if (displayName.empty() || displayName.size() > domain::terrain::kMaxTerrainDisplayNameLength) {
+        throw TerrainError(TerrainErrorCode::InvalidArgument,
+            "terrain display name must be 1.." + std::to_string(domain::terrain::kMaxTerrainDisplayNameLength)
+            + " characters");
+    }
     if (selectedIndices.empty()) {
         throw TerrainError(TerrainErrorCode::InvalidArgument,
             "no tiles selected for download");
@@ -1408,10 +1428,13 @@ JobRecord TerrainService::startDownload(
         TempDirGuard tempGuard(tempDir);
 
         // BLOCKER 4: Cancellation callback handed to the provider and
-        // assembly. It throws JobCancelled (mapped from the atomic flag)
-        // so cancellation propagates through HTTP, decode, and assembly.
-        auto cancel = [&context]() {
-            context.throwIfCancelled();
+        // assembly. Returns true if cancellation was requested; the
+        // provider/assembly throws ProviderCancelled/JobCancelled at
+        // checkpoints. The same callback is polled by the ixwebsocket
+        // progress callback so in-flight HTTP requests abort promptly
+        // (BLOCKER 2).
+        auto cancel = [&context]() -> bool {
+            return context.isCancelled();
         };
 
         // Phase 1: Planning already done. Report 0-5%.

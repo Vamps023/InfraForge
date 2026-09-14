@@ -90,6 +90,9 @@ message TerrainDatasetInfo {
   uint64 revision = 19;
   repeated TerrainDiagnostic diagnostics = 20;
   string created_at = 21;
+  // Attribution/provenance for remote-acquired terrain (BLOCKER 3).
+  // Empty for local-file imports without source attribution metadata.
+  string source_attribution = 22;
 }
 
 message TerrainListDatasetsCommand {}

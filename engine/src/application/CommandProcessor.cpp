@@ -281,6 +281,7 @@ void fillTerrainDatasetInfo(
         entry->set_message(diagnostic.message);
     }
     info->set_created_at(dataset.createdAt);
+    info->set_source_attribution(dataset.sourceAttribution);
 }
 
 protocol::v1::JobState mapJobState(const JobState state) {
@@ -332,6 +333,7 @@ CommandProcessor::CommandProcessor(
     jobs_.emplace([this](std::function<void()> task) { postTask(std::move(task)); });
     world_ = WorldState{};
     terrainService_.emplace(store_, transforms, *terrainReader_, world_, *jobs_,
+        production::makeProductionTerrainProviders(),
         [this](const TerrainServiceEvent& event) { publishTerrainEvent(event); });
 }
 

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Download, FileWarning, FolderOpen, MapPin, Square } from 'lucide-react'
+import { Download, FileWarning, FolderOpen, Info, MapPin, Square } from 'lucide-react'
 import { JobState } from '@infraforge/protocol'
 import type { EngineClient } from '../../lib/engineSession'
 import {
@@ -12,6 +12,7 @@ import {
 } from './terrainApi'
 import { useTerrainStore } from './terrainStore'
 import { DownloadAreaMap, type GeoBounds, type SelectionTileInfo } from './DownloadAreaMap'
+import { NominatimLocationSearchClient } from './locationSearch'
 
 interface ImportTerrainDialogProps {
   client: EngineClient
@@ -321,11 +322,15 @@ interface DrawnArea {
   north: number
 }
 
+// Production location search client (Nominatim). Created once at module
+// scope; stateless and safe to share across renders (IMPORTANT 6).
+const nominatimSearchClient = new NominatimLocationSearchClient()
+
 function DownloadAreaImport({ client, onClose }: { client: EngineClient; onClose: () => void }) {
   const [area, setArea] = useState<DrawnArea | null>(null)
   const [tileSize, setTileSize] = useState(4000)
   const [selectedIndices, setSelectedIndices] = useState<Set<number>>(new Set())
-  const [providers, setProviders] = useState<{ providerId: string; displayName: string }[]>([])
+  const [providers, setProviders] = useState<{ providerId: string; displayName: string; attribution: string }[]>([])
   const [selectedProvider, setSelectedProvider] = useState('')
   const [plan, setPlan] = useState<{
     selectionTiles: { col: number; row: number; bounds: { west: number; south: number; east: number; north: number }; areaSqm: number }[]
@@ -365,7 +370,7 @@ function DownloadAreaImport({ client, onClose }: { client: EngineClient; onClose
     void (async () => {
       try {
         const result = await listTerrainSources(client)
-        setProviders(result.providers.map((p) => ({ providerId: p.providerId, displayName: p.displayName })))
+        setProviders(result.providers.map((p) => ({ providerId: p.providerId, displayName: p.displayName, attribution: p.attribution })))
         if (result.providers.length > 0 && !selectedProvider) {
           setSelectedProvider(result.providers[0]!.providerId)
         }
@@ -487,8 +492,12 @@ function DownloadAreaImport({ client, onClose }: { client: EngineClient; onClose
         displayName.trim(),
       )
       setStartedJobId(jobId)
-    } catch {
-      // Engine failures are recorded in the terrain store.
+    } catch (err) {
+      // IMPORTANT 5: Surface the real command failure to the user instead
+      // of silently swallowing it. The engine returns typed error messages
+      // (e.g. "provider_rate_limited", "selection_too_large") that are
+      // actionable.
+      setFormError(err instanceof Error ? err.message : 'Failed to start download')
     } finally {
       setStarting(false)
     }
@@ -510,7 +519,13 @@ function DownloadAreaImport({ client, onClose }: { client: EngineClient; onClose
         <select
           className="form-input"
           value={selectedProvider}
-          onChange={(e) => setSelectedProvider(e.target.value)}
+          onChange={(e) => {
+            setSelectedProvider(e.target.value)
+            // IMPORTANT 4: Reset selection when provider changes — the
+            // new provider may have different coverage/resolution.
+            setSelectedIndices(new Set())
+            setPlan(null)
+          }}
           disabled={startedJobId !== null}
         >
           {providers.map((p) => (
@@ -519,6 +534,17 @@ function DownloadAreaImport({ client, onClose }: { client: EngineClient; onClose
             </option>
           ))}
         </select>
+        {(() => {
+          const selected = providers.find((p) => p.providerId === selectedProvider)
+          if (selected && selected.attribution) {
+            return (
+              <div className="form-static form-attribution">
+                <Info size={12} /> {selected.attribution}
+              </div>
+            )
+          }
+          return null
+        })()}
       </div>
 
       <div className="form-row">
@@ -554,6 +580,7 @@ function DownloadAreaImport({ client, onClose }: { client: EngineClient; onClose
         }
         onTileToggle={toggleTile}
         tileSize={tileSize}
+        searchClient={nominatimSearchClient}
       />
 
       <div className="form-row">
@@ -561,7 +588,13 @@ function DownloadAreaImport({ client, onClose }: { client: EngineClient; onClose
         <select
           className="form-input"
           value={tileSize}
-          onChange={(e) => setTileSize(Number(e.target.value))}
+          onChange={(e) => {
+            setTileSize(Number(e.target.value))
+            // IMPORTANT 4: Reset selection when tile size changes — old
+            // indices are invalid for the new grid.
+            setSelectedIndices(new Set())
+            setPlan(null)
+          }}
           disabled={startedJobId !== null}
         >
           {TILE_SIZES.map((t) => (

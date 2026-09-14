@@ -8,6 +8,7 @@ import {
 } from 'react-leaflet'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
+import type { LocationSearchClient, SearchResult } from './locationSearch'
 
 // Real interactive map for the Download Area UX (BLOCKER 5).
 // Provides pan, zoom, rectangular drawing, go-to lat/lon, and a selection
@@ -37,6 +38,7 @@ interface DownloadAreaMapProps {
   selectionTiles: SelectionTileInfo[]
   onTileToggle: (index: number) => void
   tileSize: number
+  searchClient?: LocationSearchClient
 }
 
 // Convert WebMercator lat/lon to leaflet LatLngBounds.
@@ -122,11 +124,66 @@ export function DownloadAreaMap({
   selectionTiles,
   onTileToggle,
   tileSize,
+  searchClient,
 }: DownloadAreaMapProps) {
   const [goToLat, setGoToLat] = useState('')
   const [goToLon, setGoToLon] = useState('')
   const [mode, setMode] = useState<MapMode>('navigate')
   const fitRef = useRef<L.Map | null>(null)
+
+  // Location search state (IMPORTANT 6).
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchResults, setSearchResults] = useState<SearchResult[]>([])
+  const [searching, setSearching] = useState(false)
+  const [searchError, setSearchError] = useState<string | null>(null)
+  const searchGenRef = useRef(0)
+
+  // Debounced search with stale-response suppression (IMPORTANT 6).
+  useEffect(() => {
+    const query = searchQuery.trim()
+    if (query.length < 2 || !searchClient) {
+      setSearchResults([])
+      setSearchError(null)
+      return
+    }
+    const gen = ++searchGenRef.current
+    const timer = setTimeout(() => {
+      setSearching(true)
+      setSearchError(null)
+      searchClient.search(query)
+        .then((results) => {
+          // Stale response guard: ignore if a newer search started.
+          if (gen !== searchGenRef.current) return
+          setSearchResults(results)
+        })
+        .catch((err) => {
+          if (gen !== searchGenRef.current) return
+          setSearchResults([])
+          setSearchError(err instanceof Error ? err.message : 'Search failed')
+        })
+        .finally(() => {
+          if (gen === searchGenRef.current) setSearching(false)
+        })
+    }, 500) // 500ms debounce (respects Nominatim 1 req/sec policy)
+    return () => clearTimeout(timer)
+  }, [searchQuery, searchClient])
+
+  const handleSearchResultClick = useCallback((result: SearchResult) => {
+    if (result.boundingBox) {
+      // Fit the map to the result's bounding box.
+      fitRef.current?.fitBounds(
+        L.latLngBounds(
+          L.latLng(result.boundingBox.south, result.boundingBox.west),
+          L.latLng(result.boundingBox.north, result.boundingBox.east),
+        ),
+        { padding: [20, 20] },
+      )
+    } else {
+      fitRef.current?.panTo([result.lat, result.lon])
+    }
+    setSearchResults([])
+    setSearchQuery('')
+  }, [])
 
   const handleGoTo = useCallback(() => {
     const lat = parseFloat(goToLat)
@@ -145,6 +202,32 @@ export function DownloadAreaMap({
   return (
     <div className="download-area-map">
       <div className="map-controls">
+        {searchClient && (
+          <div className="search-controls">
+            <input
+              type="text"
+              placeholder="Search for a location..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+            />
+            {searching && <span className="search-status">Searching...</span>}
+            {searchError && <span className="search-error">{searchError}</span>}
+            {searchResults.length > 0 && (
+              <ul className="search-results">
+                {searchResults.map((result, i) => (
+                  <li key={i}>
+                    <button
+                      type="button"
+                      onClick={() => handleSearchResultClick(result)}
+                    >
+                      {result.displayName}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
         <div className="go-to-controls">
           <input
             type="number"

@@ -367,7 +367,9 @@ std::filesystem::path TerrariumTerrainProvider::fetchRequest(
     const CancellationCallback& cancel) const {
 
     // Cancellation checkpoint before any work (BLOCKER 4).
-    if (cancel) cancel();
+    if (cancel && cancel()) {
+        throw ProviderError(ProviderErrorCode::Cancelled, "download cancelled before fetch");
+    }
 
     // Parse the request ID (z/x/y) with strict validation (BLOCKER: harden
     // provider request parsing — reject trailing garbage).
@@ -399,21 +401,20 @@ std::filesystem::path TerrariumTerrainProvider::fetchRequest(
         std::to_string(z) + "/" + std::to_string(x) + "/" + std::to_string(y) + ".png";
 
     // Fetch with bounded retries (BLOCKER 4: cancellation-aware).
+    // The CancellationCallback returns true if cancellation was requested.
+    // It is used both at checkpoints (we throw) and as the HTTP progress
+    // callback poller so in-flight requests abort promptly (BLOCKER 2).
     std::string pngData;
     for (int attempt = 0; attempt <= kMaxRetries; ++attempt) {
         // Cancellation checkpoint before each HTTP request.
-        if (cancel) cancel();
-
-        // Use the cancellation-aware HTTP overload. The atomic flag is
-        // checked by the HTTP client before starting the request. We also
-        // check the cancel callback before and after each attempt.
-        std::atomic<bool> cancelFlag{false};
-        if (cancel) {
-            // Check cancellation before the request; the callback throws
-            // on cancellation, which propagates up through the worker.
-            cancel();
+        if (cancel && cancel()) {
+            throw ProviderError(ProviderErrorCode::Cancelled, "download cancelled before request");
         }
-        auto response = httpClient_->get(url, cancelFlag);
+
+        // Use the cancellation-aware HTTP overload. The canceller is polled
+        // by the ixwebsocket progress callback during the transfer, so
+        // cancellation from another thread aborts the request promptly.
+        auto response = httpClient_->get(url, cancel);
 
         if (response.ok()) {
             pngData = response.body;
@@ -421,7 +422,9 @@ std::filesystem::path TerrariumTerrainProvider::fetchRequest(
         }
 
         // Cancellation checkpoint after a failed request.
-        if (cancel) cancel();
+        if (cancel && cancel()) {
+            throw ProviderError(ProviderErrorCode::Cancelled, "download cancelled after failed request");
+        }
 
         const auto errorCode = classifyHttpError(response.statusCode, response.errorMessage);
 
@@ -438,7 +441,9 @@ std::filesystem::path TerrariumTerrainProvider::fetchRequest(
         const int checkIntervalMs = 100;
         int elapsedMs = 0;
         while (elapsedMs < delayMs) {
-            if (cancel) cancel();
+            if (cancel && cancel()) {
+                throw ProviderError(ProviderErrorCode::Cancelled, "download cancelled during backoff");
+            }
             const int sleepMs = std::min(checkIntervalMs, delayMs - elapsedMs);
             std::this_thread::sleep_for(std::chrono::milliseconds(sleepMs));
             elapsedMs += sleepMs;
@@ -451,14 +456,18 @@ std::filesystem::path TerrariumTerrainProvider::fetchRequest(
     }
 
     // Cancellation checkpoint before decode.
-    if (cancel) cancel();
+    if (cancel && cancel()) {
+        throw ProviderError(ProviderErrorCode::Cancelled, "download cancelled before decode");
+    }
 
     // Decode the Terrarium PNG to elevation values.
     int width = 0, height = 0;
     std::vector<float> elevations = decodeTerrariumPng(pngData, width, height);
 
     // Cancellation checkpoint after decode, before raster write.
-    if (cancel) cancel();
+    if (cancel && cancel()) {
+        throw ProviderError(ProviderErrorCode::Cancelled, "download cancelled before raster write");
+    }
 
     // Compute the tile bounds in Web Mercator.
     const auto tb = tileBoundsWebMercator(z, x, y);

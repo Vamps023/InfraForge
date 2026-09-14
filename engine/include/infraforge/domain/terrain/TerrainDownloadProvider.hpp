@@ -19,7 +19,10 @@ struct ProviderCancelled : std::runtime_error {
     ProviderCancelled() : std::runtime_error("provider operation cancelled") {}
 };
 
-using CancellationCallback = std::function<void()>;
+// Cancellation callback: returns true if cancellation has been requested.
+// Used both as a checkpoint (caller throws if true) and as a poll for
+// HTTP progress callbacks that need to abort in-flight requests (BLOCKER 2).
+using CancellationCallback = std::function<bool()>;
 
 // Safety limits for terrain selection and provider requests (BLOCKER 2).
 // These are authoritative backend limits; the frontend may warn earlier

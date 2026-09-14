@@ -1,6 +1,7 @@
 #pragma once
 
 #include "infraforge/domain/project/ProjectModel.hpp"
+#include "infraforge/domain/road/RoadRecord.hpp"
 #include "infraforge/domain/terrain/TerrainDataset.hpp"
 
 #include <filesystem>
@@ -89,6 +90,20 @@ public:
     // fails after the DB row was inserted. The caller is responsible for
     // removing the project-owned raster file separately.
     virtual void removeTerrainDataset(const std::string& datasetId) = 0;
+
+    // Canonical roads of the open project, ordered by creation.
+    [[nodiscard]] virtual std::vector<domain::road::RoadRecord> roads() const = 0;
+
+    // Persists a new canonical road and advances the project revision (a
+    // canonical mutation; the session becomes dirty until the next save).
+    // The road record must be validated; this call commits its canonical
+    // record in one transaction.
+    [[nodiscard]] virtual domain::road::RoadRecord insertRoad(
+        const domain::road::RoadRecord& road) = 0;
+
+    // Removes a road and all its segments/profiles/source data, advancing
+    // the project revision.
+    virtual void removeRoad(const std::string& roadId) = 0;
 
     // Flushes and closes the active project session.
     virtual void close() = 0;

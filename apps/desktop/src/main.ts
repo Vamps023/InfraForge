@@ -1,9 +1,11 @@
-import { app, BrowserWindow, dialog, ipcMain, screen } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, screen, session } from 'electron'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { EngineSupervisor } from './EngineSupervisor.js'
 import { ViewportSupervisor, type ViewportPlacement } from './ViewportSupervisor.js'
 import { planViewportVisibility } from './ViewportVisibilityPolicy.js'
+import { loadAppRuntimeConfig } from './AppConfig.js'
+import { GeocoderService } from './GeocoderService.js'
 
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url))
 let engineSupervisor: EngineSupervisor | null = null
@@ -171,6 +173,24 @@ app.whenReady().then(async () => {
   await engineSupervisor.start()
 
   viewportSupervisor = new ViewportSupervisor()
+
+  const runtimeConfig = loadAppRuntimeConfig()
+  const geocoderService = new GeocoderService(runtimeConfig.geocoder)
+
+  // Configure Electron session User-Agent to satisfy OSM/Nominatim policy
+  session.defaultSession.setUserAgent(runtimeConfig.mapTiles.userAgent)
+  session.defaultSession.webRequest.onBeforeSendHeaders(
+    { urls: ['*://*.tile.openstreetmap.org/*', '*://tile.openstreetmap.org/*'] },
+    (details, callback) => {
+      details.requestHeaders['User-Agent'] = runtimeConfig.mapTiles.userAgent
+      callback({ requestHeaders: details.requestHeaders })
+    },
+  )
+
+  ipcMain.handle('app:get-runtime-config', () => runtimeConfig)
+  ipcMain.handle('geocoder:search', async (_event, query: unknown) => {
+    return geocoderService.search(query)
+  })
 
   ipcMain.handle('engine:get-bootstrap', () => engineSupervisor?.snapshot() ?? {
     state: 'failed',

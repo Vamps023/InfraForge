@@ -141,13 +141,12 @@ public:
         const std::vector<SelectionTile>& selectedTiles) const = 0;
 
     // Compute the effective ground resolution (metres per pixel) for a
-    // download plan covering the given area (BLOCKER 8). This is
+    // download plan covering the selected tiles (Item 7). This is
     // provider-specific: Terrarium computes it from its fixed zoom level
-    // and Web Mercator latitude-dependent ground resolution. The area
-    // latitude is used because Web Mercator ground resolution varies
-    // with latitude. Returns 0.0 if the provider cannot determine it.
+    // and Web Mercator latitude-dependent ground resolution across the
+    // selected tiles. Returns 0.0 if the selection is empty.
     [[nodiscard]] virtual double effectiveResolutionMpp(
-        const GeoBounds& area) const = 0;
+        const std::vector<SelectionTile>& selectedTiles) const = 0;
 
     // Fetch one provider request and write the decoded elevation raster to
     // a temporary file. Returns the path to the decoded GeoTIFF.

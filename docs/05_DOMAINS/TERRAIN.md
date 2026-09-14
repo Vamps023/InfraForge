@@ -158,7 +158,7 @@ The production terrain DEM provider is **AWS Terrain Tiles (Terrarium)**:
 - **CRS:** Web Mercator (EPSG:3857)
 - **Tile size:** 256×256 pixels
 - **Coverage:** Global
-- **Resolution:** Effective plan resolution is supplied by the provider via `effectiveResolutionMpp()`, not computed by `TerrainService`. The Terrarium provider computes it from the selected zoom (z11) and the area's center latitude: `groundResolution = (tileSizeMeters * cos(lat)) / 256`. This varies from ~76 m/px at the equator to ~38 m/px at 60° latitude. The provider's `maxResolutionMpp` is 0 (unknown) because the Terrarium dataset is a composite of multiple sources with varying native resolutions. `TerrainService` is provider-neutral and contains no Terrarium-specific zoom/resolution logic.
+- **Resolution:** Effective plan resolution is supplied by the provider via `effectiveResolutionMpp(const std::vector<SelectionTile>& selectedTiles)`, not computed by `TerrainService`. When no tiles are selected, it reports 0.0 m/px. When tiles are selected, it reflects the coarsest resolution across the selected coverage (evaluated at the minimum absolute latitude among selected tiles: `groundResolution = (tileSizeMeters * cos(minAbsLat)) / 256`). The provider's `maxResolutionMpp` is 0 (unknown) because the Terrarium dataset is a composite of multiple sources with varying native resolutions. `TerrainService` is provider-neutral and contains no Terrarium-specific zoom/resolution logic.
 - **Authentication:** None required (AWS Open Data, S3 public bucket)
 - **Attribution:** The Terrarium provider retains the full required attribution set derived from the authoritative joerd attribution documentation. Since Terrarium responses do not expose which underlying source contributed to each pixel/tile, a conservative full source set is retained persistently with the `TerrainDataset`. The attribution survives offline reopen and does not require re-contacting the provider. The Download Area UI shows a concise attribution summary with an expandable "View attribution" section exposing the full text. The Terrain Inspector provides access to the full persisted attribution similarly. Attribution wording is derived directly from the authoritative joerd attribution documentation at https://github.com/tilezen/joerd/blob/master/docs/attribution.md. Verified against joerd attribution documentation on 2026-09-14.
 - **License:** Various open data licenses (USGS public domain, NASA, etc.)
@@ -214,39 +214,47 @@ These map to terrain provider error semantics:
 
 ### Location search
 
-Location search uses a configurable provider abstraction:
+Location search provides geographic repositioning for the Download Area map:
 
 - **`LocationSearchClient`** — interface for search providers (includes `cancelPending()` for lifecycle management).
 - **`LocationSearchConfig`** — endpoint, throttling, cache, attribution configuration.
-- **`NominatimLocationSearchClient`** — production implementation using the Nominatim public API.
-- **`defaultLocationSearchConfig`** — the default configuration (public Nominatim endpoint, 1 req/s throttle, 32-entry cache).
-- **`setLocationSearchConfig()` / `getActiveSearchConfig()`** — runtime-switchable configuration. The active config can be changed without modifying terrain UI code. `createLocationSearchClient()` creates a client from the active config.
+- **`NominatimLocationSearchClient`** — browser fallback implementation using the Nominatim public API.
+- **`DesktopLocationSearchClient`** — desktop implementation routing search via IPC to the Electron main process (`GeocoderService`).
+- **`defaultTerrainSearchConfig`** — default configuration (public Nominatim endpoint, 1 req/s throttle, 32-entry cache).
+- **`initTerrainConfig()` / `getTerrainSearchConfig()` / `setTerrainSearchConfig()`** — runtime configuration layer. Loaded from desktop runtime config, environment variables (`VITE_GEOCODER_ENDPOINT`), or packaged configuration without requiring rebuilds.
 
-Search behavior:
+Search behavior and lifecycle:
 
 - **Explicit search:** User enters a location, presses Search or Enter, and exactly one request is made. No autocomplete on every keystroke.
-- **Client-owned throttling:** Max 1 request per second (Nominatim usage policy), enforced by the search client, not the UI. Throttled requests propagate both success and failure — a delayed HTTP failure rejects the returned promise.
-- **Bounded LRU cache:** Normalized queries (whitespace/case) are cached with a configurable maximum (default 32 entries). Cache capacity belongs to each client instance, not a global default.
-- **Cancellation:** `cancelPending()` cancels any delayed throttled request. `DownloadAreaMap` calls `cancelPending()` on unmount, ensuring no network request fires after the component is destroyed and no React state updates occur after unmount.
+- **Centralized throttling:** Max 1 request per second (Nominatim usage policy). Enforced centrally in the desktop main process across the entire application, and per-client in web fallback.
+- **Bounded LRU cache:** Normalized queries (whitespace/case) are cached with a configurable maximum (default 32 entries).
+- **Clean cancellation & promise rejection:** When `cancelPending()` is called (e.g. on unmount or when a new search supersedes a pending search), pending promises are cleanly rejected with `SearchCancelledError`. The UI catches `SearchCancelledError` silently, preventing phantom empty results or spurious error alerts.
 - **Explicit UX states:** Searching, no-results, error, results — no-results is visible, not silently an empty list. The searching indicator clears on both success and failure.
-- **Attribution:** `© OpenStreetMap contributors` is shown in the search UI.
-- **Stale response suppression:** A generation counter ensures stale responses are ignored.
+- **Attribution & Licensing:** `© OpenStreetMap contributors` is shown in the search UI. Results are licensed under the Open Data Commons Open Database License (ODbL) 1.0 by the OpenStreetMap Foundation (OSMF).
+- **Stale response suppression:** A generation counter ensures stale responses from earlier queries are ignored.
 
-Request identification (Nominatim policy compliance):
+Request identification and network identity:
 
-- Browser/Electron renderer Fetch restricts setting `User-Agent`. The application relies on a valid `Referer` header being present in the packaged application, which satisfies Nominatim's identification requirements for application clients. The endpoint remains runtime-configurable via `setLocationSearchConfig()`, allowing switching to a different geocoding provider if required. No terrain truth is sent — only the text search query.
+- In Electron desktop execution, requests are routed to the main process via `ipcRenderer.invoke('geocoder:search', query)`. The main process sends an official, identifiable `User-Agent`: `InfraForge/0.3.0 (https://infraforge.app; contact@infraforge.app)` (or configurable via `INFRAFORGE_GEOCODER_USER_AGENT`). No fake `Referer` headers are used.
+- In browser fallback, standard `fetch` is used with `Accept: application/json`.
+- Search results are frontend UX only — they reposition the map and are NOT terrain truth.
 
-Search results are frontend UX only — they reposition the map and are NOT terrain truth.
+Development fallback vs. production deployment:
 
-### OSM tile endpoint
+- The public OpenStreetMap Nominatim service is a development fallback intended strictly for low-volume testing and interactive searches.
+- For production enterprise deployment, a dedicated self-hosted Nominatim instance, Pelias, or commercial geocoding service (e.g. Geocode Earth, LocationIQ) should be configured via the runtime configuration layer (`INFRAFORGE_GEOCODER_ENDPOINT` or `VITE_GEOCODER_ENDPOINT`). Public Nominatim must not be relied upon for automated or high-volume workloads.
 
-The Leaflet tile layer uses a configurable map tile provider (`MapTileConfig`):
+### OSM map tile endpoint and network identity
 
-- **`defaultMapTileConfig`** — the default configuration:
-  - URL: `https://tile.openstreetmap.org/{z}/{x}/{y}.png` (no subdomain)
-  - Attribution: `© OpenStreetMap contributors` is visible.
+The Leaflet tile layer uses a configurable map tile provider (`TerrainMapTileConfig`):
+
+- **`defaultTerrainMapTileConfig`** — default configuration:
+  - URL: `https://tile.openstreetmap.org/{z}/{x}/{y}.png`
+  - Attribution: `© OpenStreetMap contributors` (ODbL 1.0).
   - Max zoom: 19
-- The `DownloadAreaMap` component accepts an optional `mapTileConfig` prop, allowing the tile provider to be switched without modifying the component. The default uses public OSM tiles, which is policy-compliant for the current development/release. The provider can be switched at runtime if required.
+- **Runtime configurability:** Loaded from the desktop bridge, environment (`VITE_TILE_URL` / `INFRAFORGE_TILE_URL`), or defaults.
+- **Electron session network identity:** The Electron main process sets `session.defaultSession.setUserAgent()` and injects the official application identity for all outgoing tile requests.
+- **Tile usage compliance:** No bulk downloading or pre-caching of map tiles is performed. Tile requests are strictly on-demand for Leaflet viewport display.
 
 ### Selection tile size semantics
 

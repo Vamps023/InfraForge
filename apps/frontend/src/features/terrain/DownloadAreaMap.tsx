@@ -8,15 +8,19 @@ import {
 } from 'react-leaflet'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
-import type { LocationSearchClient, SearchResult } from './locationSearch'
+import {
+  type LocationSearchClient,
+  type SearchResult,
+  SearchCancelledError,
+} from './locationSearch'
 
 // Real interactive map for the Download Area UX (Issue #6).
 // Provides pan, zoom, rectangular drawing, go-to lat/lon, and a selection
 // grid overlay. The frontend owns only interaction/projection — it does
 // NOT decode DEMs or create terrain truth.
 //
-// BLOCKER 6: Map tile provider is configurable via MapTileConfig.
-// Default: OpenStreetMap public tiles (CC BY-SA).
+// Map tile provider is configurable via MapTileConfig.
+// Default: OpenStreetMap public tiles (ODbL 1.0).
 // The map library (Leaflet) is lightweight (~150KB) and well-suited for
 // this use case.
 
@@ -40,9 +44,9 @@ export interface MapTileConfig {
   maxZoom: number
 }
 
-// Default OSM public tiles configuration (BLOCKER 6).
+// Default OSM public tiles configuration.
 // Canonical endpoint: https://tile.openstreetmap.org/{z}/{x}/{y}.png
-// Attribution required: © OpenStreetMap contributors (CC BY-SA).
+// Attribution required: © OpenStreetMap contributors (ODbL 1.0).
 // Policy: https://operations.osmfoundation.org/policies/tiles/
 export const defaultMapTileConfig: MapTileConfig = {
   url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
@@ -189,6 +193,7 @@ export function DownloadAreaMap({
       })
       .catch((err) => {
         if (gen !== searchGenRef.current) return
+        if (err instanceof SearchCancelledError) return
         setSearchResults([])
         setSearchError(err instanceof Error ? err.message : 'Search failed')
       })

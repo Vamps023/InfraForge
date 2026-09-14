@@ -8,6 +8,8 @@ import { renderHook, act, waitFor } from '@testing-library/react'
 
 import {
   NominatimLocationSearchClient,
+  DesktopLocationSearchClient,
+  SearchCancelledError,
   defaultLocationSearchConfig,
   setLocationSearchConfig,
   getActiveSearchConfig,
@@ -15,6 +17,16 @@ import {
   type LocationSearchClient,
   type SearchResult,
 } from './locationSearch'
+import {
+  initTerrainConfig,
+  getTerrainSearchConfig,
+  getTerrainMapTileConfig,
+  setTerrainSearchConfig,
+  setTerrainMapTileConfig,
+  resetTerrainConfig,
+  defaultTerrainSearchConfig,
+  defaultTerrainMapTileConfig,
+} from './terrainConfig'
 
 describe('Download Area - selection grid', () => {
   it('toggles tile selection on and off', () => {
@@ -449,10 +461,43 @@ describe('BLOCKER 3: cancel pending search', () => {
     // Cancel before the timer fires.
     client.cancelPending()
 
+    await expect(secondPromise).rejects.toBeInstanceOf(SearchCancelledError)
     await vi.runAllTimersAsync()
     // The fetch should not have been called for the second query.
     // (It was called once for Denver, not for Boulder.)
     expect(mockFetch).toHaveBeenCalledTimes(1)
+
+    vi.unstubAllGlobals()
+  })
+
+  it('superseding a pending search rejects previous search with SearchCancelledError', async () => {
+    const mockFetch = vi.fn().mockImplementation(async (url: string) => {
+      return {
+        ok: true,
+        json: async () => [{ display_name: 'result', lat: '0', lon: '0' }],
+      }
+    })
+    vi.stubGlobal('fetch', mockFetch)
+
+    const config = {
+      ...defaultLocationSearchConfig,
+      minIntervalMs: 1000,
+    }
+    const client = new NominatimLocationSearchClient(config)
+
+    const firstPromise = client.search('Denver')
+    await vi.runAllTimersAsync()
+    await firstPromise
+
+    // Second request is throttled
+    const secondPromise = client.search('Boulder')
+    // Third search supersedes the second search immediately
+    const thirdPromise = client.search('Aspen')
+
+    await expect(secondPromise).rejects.toBeInstanceOf(SearchCancelledError)
+
+    await vi.runAllTimersAsync()
+    await expect(thirdPromise).resolves.toHaveLength(1)
 
     vi.unstubAllGlobals()
   })
@@ -627,5 +672,111 @@ describe('BLOCKER 12: plan identity race', () => {
     // Visible plan remains Area B.
     expect(planResult!.area).toBe('B')
     expect(planResult!.selectedTileCount).toBe(3)
+  })
+})
+
+describe('Desktop Geocoder IPC and Cancellation', () => {
+  it('DesktopLocationSearchClient routes search through desktop bridge', async () => {
+    const mockBridge = vi.fn().mockResolvedValue([
+      { displayName: 'Desktop City', lat: 40.0, lon: -105.0 },
+    ])
+    const client = new DesktopLocationSearchClient('© OpenStreetMap contributors', mockBridge)
+    expect(client.attribution).toBe('© OpenStreetMap contributors')
+
+    const results = await client.search('Desktop City')
+    expect(mockBridge).toHaveBeenCalledWith('Desktop City')
+    expect(results).toHaveLength(1)
+    expect(results[0]!.displayName).toBe('Desktop City')
+  })
+
+  it('DesktopLocationSearchClient cancelPending rejects in-flight search with SearchCancelledError', async () => {
+    let bridgeResolve!: (value: unknown) => void
+    const mockBridge = vi.fn().mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          bridgeResolve = resolve
+        }),
+    )
+    const client = new DesktopLocationSearchClient('© OpenStreetMap contributors', mockBridge)
+
+    const searchPromise = client.search('Slow City')
+    client.cancelPending()
+
+    await expect(searchPromise).rejects.toBeInstanceOf(SearchCancelledError)
+
+    // Late resolution from bridge does not cause unhandled errors or updates
+    bridgeResolve([{ displayName: 'Slow City', lat: 0, lon: 0 }])
+  })
+
+  it('createLocationSearchClient selects DesktopLocationSearchClient when bridge is provided', () => {
+    const mockBridge = { searchLocation: vi.fn().mockResolvedValue([]) }
+    const client = createLocationSearchClient(undefined, mockBridge)
+    expect(client).toBeInstanceOf(DesktopLocationSearchClient)
+  })
+})
+
+describe('Runtime Configuration Layer (terrainConfig)', () => {
+  beforeEach(() => {
+    resetTerrainConfig()
+  })
+
+  it('initializes from desktop bridge getRuntimeConfig', async () => {
+    const mockGetRuntimeConfig = vi.fn().mockResolvedValue({
+      geocoder: {
+        endpoint: 'https://internal-geocoder.corp.net/search',
+        minIntervalMs: 500,
+        maxCacheEntries: 64,
+        attribution: 'Internal Geocoder Service',
+        userAgent: 'InfraForge/0.3.0',
+      },
+      mapTile: {
+        url: 'https://tiles.corp.net/{z}/{x}/{y}.png',
+        attribution: '&copy; Internal Tiles',
+        maxZoom: 20,
+      },
+    })
+
+    vi.stubGlobal('window', {
+      infraforgeDesktop: {
+        getRuntimeConfig: mockGetRuntimeConfig,
+      },
+    })
+
+    await initTerrainConfig()
+
+    expect(getTerrainSearchConfig().endpoint).toBe('https://internal-geocoder.corp.net/search')
+    expect(getTerrainSearchConfig().minIntervalMs).toBe(500)
+    expect(getTerrainSearchConfig().maxCacheEntries).toBe(64)
+    expect(getTerrainSearchConfig().attribution).toBe('Internal Geocoder Service')
+
+    expect(getTerrainMapTileConfig().url).toBe('https://tiles.corp.net/{z}/{x}/{y}.png')
+    expect(getTerrainMapTileConfig().attribution).toBe('&copy; Internal Tiles')
+    expect(getTerrainMapTileConfig().maxZoom).toBe(20)
+
+    vi.unstubAllGlobals()
+  })
+
+  it('falls back to default configurations gracefully if bridge fails', async () => {
+    vi.stubGlobal('window', {
+      infraforgeDesktop: {
+        getRuntimeConfig: vi.fn().mockRejectedValue(new Error('Bridge unavailable')),
+      },
+    })
+
+    await initTerrainConfig()
+
+    expect(getTerrainSearchConfig().endpoint).toBe(defaultTerrainSearchConfig.endpoint)
+    expect(getTerrainMapTileConfig().url).toBe(defaultTerrainMapTileConfig.url)
+
+    vi.unstubAllGlobals()
+  })
+})
+
+describe('Licensing and Attribution Verification', () => {
+  it('default attribution refers to OpenStreetMap contributors and not CC BY 2.0', () => {
+    expect(defaultLocationSearchConfig.attribution).toContain('OpenStreetMap contributors')
+    expect(defaultLocationSearchConfig.attribution).not.toContain('CC BY 2.0')
+    expect(defaultTerrainMapTileConfig.attribution).toContain('OpenStreetMap')
+    expect(defaultTerrainMapTileConfig.attribution).not.toContain('CC BY 2.0')
   })
 })

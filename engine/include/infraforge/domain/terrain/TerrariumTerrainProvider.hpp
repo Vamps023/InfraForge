@@ -36,7 +36,7 @@ public:
         const std::vector<SelectionTile>& selectedTiles) const override;
 
     [[nodiscard]] double effectiveResolutionMpp(
-        const GeoBounds& area) const override;
+        const std::vector<SelectionTile>& selectedTiles) const override;
 
     std::filesystem::path fetchRequest(
         const ProviderRequest& request,

@@ -16,6 +16,7 @@
 #include "TerrainTestFixtures.hpp"
 #include "TestHelpers.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <deque>
@@ -172,6 +173,22 @@ public:
 } // namespace
 
 TEST_SUITE("terrain import and sampling") {
+
+TEST_CASE("known-good manual DEM has explicit metres and visible physical relief") {
+    infraforge::testhelpers::ScratchDirectory scratch;
+    const auto demPath = scratch.path() / "known-good-relief.tif";
+    const auto spec = infraforge::testhelpers::knownGoodReliefDemSpec();
+    infraforge::testhelpers::writeDemGeoTiff(demPath, spec);
+    infraforge::persistence::GdalTerrainSource reader;
+    const auto info = reader.probe(demPath);
+    CHECK(info.width == 129);
+    CHECK(info.height == 129);
+    CHECK(info.elevationUnit == "metre");
+    const auto block = reader.readBlock(demPath, 0, 0, 129, 129);
+    const auto [minimum, maximum] = std::minmax_element(block.elevations.begin(), block.elevations.end());
+    REQUIRE(minimum != block.elevations.end());
+    CHECK(*maximum - *minimum > 200.0);
+}
 
 TEST_CASE("probe reports detected CRS, geometry, unit, and NoData") {
     infraforge::testhelpers::ScratchDirectory scratch;

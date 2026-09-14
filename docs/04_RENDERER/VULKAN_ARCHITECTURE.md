@@ -22,7 +22,7 @@ viewport/
 │       ├── SwapchainState.hpp/.cpp   (Pure state machine for acquire/present handling)
 │       ├── RenderThread.hpp          (Guaranteed join-after-stop rendering thread)
 │       ├── GridPass.hpp/.cpp         (Embedded GLSL shaders via shaderc, staging upload)
-│       ├── GridCamera.hpp/.cpp       (Orthographic grid projection with DPI scaling)
+│       ├── EditorCamera.hpp/.cpp     (Perspective/top Z-up editor camera)
 │       └── SelectionId.hpp/.cpp      (Bitfield encoding for GPU picking)
 └── tests/             Doctest suites (camera, control protocol, render thread, swapchain)
 ```
@@ -47,7 +47,14 @@ The renderer handles swapchain acquisition and presentation through an explicit 
 
 ### 3. World grid and camera
 
-- Orthographic grid pass rendering distance-scaled coordinate grids using double-precision camera offsets.
+- `EditorCamera` owns a double-precision project-global target, orbit distance,
+  yaw around world Z, clamped pitch, vertical FOV, viewport aspect, dynamic
+  near/far planes, and Perspective/Top projection state.
+- Perspective projection uses Vulkan's zero-to-one depth convention and
+  framebuffer-Y correction. Top mode is orthographic and preserves focus.
+- Coordinates are Easting/Northing/Up (Z-up). Render-origin subtraction happens
+  in double precision before the GPU-facing float matrix is produced.
+- Grid and terrain share the camera matrix and depth attachment.
 - Shader compilation using `shaderc` from embedded GLSL sources with RAII staging buffers.
 - Per-monitor-v2 DPI awareness enabled before window creation to ensure 1:1 physical pixel presentation.
 
@@ -76,9 +83,9 @@ The renderer handles swapchain acquisition and presentation through an explicit 
   viewport as a `scene` control command through the desktop shell; the
   renderer never queries SQLite and the shell/frontend never interpret
   tile payloads.
-- **Camera input**: native mouse events (wheel zoom, drag pan) feed the
-  render-thread camera through a bounded queue; the first non-empty scene
-  frames the camera onto the terrain extent.
+- **Camera input**: typed pan/orbit/dolly/action events feed the render-thread
+  camera through a bounded queue. The first non-empty scene frames once if the
+  user has not moved; scene refresh and resize preserve the established pose.
 
 ---
 
@@ -89,7 +96,6 @@ The following renderer components are designed but remain Work In Progress (WIP)
 ### Terrain appearance (later phases)
 - Elevation texturing and slope-dependent material shading on top of the
   implemented terrain geometry pass.
-- A 3D orbit camera alongside the current orthographic pan/zoom control.
 
 ### Road & infrastructure passes (Phases 7–8)
 - Continuous road ribbon mesh generation from geometric alignments.

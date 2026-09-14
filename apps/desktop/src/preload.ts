@@ -58,6 +58,9 @@ const desktopApi = Object.freeze({
       ipcRenderer.removeListener('viewport:status', channelListener)
     }
   },
+  setViewportCamera: (action: 'focus-terrain' | 'frame-all' | 'perspective' | 'top', datasetUuid?: string) => {
+    ipcRenderer.send('viewport:camera', action, datasetUuid)
+  },
   onMapTileDiagnostic: (listener: (diagnostic: unknown) => void) => {
     const channelListener = (_event: unknown, diagnostic: unknown) => listener(diagnostic)
     ipcRenderer.on('map-tile:diagnostic', channelListener)

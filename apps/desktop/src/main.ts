@@ -330,6 +330,21 @@ app.whenReady().then(async () => {
     viewportSupervisor.sendScene(record)
   })
 
+  ipcMain.on('viewport:camera', (_event, action: unknown, datasetUuid: unknown) => {
+    if (
+      viewportSupervisor === null ||
+      (action !== 'focus-terrain' && action !== 'frame-all' && action !== 'perspective' && action !== 'top')
+    ) {
+      return
+    }
+    if (action === 'focus-terrain') {
+      if (typeof datasetUuid !== 'string' || datasetUuid.length === 0 || datasetUuid.length > 128) return
+      viewportSupervisor.sendCameraAction(action, datasetUuid)
+      return
+    }
+    viewportSupervisor.sendCameraAction(action)
+  })
+
   createMainWindow()
 
   app.on('activate', () => {

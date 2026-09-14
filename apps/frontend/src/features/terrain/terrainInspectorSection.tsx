@@ -48,6 +48,7 @@ export function registerTerrainInspectorSection(deps: TerrainInspectorDeps): voi
               if (!client) return
               void fetchTerrainScene(client).then((scene) => {
                 window.infraforgeDesktop?.setViewportScene?.(scene as Record<string, unknown>)
+                window.infraforgeDesktop?.setViewportCamera?.('focus-terrain', datasetUuid)
               }).catch(() => undefined)
             }}
           >

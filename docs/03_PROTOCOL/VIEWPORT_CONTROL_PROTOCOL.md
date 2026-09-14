@@ -128,3 +128,18 @@ Instruct the viewport process to cleanly exit:
 ```
 
 Upon receiving `shutdown`, the viewport application stops the render thread (guaranteeing join), destroys Vulkan swapchain and device resources, unregisters the Win32 window class, and exits with code 0. If the process does not terminate within a 2-second grace period, the supervisor force-kills the process.
+
+### 3.5 `camera`
+
+Issues a presentation-only camera action:
+
+```json
+{"type":"camera","action":"focus-terrain","datasetUuid":"<uuid>"}
+{"type":"camera","action":"frame-all"}
+{"type":"camera","action":"perspective"}
+{"type":"camera","action":"top"}
+```
+
+`focus-terrain` requires a canonical selected dataset UUID. Camera math remains
+inside the native viewport; the desktop shell only validates and forwards the
+action.

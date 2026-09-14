@@ -581,7 +581,7 @@ void TerrainPass::logTileFailure(const TerrainSceneTile& tile, const std::string
             {"detail", std::string{detail}}});
 }
 
-void TerrainPass::update(const GridCamera& camera) {
+void TerrainPass::update(const EditorCamera& camera) {
     if (device_ == VK_NULL_HANDLE) {
         return;
     }
@@ -603,8 +603,8 @@ void TerrainPass::update(const GridCamera& camera) {
     }
 
     const TerrainCameraState state{
-        .centerX = camera.centerWorldX(),
-        .centerY = camera.centerWorldY(),
+        .centerX = camera.target().x - camera.renderOrigin().x,
+        .centerY = -(camera.target().y - camera.renderOrigin().y),
         .metersPerPixel = camera.metersPerPixel(),
         .viewportWidth = static_cast<double>(camera.viewportWidth()),
         .viewportHeight = static_cast<double>(camera.viewportHeight()),
@@ -690,7 +690,7 @@ void TerrainPass::update(const GridCamera& camera) {
     }
 }
 
-void TerrainPass::record(const VkCommandBuffer command, const GridCamera& camera) const {
+void TerrainPass::record(const VkCommandBuffer command, const EditorCamera& camera) const {
     if (device_ == VK_NULL_HANDLE || payloads_.empty()) {
         return;
     }

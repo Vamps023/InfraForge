@@ -118,6 +118,9 @@ function StatusBar({ engineStatus }: { engineStatus: EngineSessionStatus }) {
         Renderer {rendererStatus.state}
         {rendererStatus.gpu ? ` · ${rendererStatus.gpu}` : ''}
       </span>
+      <span className="status-item" title="Native viewport camera controls">
+        MMB Pan · RMB Orbit · Wheel Zoom · F Focus · Home Frame All · T Top · P Perspective
+      </span>
       <ChevronDown size={12} />
     </footer>
   )

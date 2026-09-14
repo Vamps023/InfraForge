@@ -1,6 +1,6 @@
 #pragma once
 
-#include "infraforge/viewport/renderer/GridCamera.hpp"
+#include "infraforge/viewport/renderer/EditorCamera.hpp"
 
 #include <cstdint>
 #include "infraforge/viewport/renderer/Vulkan.hpp"
@@ -29,7 +29,7 @@ public:
     void destroy();
 
     // Records the grid draw into an active render pass.
-    void record(VkCommandBuffer commandBuffer, const GridCamera& camera) const;
+    void record(VkCommandBuffer commandBuffer, const EditorCamera& camera) const;
 
 private:
     void createVertexBuffer();

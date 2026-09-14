@@ -43,6 +43,19 @@ TEST_SUITE("viewport control protocol") {
         CHECK(std::holds_alternative<ShutdownCommand>(shutdown));
     }
 
+    TEST_CASE("typed camera commands parse without ambiguous drag fields") {
+        const auto focus = parseControlCommand(
+            R"({"type":"camera","action":"focus-terrain","datasetUuid":"dataset-1"})");
+        const auto* focusCommand = std::get_if<CameraCommand>(&focus);
+        REQUIRE(focusCommand != nullptr);
+        CHECK(focusCommand->action == ViewportAction::FocusTerrain);
+        CHECK_EQ(focusCommand->datasetUuid, "dataset-1");
+
+        const auto top = parseControlCommand(R"({"type":"camera","action":"top"})");
+        REQUIRE(std::get_if<CameraCommand>(&top) != nullptr);
+        CHECK(std::get<CameraCommand>(top).action == ViewportAction::Top);
+    }
+
     TEST_CASE("malformed commands are rejected explicitly") {
         const auto rejects = [](const std::string& line) {
             return captureException<CommandParseError>([&] { (void)parseControlCommand(line); });
@@ -55,6 +68,8 @@ TEST_SUITE("viewport control protocol") {
         CHECK(rejects(R"({"type":"place","screenX":0,"screenY":0,"width":-4,"height":10,"dpiScale":1})").has_value());
         CHECK(rejects(R"({"type":"visibility","visible":"yes"})").has_value());
         CHECK(rejects(R"({"type":"shutdown","extra":1})").has_value());
+        CHECK(rejects(R"({"type":"camera","action":"focus-terrain"})").has_value());
+        CHECK(rejects(R"({"type":"camera","action":"roll"})").has_value());
 
         auto error = rejects(R"({"type":"place","screenX":0})");
         REQUIRE(error.has_value());

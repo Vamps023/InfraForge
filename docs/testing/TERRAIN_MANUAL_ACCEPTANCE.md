@@ -10,6 +10,22 @@ The canonical test generator is `engine/tests/TerrainTestFixtures.hpp` (`writeDe
 
 Coverage is 500000–500320 E and 4650000–4650320 N. Control samples include 100.00 m at row 0/column 0 and 123.25 m at row 31/column 31. Tests may include NoData at row 5/column 5. The fixture is generated through GDAL during the native test suite so no opaque binary is committed.
 
+For visible 3D acceptance, pass `knownGoodReliefDemSpec()` to
+`writeDemGeoTiff`. It generates a 129 × 129, 10 m EPSG:32633 GeoTIFF with an
+explicit metre elevation unit, base elevation near 500 m, a hill, valley and
+ridge, and more than 200 m of physical relief. No exaggeration is applied.
+
+## 3D viewport acceptance
+
+1. On an empty scene, verify the perspective grid with MMB pan, RMB orbit,
+   wheel dolly, T Top and P Perspective.
+2. Import the relief DEM, select it, and use Focus Terrain. Home frames all.
+3. Orbit to roughly 45 degrees, pitch toward the horizon, pan, dolly near/far,
+   and rotate through 360 degrees. Verify non-flat relief, stable clipping,
+   Z-up orientation, grid alignment, and no spikes.
+4. Resize and minimize/restore; the camera pose must remain unchanged.
+5. Refresh/reopen the scene; an established user camera must not reset.
+
 ## Source-tree developer run
 
 1. Configure and build Release native binaries with warnings as errors.

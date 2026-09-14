@@ -136,6 +136,10 @@ export class ViewportSupervisor {
     this.sendControl(emptyViewportScene() as unknown as Record<string, unknown>)
   }
 
+  sendCameraAction(action: 'focus-terrain' | 'frame-all' | 'perspective' | 'top', datasetUuid?: string): void {
+    this.sendControl({ type: 'camera', action, ...(datasetUuid ? { datasetUuid } : {}) })
+  }
+
   setVisible(visible: boolean): void {
     this.sendControl({ type: 'visibility', visible })
   }

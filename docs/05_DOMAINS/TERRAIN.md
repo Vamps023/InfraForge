@@ -375,6 +375,15 @@ Issue #6 requires both automated and manual gates where applicable.
 
 ### Manual acceptance
 
+Visible 3D Vulkan terrain inspection is required. Completed import and
+`terrain.get_scene` results alone are insufficient. Acceptance requires
+perspective, orbit/pitch, pan, dolly, Focus Terrain/Frame All, and visibly
+non-flat physical relief.
+
+Controls: MMB pan, RMB orbit, wheel dolly, F focus, Home frame all, T top, and
+P perspective. Coordinates are Easting/Northing/Up (Z-up); project-global
+camera values remain double until the shared render-local boundary.
+
 When a Vulkan-capable desktop and real provider access are available, validate real area selection/download, real DEM rendering, LOD changes, sparse selection gaps, reopen, sampling, and Vulkan validation layers. If this has not been run, documentation/PR reports must say so explicitly.
 
 ## Limitations
@@ -387,4 +396,3 @@ Other known scope limits:
 - eager derived-tile generation may be bounded for very large coverage;
 - in-place elevation editing/re-ingest and dataset removal may remain follow-up work unless separately required;
 - overlapping datasets use deterministic priority/explicit dataset selection;
-- viewport camera may remain orthographic top-down until later renderer work.

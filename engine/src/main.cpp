@@ -223,6 +223,7 @@ int run_terrain_self_check(const std::filesystem::path& parentDirectory) {
         dataset->SetProjection(wkt);
         CPLFree(wkt);
         GDALRasterBand* band = dataset->GetRasterBand(1);
+        band->SetUnitType("metre");
         band->SetNoDataValue(-9999.0);
         std::vector<float> row(32, 0.0F);
         for (int r = 0; r < 32; ++r) {

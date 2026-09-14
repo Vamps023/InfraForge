@@ -133,6 +133,10 @@ Build the web bundles and launch Electron with supervised engine and native view
 npm run start:desktop
 ```
 
+`start:desktop` always rebuilds the frontend and desktop bundles before launching Electron. Do not invoke the desktop workspace's bare `start` script for manual acceptance unless `npm run build:web` was run immediately beforehand.
+
+For a source-tree run, environment overrides may point at non-standard native build locations. A packaged RC instead discovers `infraforge-engine` and `infraforge-viewport` under its bundled `resources/native` directory; packaged acceptance must run with both overrides unset. See `docs/testing/TERRAIN_MANUAL_ACCEPTANCE.md`.
+
 Electron supervises:
 1. `infraforge-engine` with a loopback port and session authentication token.
 2. `infraforge-viewport` parented into the shell window via Win32 child HWND.

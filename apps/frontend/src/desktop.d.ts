@@ -42,10 +42,15 @@ declare global {
           attribution: string
           userAgent: string
         }
-        mapTile: {
+        mapTiles: {
+          provider: string
           url: string
           attribution: string
           maxZoom: number
+        }
+        diagnostics: {
+          configSource: 'default' | 'config' | 'env'
+          buildMarker: string
         }
       }>
       searchLocation: (query: string) => Promise<
@@ -62,6 +67,12 @@ declare global {
       setViewportBounds: (rect: ViewportRect, dpiScale: number) => void
       setViewportVisible: (visible: boolean) => void
       onViewportStatus: (listener: (status: ViewportStatusPayload) => void) => () => void
+      onMapTileDiagnostic: (listener: (diagnostic: Readonly<{
+        state: 'started' | 'completed' | 'failed'
+        url: string
+        statusCode?: number
+        error?: string
+      }>) => void) => () => void
     }>
   }
 }

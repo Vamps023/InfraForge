@@ -43,6 +43,9 @@ export interface MapTileConfig {
   url: string
   attribution: string
   maxZoom: number
+  provider?: string
+  configSource?: 'default' | 'config' | 'env'
+  buildMarker?: string
 }
 
 // Default OSM public tiles configuration.
@@ -189,12 +192,33 @@ export function DownloadAreaMap({
   // the user staring at a blank gray pane.
   const [tileErrorCount, setTileErrorCount] = useState(0)
   const [tileLayerKey, setTileLayerKey] = useState(0)
+  const [tileLifecycle, setTileLifecycle] = useState<'idle' | 'started' | 'completed' | 'failed'>('idle')
+  const [tileFailureReason, setTileFailureReason] = useState<string | null>(null)
   const tileUrl = mapTileConfig.url
 
   // Reset error state when the tile provider URL changes.
   useEffect(() => {
     setTileErrorCount(0)
+    setTileLifecycle('idle')
+    setTileFailureReason(null)
   }, [tileUrl])
+
+  useEffect(() => window.infraforgeDesktop?.onMapTileDiagnostic?.((diagnostic) => {
+    const diagnosticUrl = diagnostic.url
+    const configuredPrefix = tileUrl.split('{')[0] ?? tileUrl
+    if (diagnosticUrl && !diagnosticUrl.startsWith(configuredPrefix)) return
+    if (diagnostic.state === 'started') setTileLifecycle('started')
+    if (diagnostic.state === 'completed') {
+      setTileLifecycle('completed')
+      setTileFailureReason(diagnostic.statusCode && diagnostic.statusCode >= 400
+        ? `HTTP ${diagnostic.statusCode}` : null)
+    }
+    if (diagnostic.state === 'failed') {
+      setTileLifecycle('failed')
+      setTileFailureReason(diagnostic.error || 'network unavailable')
+      setTileErrorCount((count) => count + 1)
+    }
+  }), [tileUrl])
 
   // Location search state (Issue #6).
   // Explicit search: user enters a location, presses Search or Enter,
@@ -287,6 +311,8 @@ export function DownloadAreaMap({
 
   const retryTiles = useCallback(() => {
     setTileErrorCount(0)
+    setTileLifecycle('idle')
+    setTileFailureReason(null)
     setTileLayerKey((k) => k + 1)
   }, [])
 
@@ -411,7 +437,12 @@ export function DownloadAreaMap({
             url={mapTileConfig.url}
             maxZoom={mapTileConfig.maxZoom}
             eventHandlers={{
-              tileerror: () => setTileErrorCount((c) => c + 1),
+              tileloadstart: () => setTileLifecycle((state) => state === 'idle' ? 'started' : state),
+              tileload: () => setTileLifecycle('completed'),
+              tileerror: () => {
+                setTileLifecycle('failed')
+                setTileErrorCount((c) => c + 1)
+              },
             }}
           />
           <DrawHandler onDraw={handleDraw} mode={mode} />
@@ -444,7 +475,7 @@ export function DownloadAreaMap({
               <AlertTriangle size={20} />
               <div className="map-error-text">
                 <strong>Map tiles could not be loaded</strong>
-                <span>Check your internet connection or map provider configuration.</span>
+                <span>{tileFailureReason || 'Check your internet connection or map provider configuration.'}</span>
               </div>
               <button type="button" className="button secondary" onClick={retryTiles}>
                 <RotateCw size={14} /> Retry
@@ -466,6 +497,11 @@ export function DownloadAreaMap({
         {searchClient && (
           <span className="map-footer-attribution">{searchClient.attribution}</span>
         )}
+        <span className="map-footer-item" title={mapTileConfig.url}>
+          Map: {mapTileConfig.provider || 'configured provider'} · {tileLifecycle}
+          {mapTileConfig.configSource ? ` · ${mapTileConfig.configSource}` : ''}
+          {mapTileConfig.buildMarker ? ` · build ${mapTileConfig.buildMarker}` : ''}
+        </span>
       </div>
     </div>
   )

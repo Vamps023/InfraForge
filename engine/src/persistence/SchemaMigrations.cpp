@@ -11,7 +11,7 @@
 namespace infraforge::persistence {
 namespace {
 
-constexpr std::array<MigrationDefinition, 5> kCanonicalMigrations{{
+constexpr std::array<MigrationDefinition, 6> kCanonicalMigrations{{
     {
         .id = 1,
         .name = "core project foundation",
@@ -104,6 +104,18 @@ CREATE TABLE terrain_dataset_coverage (
     FOREIGN KEY (dataset_id) REFERENCES terrain_datasets(id) ON DELETE CASCADE
 );
 CREATE INDEX idx_terrain_coverage_dataset ON terrain_dataset_coverage(dataset_id);
+)sql",
+    },
+    {
+        .id = 6,
+        .name = "terrain source unit semantics",
+        .sql = R"sql(
+ALTER TABLE terrain_datasets ADD COLUMN horizontal_unit_name TEXT NOT NULL DEFAULT 'unknown';
+ALTER TABLE terrain_datasets ADD COLUMN horizontal_unit_symbol TEXT NOT NULL DEFAULT 'units';
+ALTER TABLE terrain_datasets ADD COLUMN horizontal_unit_is_angular INTEGER NOT NULL DEFAULT 0 CHECK (horizontal_unit_is_angular IN (0, 1));
+ALTER TABLE terrain_datasets ADD COLUMN elevation_unit_source TEXT NOT NULL DEFAULT 'legacy';
+ALTER TABLE terrain_datasets ADD COLUMN sample_scale REAL NOT NULL DEFAULT 1.0;
+ALTER TABLE terrain_datasets ADD COLUMN sample_offset REAL NOT NULL DEFAULT 0.0;
 )sql",
     },
 }};

@@ -225,6 +225,7 @@ std::string_view failureCodeName(const CommandFailureCode code) {
     case domain::terrain::TerrainErrorCode::InvalidCoverage:
     case domain::terrain::TerrainErrorCode::TileGenerationFailed:
     case domain::terrain::TerrainErrorCode::NodataCells:
+    case domain::terrain::TerrainErrorCode::SuspiciousEncoding:
     case domain::terrain::TerrainErrorCode::ProviderAuthenticationFailed:
     case domain::terrain::TerrainErrorCode::ProviderRateLimited:
     case domain::terrain::TerrainErrorCode::ProviderNetworkTimeout:
@@ -282,6 +283,12 @@ void fillTerrainDatasetInfo(
     }
     info->set_created_at(dataset.createdAt);
     info->set_source_attribution(dataset.sourceAttribution);
+    info->set_horizontal_unit_name(dataset.horizontalUnitName);
+    info->set_horizontal_unit_symbol(dataset.horizontalUnitSymbol);
+    info->set_horizontal_unit_is_angular(dataset.horizontalUnitIsAngular);
+    info->set_elevation_unit_source(dataset.elevationUnitSource);
+    info->set_sample_scale(dataset.sampleScale);
+    info->set_sample_offset(dataset.sampleOffset);
 }
 
 protocol::v1::JobState mapJobState(const JobState state) {
@@ -824,6 +831,12 @@ void CommandProcessor::handleTerrainProbeSource(
         source->set_has_nodata(result.source.hasNodata);
         source->set_nodata_value(result.source.nodataValue);
         source->set_file_bytes(result.source.fileBytes);
+        source->set_horizontal_unit_name(result.source.horizontalUnitName);
+        source->set_horizontal_unit_symbol(result.source.horizontalUnitSymbol);
+        source->set_horizontal_unit_is_angular(result.source.horizontalUnitIsAngular);
+        source->set_sample_scale(result.source.sampleScale);
+        source->set_sample_offset(result.source.sampleOffset);
+        source->set_elevation_unit_source(result.source.elevationUnitSource);
         probe->set_crs_name(result.crsName);
         probe->set_crs_kind(result.crsKind);
         probe->set_crs_authority(result.crsAuthority);
@@ -841,10 +854,11 @@ void CommandProcessor::handleTerrainImportDataset(
     }
     executeCommand(
         [this, &connectionId, &frame, path = runtime::pathFromUtf8(command.path()),
-            displayName = command.display_name()] {
+            displayName = command.display_name(), elevationUnitOverride = command.elevation_unit_override()] {
             TerrainImportSpec spec;
             spec.sourcePath = path;
             spec.displayName = displayName;
+            spec.elevationUnitOverride = elevationUnitOverride;
             const JobRecord record = terrainService_->startImport(spec);
 
             // Return the background job ID immediately. The command dispatch

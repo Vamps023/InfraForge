@@ -36,6 +36,7 @@ enum class TerrainErrorCode : std::uint8_t {
     // The raster contains NoData cells (informational, never fatal — the
     // cells are excluded from sampling and rendering).
     NodataCells,
+    SuspiciousEncoding,
     // Derived tile generation failed or produced an invalid tile.
     TileGenerationFailed,
     // Malformed command argument (empty name, unknown dataset, ...).

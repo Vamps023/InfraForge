@@ -531,7 +531,8 @@ std::vector<domain::terrain::TerrainDataset> SqliteProjectStore::terrainDatasets
         "SELECT id, display_name, storage_path, source_format, source_crs, raster_width, raster_height, "
         "origin_x, origin_y, cell_size_x, cell_size_y, elevation_unit, elevation_unit_to_metre, "
         "has_nodata, nodata_value, min_z, max_z, bounds_east, bounds_west, bounds_north, bounds_south, "
-        "source_sha256, source_bytes, revision, diagnostics, created_at, modified_at, source_attribution "
+        "source_sha256, source_bytes, revision, diagnostics, created_at, modified_at, source_attribution, "
+        "horizontal_unit_name, horizontal_unit_symbol, horizontal_unit_is_angular, elevation_unit_source, sample_scale, sample_offset "
         "FROM terrain_datasets ORDER BY created_at, id"};
     while (rows.step()) {
         domain::terrain::TerrainDataset dataset;
@@ -561,6 +562,12 @@ std::vector<domain::terrain::TerrainDataset> SqliteProjectStore::terrainDatasets
         dataset.createdAt = std::string{rows.columnText(25)};
         dataset.modifiedAt = std::string{rows.columnText(26)};
         dataset.sourceAttribution = std::string{rows.columnText(27)};
+        dataset.horizontalUnitName = std::string{rows.columnText(28)};
+        dataset.horizontalUnitSymbol = std::string{rows.columnText(29)};
+        dataset.horizontalUnitIsAngular = rows.columnInt64(30) != 0;
+        dataset.elevationUnitSource = std::string{rows.columnText(31)};
+        dataset.sampleScale = rows.columnDouble(32);
+        dataset.sampleOffset = rows.columnDouble(33);
 
         // Stored diagnostics are a JSON array of {code, message}; unknown
         // code text means a corrupt row, not an ignorable warning.
@@ -642,8 +649,9 @@ ports::TerrainDatasetInsertResult SqliteProjectStore::insertTerrainDatasetImpl(
             "(id, display_name, storage_path, source_format, source_crs, raster_width, raster_height, "
             "origin_x, origin_y, cell_size_x, cell_size_y, elevation_unit, elevation_unit_to_metre, "
             "has_nodata, nodata_value, min_z, max_z, bounds_east, bounds_west, bounds_north, bounds_south, "
-            "source_sha256, source_bytes, revision, diagnostics, created_at, modified_at, source_attribution) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"};
+            "source_sha256, source_bytes, revision, diagnostics, created_at, modified_at, source_attribution, "
+            "horizontal_unit_name, horizontal_unit_symbol, horizontal_unit_is_angular, elevation_unit_source, sample_scale, sample_offset) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"};
         insert.bindText(1, domain::terrain::uuidTextFromEntityId(dataset.id));
         insert.bindText(2, dataset.displayName);
         insert.bindText(3, dataset.storagePath);
@@ -672,6 +680,12 @@ ports::TerrainDatasetInsertResult SqliteProjectStore::insertTerrainDatasetImpl(
         insert.bindText(26, dataset.createdAt);
         insert.bindText(27, dataset.modifiedAt);
         insert.bindText(28, dataset.sourceAttribution);
+        insert.bindText(29, dataset.horizontalUnitName);
+        insert.bindText(30, dataset.horizontalUnitSymbol);
+        insert.bindInt64(31, dataset.horizontalUnitIsAngular ? 1 : 0);
+        insert.bindText(32, dataset.elevationUnitSource);
+        insert.bindDouble(33, dataset.sampleScale);
+        insert.bindDouble(34, dataset.sampleOffset);
         (void)insert.step();
 
         // BLOCKER 6: Persist canonical coverage pieces so sparse/disconnected

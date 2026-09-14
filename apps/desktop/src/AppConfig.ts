@@ -26,6 +26,10 @@ export interface MapTileRuntimeConfig {
 export interface AppRuntimeConfig {
   geocoder: LocationSearchRuntimeConfig
   mapTiles: MapTileRuntimeConfig
+  diagnostics: {
+    configSource: 'default' | 'config' | 'env'
+    buildMarker: string
+  }
 }
 
 // Default development configuration.
@@ -50,12 +54,20 @@ export const defaultAppRuntimeConfig: AppRuntimeConfig = Object.freeze({
     maxZoom: 19,
     userAgent: 'InfraForge/0.3.0 (https://infraforge.app; contact@infraforge.app)',
   }),
+  diagnostics: Object.freeze({
+    configSource: 'default',
+    buildMarker: 'development',
+  }),
 })
 
 export function loadAppRuntimeConfig(explicitPath?: string): AppRuntimeConfig {
   const config: AppRuntimeConfig = {
     geocoder: { ...defaultAppRuntimeConfig.geocoder },
     mapTiles: { ...defaultAppRuntimeConfig.mapTiles },
+    diagnostics: {
+      configSource: 'default',
+      buildMarker: process.env.INFRAFORGE_BUILD_SHA || process.env.GITHUB_SHA || 'development',
+    },
   }
 
   // 1. Load from config file if present
@@ -74,6 +86,7 @@ export function loadAppRuntimeConfig(explicitPath?: string): AppRuntimeConfig {
       if (parsed.mapTiles) {
         config.mapTiles = { ...config.mapTiles, ...parsed.mapTiles }
       }
+      config.diagnostics.configSource = 'config'
     } catch {
       // If file exists but fails to parse, preserve defaults
     }
@@ -104,6 +117,10 @@ export function loadAppRuntimeConfig(explicitPath?: string): AppRuntimeConfig {
   }
   if (process.env.INFRAFORGE_TILE_USER_AGENT) {
     config.mapTiles.userAgent = process.env.INFRAFORGE_TILE_USER_AGENT
+  }
+
+  if (Object.keys(process.env).some((key) => key.startsWith('INFRAFORGE_GEOCODER_') || key.startsWith('INFRAFORGE_TILE_'))) {
+    config.diagnostics.configSource = 'env'
   }
 
   return config

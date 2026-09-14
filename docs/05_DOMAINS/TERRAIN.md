@@ -33,7 +33,7 @@ The frontend owns only map/draw/selection UX and projection. The native engine o
 
 `terrain.import_dataset` runs as a `terrain.import` job on the engine worker:
 
-1. **Probe** (executor): GDAL opens the source read-only. Validation is explicit — readable raster, supported numeric sample type, positive dimensions, supported north-up/non-rotated orientation, CRS present and resolvable (missing CRS is a typed failure, never an assumption), known elevation unit.
+1. **Probe** (executor): GDAL opens the source read-only. Validation is explicit — readable raster, supported numeric sample type, positive dimensions, supported north-up/non-rotated orientation, CRS present and resolvable (missing CRS is a typed failure, never an assumption). Horizontal CRS axis units and vertical sample units are reported separately. An absent elevation unit remains unknown and requires an explicit user selection before import.
 2. **Copy + hash** (worker): stream the source into project-owned temporary storage in bounded chunks; progress uses real work units; SHA-256 is computed while copying.
 3. **Validate stored copy** (worker): the project-owned stored copy is authoritative for canonical raster metadata. The asynchronous import must not persist stale metadata from an earlier source probe if the external source changes between probe and copy.
 4. **Coverage + range** (worker, worker-confined `GeoTransformService`): source coverage transforms to canonical project-global space in double precision; non-finite/unsupported results fail. Elevation range scans bounded strips; NoData cells are preserved and diagnosed.

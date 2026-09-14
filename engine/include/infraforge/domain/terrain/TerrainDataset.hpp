@@ -60,12 +60,18 @@ struct TerrainDataset {
     double originY{0.0};
     double cellSizeX{0.0};
     double cellSizeY{0.0}; // stored positive; northing decreases with row index
+    std::string horizontalUnitName;
+    std::string horizontalUnitSymbol;
+    bool horizontalUnitIsAngular{false};
 
     // Elevation unit of the source samples: canonical unit-database name
     // plus its metres factor. Heights are converted into the project's
     // canonical linear unit at sampling/tile time.
     std::string elevationUnit;
     double elevationUnitToMetre{1.0};
+    std::string elevationUnitSource;
+    double sampleScale{1.0};
+    double sampleOffset{0.0};
 
     bool hasNodata{false};
     double nodataValue{0.0};

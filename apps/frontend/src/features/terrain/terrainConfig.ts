@@ -13,9 +13,12 @@ export interface TerrainSearchConfig {
 }
 
 export interface TerrainMapTileConfig {
+  provider: string
   url: string
   attribution: string
   maxZoom: number
+  configSource: 'default' | 'config' | 'env'
+  buildMarker: string
 }
 
 export const defaultTerrainSearchConfig: TerrainSearchConfig = {
@@ -28,9 +31,12 @@ export const defaultTerrainSearchConfig: TerrainSearchConfig = {
 }
 
 export const defaultTerrainMapTileConfig: TerrainMapTileConfig = {
+  provider: 'osm-public',
   url: (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_TILE_URL) || 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
   attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
   maxZoom: 19,
+  configSource: 'default',
+  buildMarker: 'frontend-development',
 }
 
 let activeSearchConfig: TerrainSearchConfig = { ...defaultTerrainSearchConfig }
@@ -89,14 +95,17 @@ export async function initTerrainConfig(): Promise<void> {
           attribution: desktopConfig.geocoder.attribution || activeSearchConfig.attribution,
         }
       }
-      if (desktopConfig?.mapTile) {
-        const url = desktopConfig.mapTile.url
+      if (desktopConfig?.mapTiles) {
+        const url = desktopConfig.mapTiles.url
         const validUrl = url && isSecureTileUrl(url) ? url : activeMapTileConfig.url
         activeMapTileConfig = {
           ...activeMapTileConfig,
           url: validUrl,
-          attribution: desktopConfig.mapTile.attribution || activeMapTileConfig.attribution,
-          maxZoom: desktopConfig.mapTile.maxZoom ?? activeMapTileConfig.maxZoom,
+          provider: desktopConfig.mapTiles.provider || activeMapTileConfig.provider,
+          attribution: desktopConfig.mapTiles.attribution || activeMapTileConfig.attribution,
+          maxZoom: desktopConfig.mapTiles.maxZoom ?? activeMapTileConfig.maxZoom,
+          configSource: desktopConfig.diagnostics?.configSource || 'default',
+          buildMarker: desktopConfig.diagnostics?.buildMarker || activeMapTileConfig.buildMarker,
         }
       }
     } catch {

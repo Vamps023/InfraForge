@@ -114,6 +114,8 @@ function LocalFileImport({ client, onClose }: { client: EngineClient; onClose: (
   const [starting, setStarting] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
   const [startedJobId, setStartedJobId] = useState<string | null>(null)
+  const [elevationUnitOverride, setElevationUnitOverride] = useState('')
+  const submitInFlightRef = useRef(false)
   const probeIdRef = useRef(0)
 
   const probe = useTerrainStore((state) => state.probe)
@@ -180,7 +182,7 @@ function LocalFileImport({ client, onClose }: { client: EngineClient; onClose: (
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault()
-    if (starting || !probe) {
+    if (submitInFlightRef.current || starting || !probe) {
       return
     }
     if (path.trim().length === 0) {
@@ -191,14 +193,20 @@ function LocalFileImport({ client, onClose }: { client: EngineClient; onClose: (
       setFormError('A terrain name is required.')
       return
     }
+    if (probe.source?.elevationUnit === 'unknown' && !elevationUnitOverride) {
+      setFormError('Confirm how raster sample values should be interpreted.')
+      return
+    }
+    submitInFlightRef.current = true
     setStarting(true)
     setFormError(null)
     try {
-      const jobId = await importTerrainDataset(client, path.trim(), displayName.trim())
+      const jobId = await importTerrainDataset(client, path.trim(), displayName.trim(), elevationUnitOverride)
       setStartedJobId(jobId)
     } catch {
       // Engine failures are recorded in the terrain store and shown below.
     } finally {
+      submitInFlightRef.current = false
       setStarting(false)
     }
   }
@@ -266,16 +274,16 @@ function LocalFileImport({ client, onClose }: { client: EngineClient; onClose: (
               <dd>{probe.source.width} × {probe.source.height} px</dd>
             </div>
             <div className="metadata-field">
-              <dt>Pixel resolution</dt>
+              <dt>Pixel size</dt>
               <dd>
                 {Number(probe.source.pixelSizeX).toPrecision(6)} ×{' '}
                 {Number(probe.source.pixelSizeY).toPrecision(6)}{' '}
-                {probe.source.elevationUnit === 'metre' ? 'm' : 'units'}/px
+                {probe.source.horizontalUnitSymbol || probe.source.horizontalUnitName || 'units'}
               </dd>
             </div>
             <div className="metadata-field">
               <dt>Elevation unit</dt>
-              <dd>{probe.source.elevationUnit}</dd>
+              <dd>{probe.source.elevationUnit === 'unknown' ? 'Unknown' : probe.source.elevationUnit}</dd>
             </div>
             <div className="metadata-field">
               <dt>NoData</dt>
@@ -294,6 +302,24 @@ function LocalFileImport({ client, onClose }: { client: EngineClient; onClose: (
               <dd>{probe.source.sampleType}</dd>
             </div>
           </dl>
+        </div>
+      ) : null}
+
+      {probe?.source?.elevationUnit === 'unknown' ? (
+        <div className="form-warning" role="alert">
+          <p>This source does not declare an elevation unit. Confirm how raster sample values should be interpreted.</p>
+          {probe.source.sampleType === 'UInt16' && !probe.source.hasNodata ? (
+            <p>This raster may be an encoded/normalized heightmap rather than elevations in physical units. Verify elevation unit and scale before import.</p>
+          ) : null}
+          <label className="form-field">
+            <span>Elevation unit</span>
+            <select value={elevationUnitOverride} onChange={(event) => setElevationUnitOverride(event.target.value)} disabled={startedJobId !== null}>
+              <option value="">Select a unit…</option>
+              <option value="metre">Metres</option>
+              <option value="international foot">International feet</option>
+              <option value="US survey foot">US survey feet</option>
+            </select>
+          </label>
         </div>
       ) : null}
 
@@ -350,7 +376,7 @@ function LocalFileImport({ client, onClose }: { client: EngineClient; onClose: (
         <button className="button secondary" type="button" onClick={onClose}>
           {importFinished || startedJobId !== null ? 'Close' : 'Cancel'}
         </button>
-        <button className="button primary" type="submit" disabled={starting || !probe || startedJobId !== null} onClick={submit}>
+        <button className="button primary" type="submit" disabled={starting || !probe || startedJobId !== null || (probe.source?.elevationUnit === 'unknown' && !elevationUnitOverride)} onClick={submit}>
           {starting ? 'Starting…' : 'Import Terrain'}
         </button>
       </div>

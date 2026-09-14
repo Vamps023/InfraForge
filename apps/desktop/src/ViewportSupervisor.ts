@@ -1,9 +1,8 @@
 import { spawn, type ChildProcessByStdio } from 'node:child_process'
-import path from 'node:path'
 import readline from 'node:readline'
 import type { Readable, Writable } from 'node:stream'
-import { stat } from 'node:fs/promises'
 import { adaptTerrainScene, emptyViewportScene } from './ViewportSceneAdapter.js'
+import { resolveNativeExecutable } from './NativeExecutableResolver.js'
 
 export interface ViewportPlacement {
   screenX: number
@@ -12,7 +11,6 @@ export interface ViewportPlacement {
   height: number
   dpiScale: number
 }
-
 export interface ViewportStatus {
   state: 'unavailable' | 'starting' | 'ready' | 'suspended' | 'recreating' | 'device_lost' | 'failed' | 'stopped'
   detail: string
@@ -84,11 +82,11 @@ export class ViewportSupervisor {
     }
     this.starting = true
     try {
-      const viewportPath = await resolveConfiguredViewportPath()
+      const viewportPath = await resolveNativeExecutable('viewport')
       if (!viewportPath) {
         this.publish({
           state: 'unavailable',
-          detail: 'Set INFRAFORGE_VIEWPORT_PATH to the built infraforge-viewport executable for desktop development.',
+          detail: 'Native viewport was not found in packaged resources or the source build directory.',
         })
         return
       }
@@ -306,17 +304,4 @@ export class ViewportSupervisor {
 
 function readWindowHandleHex(handle: Buffer): string {
   return handle.readBigUInt64LE(0).toString(16)
-}
-
-async function resolveConfiguredViewportPath(): Promise<string | null> {
-  const configured = process.env.INFRAFORGE_VIEWPORT_PATH
-  if (!configured) {
-    return null
-  }
-  const resolved = path.resolve(configured)
-  const info = await stat(resolved)
-  if (!info.isFile()) {
-    throw new Error(`INFRAFORGE_VIEWPORT_PATH is not a file: ${resolved}`)
-  }
-  return resolved
 }

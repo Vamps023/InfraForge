@@ -56,6 +56,10 @@ struct TerrainDemSpec {
     int nodataRow{5};
     int nodataCol{5};
     bool withNodata{true};
+    std::string crs{"EPSG:32633"};
+    std::string elevationUnit{"metre"};
+    double sampleScale{1.0};
+    double sampleOffset{0.0};
 };
 
 [[nodiscard]] inline double demHeightAt(int row, int col) {
@@ -80,13 +84,19 @@ inline void writeDemGeoTiff(const std::filesystem::path& file, const TerrainDemS
     dataset->SetGeoTransform(geotransform);
 
     OGRSpatialReference srs;
-    srs.SetFromUserInput("EPSG:32633");
+    srs.SetFromUserInput(spec.crs.c_str());
     char* wkt = nullptr;
     srs.exportToWkt(&wkt);
     dataset->SetProjection(wkt);
     CPLFree(wkt);
 
     GDALRasterBand* band = dataset->GetRasterBand(1);
+    // The fixture is a trustworthy physical DEM, so declare its vertical
+    // sample unit explicitly. Tests for missing-unit behavior use dedicated
+    // fixtures and must not depend on an implicit convention.
+    if (!spec.elevationUnit.empty()) band->SetUnitType(spec.elevationUnit.c_str());
+    if (spec.sampleScale != 1.0) band->SetScale(spec.sampleScale);
+    if (spec.sampleOffset != 0.0) band->SetOffset(spec.sampleOffset);
     if (spec.withNodata) {
         band->SetNoDataValue(-9999.0);
     }

@@ -184,10 +184,8 @@ void tiffStructuralSanityCheck(const std::filesystem::path& file) {
     return std::string{text.substr(begin, end - begin)};
 }
 
-// Normalizes the raster band's unit string. An absent unit means metres —
-// the documented convention for DEMs without vertical metadata (the same
-// convention the Geo domain applies to untyped source heights). A unit we
-// cannot map is an explicit failure, never a silent reinterpretation.
+// Normalizes the raster band's vertical/sample unit string. An absent unit
+// remains unknown: the horizontal CRS cannot establish sample semantics.
 struct ElevationUnit {
     std::string name;
     double toMetre{1.0};
@@ -195,7 +193,10 @@ struct ElevationUnit {
 
 [[nodiscard]] ElevationUnit normalizeElevationUnit(const char* rawUnit) {
     const std::string unit = trimmed(rawUnit != nullptr ? std::string_view{rawUnit} : std::string_view{});
-    if (unit.empty() || unit == "m" || unit == "meter" || unit == "metre"
+    if (unit.empty()) {
+        return {.name = "unknown", .toMetre = 1.0};
+    }
+    if (unit == "m" || unit == "meter" || unit == "metre"
         || unit == "meters" || unit == "metres") {
         return {.name = "metre", .toMetre = 1.0};
     }
@@ -382,9 +383,35 @@ ports::TerrainSourceInfo GdalTerrainSource::probe(const std::filesystem::path& f
     }
     info.crsDefinition = crsDefinitionText(*spatialRef);
 
+    const char* horizontalUnitName = nullptr;
+    if (spatialRef->IsGeographic()) {
+        (void)spatialRef->GetAngularUnits(&horizontalUnitName);
+        info.horizontalUnitIsAngular = true;
+        info.horizontalUnitName = horizontalUnitName != nullptr ? horizontalUnitName : "degree";
+        info.horizontalUnitSymbol = "°";
+    } else {
+        (void)spatialRef->GetLinearUnits(&horizontalUnitName);
+        info.horizontalUnitName = horizontalUnitName != nullptr ? horizontalUnitName : "linear unit";
+        const std::string normalized = trimmed(info.horizontalUnitName);
+        if (normalized == "metre" || normalized == "meter" || normalized == "metres" || normalized == "meters") {
+            info.horizontalUnitSymbol = "m";
+        } else if (normalized.find("foot") != std::string::npos || normalized == "ft") {
+            info.horizontalUnitSymbol = "ft";
+        } else {
+            info.horizontalUnitSymbol = info.horizontalUnitName;
+        }
+    }
+
     const ElevationUnit unit = normalizeElevationUnit(band->GetUnitType());
     info.elevationUnit = unit.name;
     info.elevationUnitToMetre = unit.toMetre;
+    info.elevationUnitSource = info.elevationUnit == "unknown" ? "unknown" : "raster band metadata";
+    int hasScale = FALSE;
+    int hasOffset = FALSE;
+    info.sampleScale = band->GetScale(&hasScale);
+    info.sampleOffset = band->GetOffset(&hasOffset);
+    if (hasScale != TRUE) info.sampleScale = 1.0;
+    if (hasOffset != TRUE) info.sampleOffset = 0.0;
 
     int hasNodata = FALSE;
     const double nodata = band->GetNoDataValue(&hasNodata);
@@ -443,6 +470,17 @@ ports::TerrainElevationBlock GdalTerrainSource::readBlock(
             if (value == nodata) {
                 value = std::numeric_limits<double>::quiet_NaN();
             }
+        }
+    }
+    int hasScale = FALSE;
+    int hasOffset = FALSE;
+    const double scale = band->GetScale(&hasScale);
+    const double offset = band->GetOffset(&hasOffset);
+    if (hasScale == TRUE || hasOffset == TRUE) {
+        const double effectiveScale = hasScale == TRUE ? scale : 1.0;
+        const double effectiveOffset = hasOffset == TRUE ? offset : 0.0;
+        for (double& value : block.elevations) {
+            if (!std::isnan(value)) value = value * effectiveScale + effectiveOffset;
         }
     }
     return block;

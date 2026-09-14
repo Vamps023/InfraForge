@@ -183,31 +183,35 @@ std::vector<float> decodeTerrariumPng(const std::string& pngData, int& width, in
         {"gdalDrivers", std::to_string(GetGDALDriverManager()->GetDriverCount())},
     });
 
-    // Write PNG to a temporary in-memory file via GDAL's vsimem.
-    static std::atomic<int> vsiCounter{0};
-    const std::string vsiPath = "/vsimem/terrarium_" +
-        std::to_string(vsiCounter.fetch_add(1)) + ".png";
-
-    VSILFILE* vsiFile = VSIFileFromMemBuffer(vsiPath.c_str(),
-        reinterpret_cast<GByte*>(const_cast<char*>(pngData.data())),
-        static_cast<vsi_l_offset>(pngData.size()), FALSE);
-    if (!vsiFile) {
-        throw ProviderError(ProviderErrorCode::CorruptTerrainResponse,
-            "cannot create vsimem file for PNG decoding");
+    // Use a real temporary file rather than /vsimem. The Windows GDAL PNG
+    // plugin may not resolve correctly through the virtual filesystem even
+    // though it can open the same PNG from disk.
+    static std::atomic<int> tempCounter{0};
+    const auto tempPath = std::filesystem::temp_directory_path() /
+        ("infraforge_terrarium_" + std::to_string(tempCounter.fetch_add(1)) + ".png");
+    {
+        std::ofstream output(tempPath, std::ios::binary | std::ios::trunc);
+        output.write(pngData.data(), static_cast<std::streamsize>(pngData.size()));
+        if (!output.good()) {
+            std::error_code error;
+            std::filesystem::remove(tempPath, error);
+            throw ProviderError(ProviderErrorCode::CorruptTerrainResponse,
+                "cannot write temporary Terrarium PNG");
+        }
     }
-    VSIFCloseL(vsiFile);
 
-    CPLErrorReset();
-    GDALDatasetH ds = GDALOpen(vsiPath.c_str(), GA_ReadOnly);
+    GDALDatasetH ds = GDALOpen(tempPath.string().c_str(), GA_ReadOnly);
     if (!ds) {
+        const std::string gdalError = CPLGetLastErrorMsg();
         runtime::logError("terrain", "terrarium.decode.open_failed", {
-            {"gdalError", CPLGetLastErrorMsg()},
+            {"gdalError", gdalError},
             {"gdalDrivers", std::to_string(GetGDALDriverManager()->GetDriverCount())},
             {"signature", signature},
         });
-        VSIUnlink(vsiPath.c_str());
+        std::error_code error;
+        std::filesystem::remove(tempPath, error);
         throw ProviderError(ProviderErrorCode::CorruptTerrainResponse,
-            "GDAL cannot open Terrarium PNG");
+            "GDAL cannot open Terrarium PNG: " + gdalError);
     }
 
     width = GDALGetRasterXSize(ds);
@@ -215,7 +219,8 @@ std::vector<float> decodeTerrariumPng(const std::string& pngData, int& width, in
     const int bands = GDALGetRasterCount(ds);
     if (bands < 3) {
         GDALClose(ds);
-        VSIUnlink(vsiPath.c_str());
+        std::error_code error;
+        std::filesystem::remove(tempPath, error);
         throw ProviderError(ProviderErrorCode::CorruptTerrainResponse,
             "Terrarium PNG must have at least 3 bands, got " + std::to_string(bands));
     }
@@ -232,7 +237,8 @@ std::vector<float> decodeTerrariumPng(const std::string& pngData, int& width, in
         0, 0, width, height, b.data(), width, height, GDT_Byte, 0, 0);
 
     GDALClose(ds);
-    VSIUnlink(vsiPath.c_str());
+    std::error_code removeError;
+    std::filesystem::remove(tempPath, removeError);
 
     if (e1 != CE_None || e2 != CE_None || e3 != CE_None) {
         throw ProviderError(ProviderErrorCode::CorruptTerrainResponse,

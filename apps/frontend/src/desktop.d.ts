@@ -34,6 +34,28 @@ declare global {
         electron: string
       }>
       getEngineBootstrap: () => Promise<EngineBootstrap>
+      getRuntimeConfig: () => Promise<{
+        geocoder: {
+          endpoint: string
+          minIntervalMs: number
+          maxCacheEntries: number
+          attribution: string
+          userAgent: string
+        }
+        mapTile: {
+          url: string
+          attribution: string
+          maxZoom: number
+        }
+      }>
+      searchLocation: (query: string) => Promise<
+        Array<{
+          displayName: string
+          lat: number
+          lon: number
+          boundingBox?: { south: number; north: number; west: number; east: number }
+        }>
+      >
       pickDirectory: (options: Readonly<{ title: string; buttonLabel?: string }>) => Promise<string | null>
       pickFile: (options: Readonly<{ title: string; filters?: ReadonlyArray<FileFilter> }>) => Promise<string | null>
       setViewportScene: (scene: Record<string, unknown>) => void

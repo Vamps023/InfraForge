@@ -907,28 +907,101 @@ TEST_SUITE("terrarium terrain provider") {
         CHECK(requests[0].requestId == "11/0/0");
     }
 
-    // ---- BLOCKER 8/9: Provider supplies effective resolution ----
-
-    TEST_CASE("BLOCKER 8: provider effectiveResolutionMpp varies with latitude") {
+    TEST_CASE("Item 6: boundary edge even one representable value inside adjacent tile includes that tile") {
         auto httpClient = std::make_shared<MockHttpClient>();
         TerrariumTerrainProvider provider(httpClient);
 
-        // Equatorial area.
-        GeoBounds equator{.west = -1.0, .south = -1.0, .east = 1.0, .north = 1.0};
-        const double resEq = provider.effectiveResolutionMpp(equator);
+        const int z = 11;
+        const double kEarthRadius = 6378137.0;
+        const double kOriginShift = 3.14159265358979323846 * kEarthRadius;
+        const double tileSize = (2.0 * kOriginShift) / static_cast<double>(1 << z);
 
-        // High-latitude area.
-        GeoBounds arctic{.west = -1.0, .south = 59.0, .east = 1.0, .north = 61.0};
-        const double resArc = provider.effectiveResolutionMpp(arctic);
+        // Tile (11, 0, 0) bounds in Web Mercator
+        const double minX = -kOriginShift;
+        const double maxX = -kOriginShift + tileSize;
+        const double minY = kOriginShift - tileSize;
+        const double maxY = kOriginShift;
 
-        // Higher latitude should have finer (lower) resolution.
+        // 1. Exact east boundary: exactly 1 tile
+        {
+            const double west = (minX / kEarthRadius) * 180.0 / 3.14159265358979323846;
+            const double east = (maxX / kEarthRadius) * 180.0 / 3.14159265358979323846;
+            const double north = (2.0 * std::atan(std::exp(maxY / kEarthRadius)) - 3.14159265358979323846 / 2.0) * 180.0 / 3.14159265358979323846;
+            const double south = (2.0 * std::atan(std::exp(minY / kEarthRadius)) - 3.14159265358979323846 / 2.0) * 180.0 / 3.14159265358979323846;
+
+            SelectionTile tile{0, 0, GeoBounds{west, south, east, north}, 1.0};
+            auto reqs = provider.planRequests({tile});
+            REQUIRE(reqs.size() == 1);
+            CHECK(reqs[0].requestId == "11/0/0");
+        }
+
+        // 2. East boundary nudged one representable double in degrees into tile x=1: includes both (11,0,0) and (11,1,0)
+        {
+            const double west = (minX / kEarthRadius) * 180.0 / 3.14159265358979323846;
+            const double eastExact = (maxX / kEarthRadius) * 180.0 / 3.14159265358979323846;
+            const double east = std::nextafter(eastExact, std::numeric_limits<double>::infinity());
+            const double north = (2.0 * std::atan(std::exp(maxY / kEarthRadius)) - 3.14159265358979323846 / 2.0) * 180.0 / 3.14159265358979323846;
+            const double south = (2.0 * std::atan(std::exp(minY / kEarthRadius)) - 3.14159265358979323846 / 2.0) * 180.0 / 3.14159265358979323846;
+
+            SelectionTile tile{0, 0, GeoBounds{west, south, east, north}, 1.0};
+            auto reqs = provider.planRequests({tile});
+            REQUIRE(reqs.size() == 2);
+            CHECK(reqs[0].requestId == "11/0/0");
+            CHECK(reqs[1].requestId == "11/1/0");
+        }
+
+        // 3. South boundary nudged one representable double in degrees into tile y=1: includes both (11,0,0) and (11,0,1)
+        {
+            const double west = (minX / kEarthRadius) * 180.0 / 3.14159265358979323846;
+            const double east = (maxX / kEarthRadius) * 180.0 / 3.14159265358979323846;
+            const double north = (2.0 * std::atan(std::exp(maxY / kEarthRadius)) - 3.14159265358979323846 / 2.0) * 180.0 / 3.14159265358979323846;
+            const double southExact = (2.0 * std::atan(std::exp(minY / kEarthRadius)) - 3.14159265358979323846 / 2.0) * 180.0 / 3.14159265358979323846;
+            const double south = std::nextafter(southExact, -std::numeric_limits<double>::infinity());
+
+            SelectionTile tile{0, 0, GeoBounds{west, south, east, north}, 1.0};
+            auto reqs = provider.planRequests({tile});
+            REQUIRE(reqs.size() == 2);
+            CHECK(reqs[0].requestId == "11/0/0");
+            CHECK(reqs[1].requestId == "11/0/1");
+        }
+    }
+
+    // ---- Item 7: Provider supplies effective resolution reflecting selected coverage ----
+
+    TEST_CASE("Item 7: provider effectiveResolutionMpp reflects selected coverage and coarsest rule") {
+        auto httpClient = std::make_shared<MockHttpClient>();
+        TerrariumTerrainProvider provider(httpClient);
+
+        // Empty selection returns 0.0
+        CHECK(provider.effectiveResolutionMpp({}) == 0.0);
+
+        // Equatorial tile: lat around 0
+        SelectionTile eqTile;
+        eqTile.col = 0;
+        eqTile.row = 0;
+        eqTile.bounds = GeoBounds{.west = -0.5, .south = -0.5, .east = 0.5, .north = 0.5};
+        eqTile.areaSqm = 1.0;
+
+        // High-latitude tile: lat around 60
+        SelectionTile arcTile;
+        arcTile.col = 0;
+        arcTile.row = 1;
+        arcTile.bounds = GeoBounds{.west = -0.5, .south = 59.5, .east = 0.5, .north = 60.5};
+        arcTile.areaSqm = 1.0;
+
+        const double resEq = provider.effectiveResolutionMpp({eqTile});
+        const double resArc = provider.effectiveResolutionMpp({arcTile});
+
+        // Equator has coarser resolution (~76 m/px) than 60° (~38 m/px)
         CHECK(resEq > resArc);
-        // At equator, z=11 resolution should be ~76 m/px.
-        CHECK(resEq > 50.0);
-        CHECK(resEq < 100.0);
-        // At 60°, resolution should be ~38 m/px.
-        CHECK(resArc > 20.0);
-        CHECK(resArc < 50.0);
+        CHECK(resEq > 70.0);
+        CHECK(resEq < 80.0);
+        CHECK(resArc > 35.0);
+        CHECK(resArc < 45.0);
+
+        // Disconnected equator + 60° selection: coarsest rule returns the equator resolution
+        const double resDisconnected = provider.effectiveResolutionMpp({eqTile, arcTile});
+        CHECK(resDisconnected == doctest::Approx(resEq));
     }
 
     // ---- BLOCKER 13: Transport error mapping ----

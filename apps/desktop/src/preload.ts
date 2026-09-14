@@ -25,6 +25,8 @@ const desktopApi = Object.freeze({
     electron: process.versions.electron,
   }),
   getEngineBootstrap: () => ipcRenderer.invoke('engine:get-bootstrap') as Promise<unknown>,
+  getRuntimeConfig: () => ipcRenderer.invoke('app:get-runtime-config') as Promise<unknown>,
+  searchLocation: (query: string) => ipcRenderer.invoke('geocoder:search', String(query)) as Promise<unknown>,
   pickDirectory: (options: PickDirectoryOptions) =>
     ipcRenderer.invoke('dialog:pick-directory', {
       title: String(options.title),

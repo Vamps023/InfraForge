@@ -1310,12 +1310,11 @@ domain::terrain::DownloadPlan TerrainService::planDownload(
         plan.estimatedBytes += req.estimatedBytes;
     }
 
-    // Effective resolution: ask the provider (BLOCKER 8). The provider owns
-    // the resolution computation since it is provider-specific (Terrarium
-    // uses z11, 256px, Web Mercator latitude-dependent ground resolution).
+    // Effective resolution: ask the provider (Item 7). The provider owns
+    // the resolution computation derived from selected tile coverage.
     // TerrainService must not hard-code Terrarium-specific zoom/pixel/CRS
     // assumptions.
-    plan.effectiveResolutionMpp = provider->effectiveResolutionMpp(area);
+    plan.effectiveResolutionMpp = provider->effectiveResolutionMpp(selectedTiles);
 
     // BLOCKER 14: Coverage checking — distinguish fully covered, partially
     // covered, and outside. Do not report fullCoverage = true merely because

@@ -56,7 +56,7 @@ WebMercatorCoord toWebMercator(double lonDeg, double latDeg) {
     const double latRad = latDeg * kPi / 180.0;
     return {
         kEarthRadius * lonRad,
-        kEarthRadius * std::log(std::tan(kPi / 4.0 + latRad / 2.0))
+        kEarthRadius * std::asinh(std::tan(latRad))
     };
 }
 
@@ -80,58 +80,44 @@ TileBounds tileBoundsWebMercator(int z, int x, int y) {
     return {minX, minY, maxX, maxY};
 }
 
-// Half-open tile-index helpers for XYZ tile coverage (BLOCKER 1).
+// Half-open tile-index helpers for XYZ tile coverage (Item 6).
+// Normalized coordinates in [-1, 1] avoid catastrophic cancellation from
+// adding/subtracting large originShift values.
 // Semantics:
 //   west/minX  = inclusive (floor)
-//   east/maxX  = exclusive (nudge below boundary so floor skips extra tile)
+//   east/maxX  = exclusive: always take std::nextafter(coord, -inf) toward interior
 //   north/maxY = inclusive (floor on ne.y gives the tile containing north)
-//   south/minY = exclusive (nudge above boundary so floor skips extra tile)
+//   south/minY = exclusive: always take std::nextafter(coord, +inf) toward interior
 //
-// For XYZ Y (flipped): y = floor((originShift - mercatorY) / tileSize).
-// If sw.y is exactly on a tile boundary, the tile starting at sw.y is
-// SOUTH of the coverage — we must NOT include it. Nudging sw.y northward
-// (toward +originShift) decreases (originShift - sw.y) so floor returns
-// the tile just north of the boundary (the last tile we actually need).
-// Nudging southward (the old bug) increased the quotient and still
-// included the extra southern tile.
-static int tileIndexInclusive(double coord, double originShift, double tileSize) {
-    return static_cast<int>(std::floor((coord + originShift) / tileSize));
+// In half-open interval [west, east), any point in the interval satisfies
+// west <= x < east. The interior supremum is nextafter(east, -inf).
+// Evaluating floor on the interior coordinate ensures that exact boundaries
+// do not overfetch, while any point even one representable value inside the
+// tile correctly includes it, with no arbitrary epsilon.
+static int tileIndexInclusive(double coord, double originShift, int numTiles) {
+    const double norm = coord / originShift;
+    return static_cast<int>(std::floor((norm + 1.0) * 0.5 * static_cast<double>(numTiles)));
 }
 
-static int tileIndexExclusiveMax(double coord, double originShift, double tileSize) {
-    // If coord is exactly on a tile boundary, nudge just below so floor
-    // gives the last tile we actually need (half-open [min, max)).
-    double adjusted = coord;
-    if (coord > -originShift && coord < originShift) {
-        const double tileIdxD = (coord + originShift) / tileSize;
-        if (std::abs(tileIdxD - std::round(tileIdxD)) < 1e-9) {
-            adjusted = std::nextafter(coord, -std::numeric_limits<double>::infinity());
-        }
-    }
-    return static_cast<int>(std::floor((adjusted + originShift) / tileSize));
+static int tileIndexExclusiveMax(double coord, double originShift, int numTiles) {
+    const double interiorCoord = std::nextafter(coord, -std::numeric_limits<double>::infinity());
+    const double norm = interiorCoord / originShift;
+    return static_cast<int>(std::floor((norm + 1.0) * 0.5 * static_cast<double>(numTiles)));
 }
 
-static int tileIndexYInclusive(double mercatorY, double originShift, double tileSize) {
-    // North edge: inclusive. y = floor((originShift - ne.y) / tileSize).
-    return static_cast<int>(std::floor((originShift - mercatorY) / tileSize));
+static int tileIndexYInclusive(double mercatorY, double originShift, int numTiles) {
+    const double norm = mercatorY / originShift;
+    return static_cast<int>(std::floor((1.0 - norm) * 0.5 * static_cast<double>(numTiles)));
 }
 
-static int tileIndexYExclusiveMax(double mercatorY, double originShift, double tileSize) {
-    // South edge: exclusive. If sw.y is exactly on a tile boundary,
-    // nudge NORTHWARD (toward +originShift) so (originShift - sw.y)
-    // decreases and floor returns the tile just north of the boundary.
-    double adjusted = mercatorY;
-    if (mercatorY > -originShift && mercatorY < originShift) {
-        const double tileIdxD = (originShift - mercatorY) / tileSize;
-        if (std::abs(tileIdxD - std::round(tileIdxD)) < 1e-9) {
-            adjusted = std::nextafter(mercatorY, std::numeric_limits<double>::infinity());
-        }
-    }
-    return static_cast<int>(std::floor((originShift - adjusted) / tileSize));
+static int tileIndexYExclusiveMax(double mercatorY, double originShift, int numTiles) {
+    const double interiorSouth = std::nextafter(mercatorY, std::numeric_limits<double>::infinity());
+    const double norm = interiorSouth / originShift;
+    return static_cast<int>(std::floor((1.0 - norm) * 0.5 * static_cast<double>(numTiles)));
 }
 
 // Convert WGS84 bounds to the set of XYZ tiles at a given zoom.
-// Uses half-open interval semantics (BLOCKER 1):
+// Uses half-open interval semantics (Item 6):
 //   X: [west, east)  — west inclusive, east exclusive
 //   Y: (south, north] — south exclusive, north inclusive
 // This ensures an area ending exactly on a tile boundary does not
@@ -139,21 +125,24 @@ static int tileIndexYExclusiveMax(double mercatorY, double originShift, double t
 struct XyzTile { int z, x, y; };
 std::vector<XyzTile> tilesForBounds(
     const GeoBounds& bounds, int zoom) {
+    if (bounds.isEmpty()) {
+        return {};
+    }
     const auto sw = toWebMercator(bounds.west, bounds.south);
     const auto ne = toWebMercator(bounds.east, bounds.north);
 
-    const double tileSize = (2.0 * kOriginShift) / static_cast<double>(1 << zoom);
+    const int numTiles = 1 << zoom;
 
-    int xMin = tileIndexInclusive(sw.x, kOriginShift, tileSize);
-    int xMax = tileIndexExclusiveMax(ne.x, kOriginShift, tileSize);
-    int yMin = tileIndexYInclusive(ne.y, kOriginShift, tileSize);
-    int yMax = tileIndexYExclusiveMax(sw.y, kOriginShift, tileSize);
+    int xMin = tileIndexInclusive(sw.x, kOriginShift, numTiles);
+    int xMax = tileIndexExclusiveMax(ne.x, kOriginShift, numTiles);
+    int yMin = tileIndexYInclusive(ne.y, kOriginShift, numTiles);
+    int yMax = tileIndexYExclusiveMax(sw.y, kOriginShift, numTiles);
 
-    const int maxTile = (1 << zoom) - 1;
-    xMin = std::max(0, std::min(xMin, maxTile));
-    xMax = std::max(0, std::min(xMax, maxTile));
-    yMin = std::max(0, std::min(yMin, maxTile));
-    yMax = std::max(0, std::min(yMax, maxTile));
+    const int maxTile = numTiles - 1;
+    xMin = std::clamp(xMin, 0, maxTile);
+    xMax = std::clamp(xMax, xMin, maxTile);
+    yMin = std::clamp(yMin, 0, maxTile);
+    yMax = std::clamp(yMax, yMin, maxTile);
 
     std::vector<XyzTile> tiles;
     for (int y = yMin; y <= yMax; ++y) {
@@ -482,17 +471,31 @@ std::vector<ProviderRequest> TerrariumTerrainProvider::planRequests(
 }
 
 double TerrariumTerrainProvider::effectiveResolutionMpp(
-    const GeoBounds& area) const {
-    // BLOCKER 8: Provider owns the resolution computation. Terrarium uses
+    const std::vector<SelectionTile>& selectedTiles) const {
+    if (selectedTiles.empty()) {
+        return 0.0;
+    }
+    // Item 7: Provider owns the resolution computation. Terrarium uses
     // a fixed zoom of 11 with 256px tiles. Ground resolution varies with
     // latitude in Web Mercator: (tileSizeM * cos(lat)) / pixelsPerTile.
+    // Documented rule: Coarsest effective resolution (maximum metres per pixel)
+    // across all selected tiles, calculated at the center latitude of each tile.
+    // This avoids overpromising quality across non-uniform or disconnected selections.
     constexpr int kZoom = 11;
     constexpr int kPixelsPerTile = 256;
     const double tileSizeM = (2.0 * kOriginShift) /
         static_cast<double>(std::int64_t{1} << kZoom);
-    const double centerLat = (area.south + area.north) / 2.0;
-    const double latRad = centerLat * kPi / 180.0;
-    return (tileSizeM * std::cos(latRad)) / static_cast<double>(kPixelsPerTile);
+
+    double coarsestMpp = 0.0;
+    for (const auto& tile : selectedTiles) {
+        const double centerLat = (tile.bounds.south + tile.bounds.north) / 2.0;
+        const double latRad = centerLat * kPi / 180.0;
+        const double tileMpp = (tileSizeM * std::cos(latRad)) / static_cast<double>(kPixelsPerTile);
+        if (tileMpp > coarsestMpp) {
+            coarsestMpp = tileMpp;
+        }
+    }
+    return coarsestMpp;
 }
 
 std::filesystem::path TerrariumTerrainProvider::fetchRequest(

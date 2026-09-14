@@ -915,21 +915,26 @@ TEST_CASE("planDownload with empty selection returns grid with zero requests") {
 // BLOCKER 8/9: TerrainService uses provider-supplied effective resolution,
 // not hard-coded Terrarium math. The mock provider returns its
 // maxResolutionMpp (150.0), so the plan should reflect that value.
-TEST_CASE("BLOCKER 8: planDownload uses provider-supplied effective resolution") {
+TEST_CASE("Item 7: planDownload uses provider-supplied effective resolution for selected tiles") {
     TerrainHarness harness{};
     const GeoBounds area{
         .west = 15.0, .south = 42.0, .east = 15.1, .north = 42.1};
     const std::uint32_t tileSize = 4000;
 
-    const auto plan = harness.terrain->planDownload(
+    // Empty selection returns 0.0.
+    const auto planEmpty = harness.terrain->planDownload(
         "mock-terrain", area, tileSize, {});
-    // The mock provider's effectiveResolutionMpp returns maxResolutionMpp=150.
-    CHECK(plan.effectiveResolutionMpp == doctest::Approx(150.0));
+    CHECK(planEmpty.effectiveResolutionMpp == doctest::Approx(0.0));
+
+    // Non-empty selection reflects provider's effective resolution (150.0).
+    const auto planSelected = harness.terrain->planDownload(
+        "mock-terrain", area, tileSize, {0});
+    CHECK(planSelected.effectiveResolutionMpp == doctest::Approx(150.0));
 }
 
-// BLOCKER 9: Verify resolution varies with latitude through the real
-// Terrarium provider path (not just cos(lat) in isolation).
-TEST_CASE("BLOCKER 9: Terrarium plan resolution varies with latitude") {
+// Item 7: Verify resolution varies with latitude and reflects selected coverage
+// through the real Terrarium provider path (TerrainService).
+TEST_CASE("Item 7: Terrarium plan resolution derives from selected coverage") {
     // Build a custom harness with both mock and Terrarium providers.
     TerrainHarness harness{TerrainHarness::ConfigurableMock{}};
 
@@ -950,17 +955,17 @@ TEST_CASE("BLOCKER 9: Terrarium plan resolution varies with latitude") {
             }
         });
 
-    // Equatorial area.
+    // Equatorial area with tile 0 selected.
     const GeoBounds equator{
         .west = -0.5, .south = -0.5, .east = 0.5, .north = 0.5};
     const auto planEq = harness.terrain->planDownload(
-        "terrarium-aws", equator, 4000, {});
+        "terrarium-aws", equator, 4000, {0});
 
-    // High-latitude area.
+    // High-latitude area with tile 0 selected.
     const GeoBounds arctic{
         .west = -0.5, .south = 59.0, .east = 0.5, .north = 61.0};
     const auto planArc = harness.terrain->planDownload(
-        "terrarium-aws", arctic, 4000, {});
+        "terrarium-aws", arctic, 4000, {0});
 
     // Higher latitude should have finer (lower) resolution.
     CHECK(planEq.effectiveResolutionMpp > planArc.effectiveResolutionMpp);

@@ -37,8 +37,8 @@ public:
         const std::vector<SelectionTile>& selectedTiles) const override;
 
     [[nodiscard]] double effectiveResolutionMpp(
-        const GeoBounds& /*area*/) const override {
-        return info_.maxResolutionMpp;
+        const std::vector<SelectionTile>& selectedTiles) const override {
+        return selectedTiles.empty() ? 0.0 : info_.maxResolutionMpp;
     }
 
     std::filesystem::path fetchRequest(

@@ -13,6 +13,7 @@ import {
 import { useTerrainStore } from './terrainStore'
 import { DownloadAreaMap, type GeoBounds, type SelectionTileInfo } from './DownloadAreaMap'
 import { createLocationSearchClient } from './locationSearch'
+import { initTerrainConfig, getTerrainMapTileConfig } from './terrainConfig'
 
 interface ImportTerrainDialogProps {
   client: EngineClient
@@ -322,10 +323,6 @@ interface DrawnArea {
   north: number
 }
 
-// Production location search client (BLOCKER 4). Created via the factory
-// which reads runtime-configurable search provider configuration.
-// Stateless and safe to share across renders.
-const searchClient = createLocationSearchClient()
 
 // Plan identity: a stable key derived from the inputs that produced the
 // plan (Finding 1). Used to detect and ignore stale plan responses and to
@@ -431,6 +428,21 @@ function DownloadAreaImport({ client, onClose }: { client: EngineClient; onClose
   const [starting, setStarting] = useState(false)
   const [startedJobId, setStartedJobId] = useState<string | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
+  const [searchClient, setSearchClient] = useState(() => createLocationSearchClient())
+  const [mapTileConfig, setMapTileConfig] = useState(() => getTerrainMapTileConfig())
+
+  useEffect(() => {
+    let active = true
+    void initTerrainConfig().then(() => {
+      if (active) {
+        setSearchClient(createLocationSearchClient())
+        setMapTileConfig(getTerrainMapTileConfig())
+      }
+    })
+    return () => {
+      active = false
+    }
+  }, [])
 
   const jobs = useTerrainStore((state) => state.jobs)
   const downloadJob = startedJobId
@@ -685,6 +697,7 @@ function DownloadAreaImport({ client, onClose }: { client: EngineClient; onClose
         onTileToggle={toggleTile}
         tileSize={tileSize}
         searchClient={searchClient}
+        mapTileConfig={mapTileConfig}
       />
 
       <div className="form-row">

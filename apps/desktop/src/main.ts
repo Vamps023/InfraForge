@@ -182,6 +182,7 @@ app.whenReady().then(async () => {
   const tileOrigin = new URL(tileProbeUrl)
   const tileRequestFilter = { urls: [`${tileOrigin.protocol}//${tileOrigin.host}/*`] }
   const publishTileDiagnostic = (payload: Record<string, unknown>) => {
+    console.info('[InfraForge map tile]', JSON.stringify(payload))
     for (const browserWindow of BrowserWindow.getAllWindows()) {
       if (!browserWindow.isDestroyed()) browserWindow.webContents.send('map-tile:diagnostic', payload)
     }
@@ -197,14 +198,14 @@ app.whenReady().then(async () => {
     },
   )
   session.defaultSession.webRequest.onBeforeRequest(tileRequestFilter, (details, callback) => {
-    publishTileDiagnostic({ state: 'started', url: details.url })
+    publishTileDiagnostic({ state: 'started', url: details.url, method: details.method, resourceType: details.resourceType })
     callback({})
   })
   session.defaultSession.webRequest.onCompleted(tileRequestFilter, (details) => {
-    publishTileDiagnostic({ state: 'completed', url: details.url, statusCode: details.statusCode })
+    publishTileDiagnostic({ state: 'completed', url: details.url, statusCode: details.statusCode, resourceType: details.resourceType })
   })
   session.defaultSession.webRequest.onErrorOccurred(tileRequestFilter, (details) => {
-    publishTileDiagnostic({ state: 'failed', url: details.url, error: details.error })
+    publishTileDiagnostic({ state: 'failed', url: details.url, error: details.error, resourceType: details.resourceType })
   })
 
   ipcMain.handle('app:get-runtime-config', () => runtimeConfig)

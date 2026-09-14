@@ -73,6 +73,8 @@ declare global {
         url: string
         statusCode?: number
         error?: string
+        method?: string
+        resourceType?: string
       }>) => void) => () => void
     }>
   }

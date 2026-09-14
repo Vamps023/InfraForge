@@ -2,12 +2,13 @@ import { commandRegistry, type CommandDefinition } from '../../editor/commands/c
 import { useShellUiStore } from '../../editor/shell/shellUiStore'
 import { useSelectionStore } from '../../editor/selection/selectionStore'
 import type { EngineClient } from '../../lib/engineSession'
-import { listRoads } from './roadApi'
+import { deleteRoad, fitRoadSource, undoRoadEdit, redoRoadEdit } from './roadApi'
 import { useRoadStore } from './roadStore'
 
 // Road commands registered through the Issue #5 command registry. Each
-// command issues real engine commands or opens real dialogs; no fake
-// handlers, no duplicated execution in App.tsx.
+// command issues real engine commands through the canonical roadApi; no
+// direct protocol construction, no duplicated execution, no redundant
+// listRoads refresh after commands that already update the store (Blocker 18).
 
 export interface RoadCommandDeps {
   getEngineClient: () => EngineClient | null
@@ -48,9 +49,9 @@ export function registerRoadCommands(deps: RoadCommandDeps): void {
         const id = useSelectionStore.getState().primaryId
         if (!id || !id.startsWith('road:')) return
         const roadId = id.slice('road:'.length)
-        const { deleteRoad } = await import('./roadApi')
+        // Blocker 18: use canonical roadApi; the command result/event
+        // already updates the store, so no redundant listRoads call.
         await deleteRoad(client, roadId)
-        await listRoads(client)
       },
     },
     {
@@ -84,13 +85,9 @@ export function registerRoadCommands(deps: RoadCommandDeps): void {
         if (!client) return
         const id = useSelectionStore.getState().primaryId
         const roadId = id && id.startsWith('road:') ? id.slice('road:'.length) : ''
-        const { UndoRoadCommandSchema } = await import('@infraforge/protocol')
-        const { create } = await import('@bufbuild/protobuf')
-        await client.sendCommand({
-          case: 'undoRoad',
-          value: create(UndoRoadCommandSchema, { roadId }),
-        })
-        await listRoads(client)
+        // Blocker 18: use canonical roadApi for undo. The result/event
+        // updates the store; no redundant listRoads call.
+        await undoRoadEdit(client, roadId)
       },
     },
     {
@@ -107,13 +104,8 @@ export function registerRoadCommands(deps: RoadCommandDeps): void {
         if (!client) return
         const id = useSelectionStore.getState().primaryId
         const roadId = id && id.startsWith('road:') ? id.slice('road:'.length) : ''
-        const { RedoRoadCommandSchema } = await import('@infraforge/protocol')
-        const { create } = await import('@bufbuild/protobuf')
-        await client.sendCommand({
-          case: 'redoRoad',
-          value: create(RedoRoadCommandSchema, { roadId }),
-        })
-        await listRoads(client)
+        // Blocker 18: use canonical roadApi for redo.
+        await redoRoadEdit(client, roadId)
       },
     },
     {
@@ -135,9 +127,8 @@ export function registerRoadCommands(deps: RoadCommandDeps): void {
         const id = useSelectionStore.getState().primaryId
         if (!id || !id.startsWith('road:')) return
         const roadId = id.slice('road:'.length)
-        const { fitRoadSource } = await import('./roadApi')
+        // Blocker 18: use canonical roadApi; no redundant listRoads call.
         await fitRoadSource(client, roadId, 1.0)
-        await listRoads(client)
       },
     },
   ]

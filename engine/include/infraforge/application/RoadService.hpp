@@ -229,15 +229,37 @@ private:
     // Rebuilds a Road from a record and returns it (or throws on failure).
     [[nodiscard]] domain::road::Road rebuildRoad(const domain::road::RoadRecord& record) const;
 
-    // Fits a road from source vertices and returns the road record.
-    [[nodiscard]] domain::road::RoadRecord fitRoad(
-        const std::string& name,
+    // Finds a road record by its uuid-text id. Returns nullopt if not found.
+    // This is the single lookup path used by all mutating commands so the
+    // service does not reload every road for every command (Blocker 17).
+    [[nodiscard]] std::optional<domain::road::RoadRecord> findRoad(
+        const std::string& roadId) const;
+
+    // Fits a canonical ReferenceAlignment from conditioned source vertices.
+    // This is the pure geometry step, separate from entity creation: it
+    // returns the fitted alignment without minting a RoadId or building a
+    // Road record (Blocker 1: only createRoad mints a new RoadId).
+    [[nodiscard]] domain::road::AlignmentFitResult fitAlignmentOnly(
         const std::vector<domain::road::ConditionedVertex>& polyline,
         const std::vector<domain::road::ProtectedAnchor>& anchors,
         double positionTolerance,
         std::optional<double> maxCurvature) const;
 
+    // Builds a new road record from a fitted alignment, minting a new RoadId.
+    // Used only by createRoad. The source vertices and provenance are set
+    // for the new entity.
+    [[nodiscard]] domain::road::RoadRecord buildNewRoadRecord(
+        const std::string& name,
+        const domain::road::ReferenceAlignment& alignment,
+        const std::vector<domain::road::ConditionedVertex>& polyline,
+        const std::vector<domain::road::ProtectedAnchor>& anchors,
+        const std::vector<std::optional<double>>& sourceElevations,
+        domain::road::SourceProvider provider) const;
+
     // Refits an existing road from its source vertices with new parameters.
+    // Preserves the existing RoadId, display name, elevation/superelevation
+    // profiles, provenance, source tags, and protected anchors. Only the
+    // canonical alignment is re-derived (Blocker 1 + Blocker 2).
     [[nodiscard]] domain::road::RoadRecord refitRoad(
         const domain::road::RoadRecord& existing,
         double positionTolerance,

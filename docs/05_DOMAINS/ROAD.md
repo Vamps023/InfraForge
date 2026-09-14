@@ -11,8 +11,8 @@ Canonical Road (domain)
   → ReferenceAlignment (Line / CircularArc / Clothoid)
   → ElevationProfile
   → SuperelevationProfile
-  → Derived Tessellation (future, rebuildable)
-  → Render Projection (future, renderer-owned)
+  → Derived Tessellation (implemented, rebuildable)
+  → Render Projection (implemented, renderer consumes deltas)
 ```
 
 Never: `Rendered Mesh → Road Truth`.
@@ -141,10 +141,10 @@ SourcePolyline (source coordinates, e.g. WGS84)
   tags, import timestamp), and protected anchors.
 - Authored roads have an empty `SourcePolyline` and `provider == Authored`.
 - Protected anchors (junction locations, endpoints, user-pinned points) are
-  reference data that future fitting/smoothing must not move.
+  reference data that fitting/smoothing must not move.
 - The `AlignmentFitInput`/`AlignmentFitResult` interface establishes the
-  contract for the future shared fitter. The full OSM/OpenDRIVE importer is
-  out of scope (issues #9/#15).
+  contract for the shared fitter (implemented). The full OSM/OpenDRIVE
+  importer is out of scope (issues #9/#15).
 
 ## Persistence
 
@@ -168,14 +168,33 @@ Given identical canonical road parameters, evaluation is identical. The
 clothoid quadrature uses fixed constants and bounded deterministic subdivision.
 Tests use explicit tolerances.
 
+## Implemented Integration
+
+- **Fitting**: the `AlignmentFitter` converts conditioned source polylines
+  into canonical alignments with line/arc/clothoid segments and real
+  clothoid transitions at curvature boundaries.
+- **World partition**: roads register with `WorldState` for spatial
+  indexing and chunk invalidation. Road edits invalidate only affected
+  chunks, not the full world.
+- **Renderer**: the viewport `RoadPass` consumes derived tessellation
+  through a dedicated road scene channel (separate from terrain scenes).
+  Road scene payloads are forwarded through the desktop IPC as a typed
+  `roadScene` control message.
+- **Persistence**: roads persist through SQLite migration 7 with full
+  provenance, profiles, and protected anchors.
+- **Undo/redo**: global road undo/redo with proper event semantics
+  (Created/Removed/GeometryChanged) and affected-chunk invalidation.
+- **Source-deviation validation**: deterministic per-segment nearest-point
+  evaluation with explicit tolerance enforcement.
+
 ## Future Integration
 
 - **Lanes/junctions** (Issue #8): will attach to the reference alignment via
   cross-sections and topology nodes.
 - **OSM/OpenDRIVE import** (Issue #9/#15): will use the fitter interface to
   convert conditioned source polylines into canonical alignments.
-- **World partition**: roads will register with `WorldState` for spatial
-  indexing and chunk invalidation.
-- **Renderer**: will consume derived tessellation, not canonical geometry.
 - **Terrain integration**: terrain may provide elevation snapping, but the
   road domain functions independently.
+- **Incremental chunk-aware tessellation**: per-chunk road mesh derivation
+  with seam-safe boundary sampling is a future enhancement for large-world
+  operation.

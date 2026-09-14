@@ -1591,6 +1591,11 @@ void CommandProcessor::handleCreateRoad(const std::string& connectionId, const P
         for (int i = 0; i < count; ++i) {
             input.sourceElevations.push_back(command.source_elevations(i));
         }
+    } else if (command.source_elevations_size() != 0) {
+        // Blocker 16: reject non-empty elevation arrays whose length does
+        // not equal the control/source point count.
+        throw CommandFailure{CommandFailureCode::InvalidArgument,
+            "source_elevations length must equal source point count when non-empty"};
     } else {
         input.sourceElevations.resize(count, std::nullopt);
     }
@@ -1695,6 +1700,12 @@ void CommandProcessor::handleFitRoadSource(const std::string& connectionId, cons
 
 void CommandProcessor::handleUpdateRoadElevation(const std::string& connectionId, const ProtocolFrame& frame) {
     const auto& command = frame.command().update_road_elevation();
+    // Blocker 15: validate repeated-field sizes BEFORE indexing to avoid
+    // out-of-range access on malformed protocol commands.
+    if (command.stations_size() != command.elevations_size()) {
+        throw CommandFailure{CommandFailureCode::InvalidArgument,
+            "stations and elevations must have the same length"};
+    }
     UpdateElevationInput input;
     input.roadId = command.road_id();
     for (int i = 0; i < command.stations_size(); ++i) {
@@ -1711,6 +1722,12 @@ void CommandProcessor::handleUpdateRoadElevation(const std::string& connectionId
 
 void CommandProcessor::handleUpdateRoadSuperelevation(const std::string& connectionId, const ProtocolFrame& frame) {
     const auto& command = frame.command().update_road_superelevation();
+    // Blocker 15: validate repeated-field sizes BEFORE indexing to avoid
+    // out-of-range access on malformed protocol commands.
+    if (command.stations_size() != command.superelevations_size()) {
+        throw CommandFailure{CommandFailureCode::InvalidArgument,
+            "stations and superelevations must have the same length"};
+    }
     UpdateSuperelevationInput input;
     input.roadId = command.road_id();
     for (int i = 0; i < command.stations_size(); ++i) {
@@ -1734,7 +1751,19 @@ void CommandProcessor::handleUndoRoad(const std::string& connectionId, const Pro
 
     ProtocolFrame response;
     response.set_request_id(frame.request_id());
-    response.mutable_result()->mutable_undo_road_result();
+    // Blocker 14: return a meaningful optional summary when the road still
+    // exists after undo, rather than always returning an empty result.
+    auto* result = response.mutable_result()->mutable_undo_road_result();
+    std::string effectiveId = command.road_id();
+    // If the roadId was empty (global undo), the service resolved it
+    // internally; we cannot easily recover the resolved id here, so we
+    // leave the summary unset for the global-undo case.
+    if (!effectiveId.empty()) {
+        auto summary = roadService_->getRoadSummary(effectiveId);
+        if (summary.has_value()) {
+            fillRoadSummary(result->mutable_road(), *summary);
+        }
+    }
     sink_.sendToConnection(connectionId, response);
 }
 
@@ -1747,7 +1776,16 @@ void CommandProcessor::handleRedoRoad(const std::string& connectionId, const Pro
 
     ProtocolFrame response;
     response.set_request_id(frame.request_id());
-    response.mutable_result()->mutable_redo_road_result();
+    // Blocker 14: return a meaningful optional summary when the road still
+    // exists after redo.
+    auto* result = response.mutable_result()->mutable_redo_road_result();
+    std::string effectiveId = command.road_id();
+    if (!effectiveId.empty()) {
+        auto summary = roadService_->getRoadSummary(effectiveId);
+        if (summary.has_value()) {
+            fillRoadSummary(result->mutable_road(), *summary);
+        }
+    }
     sink_.sendToConnection(connectionId, response);
 }
 

@@ -155,6 +155,7 @@ add_executable(infraforge-engine-tests
     tests/RoadPersistenceTests.cpp
     tests/RoadServiceTests.cpp
     tests/RoadTessellationTests.cpp
+    tests/RoadAcceptanceTests.cpp
     tests/SpatialBoundsTests.cpp
     tests/SpatialIndexTests.cpp
     tests/SqliteProjectStoreTests.cpp

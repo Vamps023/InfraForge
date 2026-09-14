@@ -132,6 +132,38 @@ export class ViewportSupervisor {
     }
   }
 
+  // Blocker 10: Forwards the engine-derived road scene projection to the
+  // viewport as a separate narrow scene channel. Road scenes are NOT
+  // terrain scenes and must not be rejected by the terrain-only validation
+  // in the terrain scene path. The road scene is forwarded as a dedicated
+  // control message so the native viewport's RoadPass can update
+  // incrementally without a full terrain scene rebuild.
+  sendRoadScene(scene: Record<string, unknown>): void {
+    // Validate the road scene payload is a bounded plain object with roads.
+    if (typeof scene !== 'object' || scene === null || Array.isArray(scene)) {
+      return
+    }
+    const record = scene as Record<string, unknown>
+    if (!Array.isArray(record.meshes)) {
+      return
+    }
+    // Forward as a typed road scene control message. The native viewport
+    // parses the "roads" field and the "roadRevision" field.
+    const roadControl: Record<string, unknown> = {
+      type: 'roadScene',
+      roads: record.meshes,
+    }
+    // Preserve revision as a string for lossless uint64 transport.
+    if (typeof record.revision === 'bigint') {
+      roadControl.roadRevision = (record.revision as bigint).toString()
+    } else if (typeof record.revision === 'number') {
+      roadControl.roadRevision = String(record.revision)
+    } else if (typeof record.revision === 'string') {
+      roadControl.roadRevision = record.revision
+    }
+    this.sendControl(roadControl)
+  }
+
   sendEmptyScene(): void {
     this.sendControl(emptyViewportScene() as unknown as Record<string, unknown>)
   }

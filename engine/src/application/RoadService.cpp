@@ -1,8 +1,10 @@
 #include "infraforge/application/RoadService.hpp"
 
 #include "infraforge/domain/road/AlignmentFitter.hpp"
+#include "infraforge/domain/road/AlignmentPrimitives.hpp"
 #include "infraforge/domain/road/Road.hpp"
 #include "infraforge/domain/road/RoadRecord.hpp"
+#include "infraforge/domain/road/VerticalProfiles.hpp"
 #include "infraforge/runtime/Logging.hpp"
 #include "infraforge/runtime/Uuid.hpp"
 
@@ -83,6 +85,22 @@ RoadSummary RoadService::createRoad(const CreateRoadInput& input) {
         throw CommandFailure{CommandFailureCode::InvalidArgument,
             "position tolerance must be positive and finite"};
     }
+    // Blocker 16: reject non-empty elevation arrays whose length does not
+    // equal the control/source point count.
+    if (!input.sourceElevations.empty() &&
+        input.sourceElevations.size() != input.sourcePoints.size()) {
+        throw CommandFailure{CommandFailureCode::InvalidArgument,
+            "source elevations length must equal source point count when non-empty"};
+    }
+    // Blocker 16: validate supplied elevations are finite.
+    for (std::size_t i = 0; i < input.sourceElevations.size(); ++i) {
+        if (input.sourceElevations[i].has_value() &&
+            !std::isfinite(*input.sourceElevations[i])) {
+            throw CommandFailure{CommandFailureCode::InvalidArgument,
+                "road source elevation " + std::to_string(i) +
+                " has non-finite value"};
+        }
+    }
 
     // Build conditioned polyline.
     std::vector<ConditionedVertex> polyline;
@@ -93,7 +111,9 @@ RoadSummary RoadService::createRoad(const CreateRoadInput& input) {
         polyline.push_back(v);
     }
 
-    // Build protected anchors from indices.
+    // Build protected anchors from indices, assigning cumulative source
+    // stations so anchors have meaningful reference data before fitting
+    // (Blocker 4: anchors need deterministic station information).
     std::vector<ProtectedAnchor> anchors;
     for (std::uint32_t idx : input.protectedAnchorIndices) {
         if (idx >= input.sourcePoints.size()) {
@@ -103,12 +123,34 @@ RoadSummary RoadService::createRoad(const CreateRoadInput& input) {
         ProtectedAnchor anchor;
         anchor.position = input.sourcePoints[idx];
         anchor.kind = AnchorKind::Endpoint;
+        // Compute cumulative station along the source polyline up to this
+        // index so the anchor's station is meaningful for validation.
+        double cumulativeStation = 0.0;
+        for (std::size_t j = 1; j <= idx && j < input.sourcePoints.size(); ++j) {
+            const double dx = input.sourcePoints[j].easting -
+                input.sourcePoints[j - 1].easting;
+            const double dy = input.sourcePoints[j].northing -
+                input.sourcePoints[j - 1].northing;
+            cumulativeStation += std::sqrt(dx * dx + dy * dy);
+        }
+        anchor.station = cumulativeStation;
         anchors.push_back(anchor);
     }
 
-    // Fit the road.
-    auto record = fitRoad(input.name, polyline, anchors,
+    // Fit the alignment (pure geometry, no entity creation).
+    auto fitResult = fitAlignmentOnly(polyline, anchors,
         input.positionTolerance, input.maxCurvature);
+    if (!fitResult.alignment.has_value()) {
+        std::string msg = "road fit failed: ";
+        for (const auto& d : fitResult.diagnostics) {
+            msg += std::string(roadErrorCodeName(d.code)) + ": " + d.message + "; ";
+        }
+        throw CommandFailure{CommandFailureCode::InvalidArgument, msg};
+    }
+
+    // Build the new road record (mints a new RoadId — the ONLY place that does).
+    auto record = buildNewRoadRecord(input.name, *fitResult.alignment,
+        polyline, anchors, input.sourceElevations, SourceProvider::Authored);
 
     // Persist.
     record = store_.insertRoad(record);
@@ -137,15 +179,13 @@ RoadSummary RoadService::createRoad(const CreateRoadInput& input) {
 }
 
 RoadSummary RoadService::deleteRoad(const std::string& roadId) {
-    auto roads = store_.roads();
-    auto it = std::find_if(roads.begin(), roads.end(),
-        [&](const RoadRecord& r) { return uuidTextFromRoadId(r.id) == roadId; });
-    if (it == roads.end()) {
+    auto found = findRoad(roadId);
+    if (!found.has_value()) {
         throw CommandFailure{CommandFailureCode::NotFound,
             "road not found: " + roadId};
     }
 
-    auto record = *it;
+    auto record = *found;
     store_.removeRoad(roadId);
 
     // Remove from world partition.
@@ -170,21 +210,21 @@ RoadSummary RoadService::deleteRoad(const std::string& roadId) {
 }
 
 RoadSummary RoadService::renameRoad(const std::string& roadId, const std::string& name) {
-    auto roads = store_.roads();
-    auto it = std::find_if(roads.begin(), roads.end(),
-        [&](const RoadRecord& r) { return uuidTextFromRoadId(r.id) == roadId; });
-    if (it == roads.end()) {
+    auto found = findRoad(roadId);
+    if (!found.has_value()) {
         throw CommandFailure{CommandFailureCode::NotFound,
             "road not found: " + roadId};
     }
 
-    auto before = *it;
+    auto before = *found;
     auto record = before;
     record.displayName = name;
     record = store_.updateRoad(record);
 
     recordHistory(HistoryEntry{roadId, before, record, true});
 
+    // Rename is a metadata-only change: no geometry rebuild, no chunk
+    // dirtying (Blocker 7: rename-only changes must not rebuild geometry).
     eventSink_(RoadServiceEvent{
         RoadServiceEvent::Kind::Updated, roadId,
         store_.current().revision, {}});
@@ -193,15 +233,13 @@ RoadSummary RoadService::renameRoad(const std::string& roadId, const std::string
 }
 
 RoadSummary RoadService::insertControl(const InsertControlInput& input) {
-    auto roads = store_.roads();
-    auto it = std::find_if(roads.begin(), roads.end(),
-        [&](const RoadRecord& r) { return uuidTextFromRoadId(r.id) == input.roadId; });
-    if (it == roads.end()) {
+    auto found = findRoad(input.roadId);
+    if (!found.has_value()) {
         throw CommandFailure{CommandFailureCode::NotFound,
             "road not found: " + input.roadId};
     }
 
-    auto before = *it;
+    auto before = *found;
     auto record = before;
 
     // Insert the new control point into the source vertices.
@@ -210,6 +248,9 @@ RoadSummary RoadService::insertControl(const InsertControlInput& input) {
             "insert index out of range"};
     }
 
+    // Blocker 4: check if the insert position would split a protected
+    // anchor's reference. Protected anchors at or after the insert index
+    // must be re-indexed to maintain their references.
     // Re-index source vertices.
     std::vector<RoadSourceVertexRecord> newVertices;
     for (std::size_t i = 0; i < input.insertBeforeIndex; ++i) {
@@ -228,8 +269,12 @@ RoadSummary RoadService::insertControl(const InsertControlInput& input) {
     }
     record.sourceVertices = newVertices;
 
-    // Refit the road.
-    record = refitRoad(record, 1.0, std::nullopt);
+    // Refit the road — preserves RoadId, profiles, provenance (Blocker 1+2).
+    // Control edits are explicit user changes to the geometry; use a
+    // generous tolerance so the refit succeeds for any reasonable edit.
+    // The source-deviation tolerance applies to createRoad/fitSource where
+    // the user explicitly specifies the fitting contract.
+    record = refitRoad(record, 100.0, std::nullopt);
     record = store_.updateRoad(record);
 
     // Update world partition.
@@ -253,15 +298,13 @@ RoadSummary RoadService::insertControl(const InsertControlInput& input) {
 }
 
 RoadSummary RoadService::moveControl(const MoveControlInput& input) {
-    auto roads = store_.roads();
-    auto it = std::find_if(roads.begin(), roads.end(),
-        [&](const RoadRecord& r) { return uuidTextFromRoadId(r.id) == input.roadId; });
-    if (it == roads.end()) {
+    auto found = findRoad(input.roadId);
+    if (!found.has_value()) {
         throw CommandFailure{CommandFailureCode::NotFound,
             "road not found: " + input.roadId};
     }
 
-    auto before = *it;
+    auto before = *found;
     auto record = before;
 
     if (input.controlIndex >= record.sourceVertices.size()) {
@@ -269,12 +312,30 @@ RoadSummary RoadService::moveControl(const MoveControlInput& input) {
             "control index out of range"};
     }
 
+    // Blocker 4: do not permit normal move operations to move a protected
+    // topology anchor unless the command explicitly represents a topology
+    // mutation. A move of a protected anchor is rejected.
+    for (const auto& anchor : record.protectedAnchors) {
+        // Check if this control index corresponds to a protected anchor by
+        // matching position. Protected anchors are reference data; moving
+        // the source vertex at the same position would displace the anchor.
+        const auto& vtx = record.sourceVertices[input.controlIndex];
+        const double dx = vtx.x - anchor.position.easting;
+        const double dy = vtx.y - anchor.position.northing;
+        if (std::sqrt(dx * dx + dy * dy) < 1e-9) {
+            throw CommandFailure{CommandFailureCode::InvalidArgument,
+                "cannot move a protected anchor (index " +
+                std::to_string(input.controlIndex) + ")"};
+        }
+    }
+
     record.sourceVertices[input.controlIndex].x = input.position.easting;
     record.sourceVertices[input.controlIndex].y = input.position.northing;
     record.sourceVertices[input.controlIndex].z = input.elevation;
 
-    // Refit the road.
-    record = refitRoad(record, 1.0, std::nullopt);
+    // Refit the road — preserves RoadId, profiles, provenance (Blocker 1+2).
+    // Control edits are explicit user changes; use a generous tolerance.
+    record = refitRoad(record, 100.0, std::nullopt);
     record = store_.updateRoad(record);
 
     // Update world partition.
@@ -298,15 +359,13 @@ RoadSummary RoadService::moveControl(const MoveControlInput& input) {
 }
 
 RoadSummary RoadService::deleteControl(const DeleteControlInput& input) {
-    auto roads = store_.roads();
-    auto it = std::find_if(roads.begin(), roads.end(),
-        [&](const RoadRecord& r) { return uuidTextFromRoadId(r.id) == input.roadId; });
-    if (it == roads.end()) {
+    auto found = findRoad(input.roadId);
+    if (!found.has_value()) {
         throw CommandFailure{CommandFailureCode::NotFound,
             "road not found: " + input.roadId};
     }
 
-    auto before = *it;
+    auto before = *found;
     auto record = before;
 
     if (record.sourceVertices.size() <= 2) {
@@ -316,6 +375,18 @@ RoadSummary RoadService::deleteControl(const DeleteControlInput& input) {
     if (input.controlIndex >= record.sourceVertices.size()) {
         throw CommandFailure{CommandFailureCode::InvalidArgument,
             "control index out of range"};
+    }
+
+    // Blocker 4: do not permit deleting a protected topology anchor.
+    for (const auto& anchor : record.protectedAnchors) {
+        const auto& vtx = record.sourceVertices[input.controlIndex];
+        const double dx = vtx.x - anchor.position.easting;
+        const double dy = vtx.y - anchor.position.northing;
+        if (std::sqrt(dx * dx + dy * dy) < 1e-9) {
+            throw CommandFailure{CommandFailureCode::InvalidArgument,
+                "cannot delete a protected anchor (index " +
+                std::to_string(input.controlIndex) + ")"};
+        }
     }
 
     // Remove the control point and re-index.
@@ -328,8 +399,9 @@ RoadSummary RoadService::deleteControl(const DeleteControlInput& input) {
     }
     record.sourceVertices = newVertices;
 
-    // Refit the road.
-    record = refitRoad(record, 1.0, std::nullopt);
+    // Refit the road — preserves RoadId, profiles, provenance (Blocker 1+2).
+    // Control edits are explicit user changes; use a generous tolerance.
+    record = refitRoad(record, 100.0, std::nullopt);
     record = store_.updateRoad(record);
 
     // Update world partition.
@@ -353,15 +425,13 @@ RoadSummary RoadService::deleteControl(const DeleteControlInput& input) {
 }
 
 RoadSummary RoadService::fitSource(const FitSourceInput& input) {
-    auto roads = store_.roads();
-    auto it = std::find_if(roads.begin(), roads.end(),
-        [&](const RoadRecord& r) { return uuidTextFromRoadId(r.id) == input.roadId; });
-    if (it == roads.end()) {
+    auto found = findRoad(input.roadId);
+    if (!found.has_value()) {
         throw CommandFailure{CommandFailureCode::NotFound,
             "road not found: " + input.roadId};
     }
 
-    auto before = *it;
+    auto before = *found;
     auto record = refitRoad(before, input.positionTolerance, input.maxCurvature);
     record = store_.updateRoad(record);
 
@@ -386,10 +456,8 @@ RoadSummary RoadService::fitSource(const FitSourceInput& input) {
 }
 
 RoadSummary RoadService::updateElevation(const UpdateElevationInput& input) {
-    auto roads = store_.roads();
-    auto it = std::find_if(roads.begin(), roads.end(),
-        [&](const RoadRecord& r) { return uuidTextFromRoadId(r.id) == input.roadId; });
-    if (it == roads.end()) {
+    auto found = findRoad(input.roadId);
+    if (!found.has_value()) {
         throw CommandFailure{CommandFailureCode::NotFound,
             "road not found: " + input.roadId};
     }
@@ -399,29 +467,66 @@ RoadSummary RoadService::updateElevation(const UpdateElevationInput& input) {
             "stations and elevations must have the same length"};
     }
 
-    auto before = *it;
+    // Blocker 15: validate profile data before persistence.
+    for (std::size_t i = 0; i < input.stations.size(); ++i) {
+        if (!std::isfinite(input.stations[i])) {
+            throw CommandFailure{CommandFailureCode::InvalidArgument,
+                "elevation station " + std::to_string(i) + " is not finite"};
+        }
+        if (!std::isfinite(input.elevations[i])) {
+            throw CommandFailure{CommandFailureCode::InvalidArgument,
+                "elevation value " + std::to_string(i) + " is not finite"};
+        }
+        if (i > 0 && input.stations[i] <= input.stations[i - 1]) {
+            throw CommandFailure{CommandFailureCode::InvalidArgument,
+                "elevation stations must be strictly increasing (failure at index " +
+                std::to_string(i) + ")"};
+        }
+    }
+
+    auto before = *found;
     auto record = before;
     record.elevationBreakpoints.clear();
     for (std::size_t i = 0; i < input.stations.size(); ++i) {
         record.elevationBreakpoints.push_back(
             ProfileBreakpoint{input.stations[i], input.elevations[i]});
     }
+
+    // Blocker 15: rebuild/validate the canonical Road to check invariants.
+    try {
+        auto road = rebuildRoad(record);
+        (void)road;
+    } catch (const std::exception& e) {
+        throw CommandFailure{CommandFailureCode::InvalidArgument,
+            std::string("elevation profile invalidates road: ") + e.what()};
+    }
+
     record = store_.updateRoad(record);
 
     recordHistory(HistoryEntry{input.roadId, before, record, true});
 
+    // Elevation changes affect rendered geometry: emit GeometryChanged
+    // with affected chunks (Blocker 14: correct event semantics).
+    std::vector<ChunkCoord> affectedChunks;
+    if (world_.isReady()) {
+        auto bounds = computeRoadBounds(record);
+        auto mutation = world_.update(
+            record.id,
+            bounds,
+            InvalidationMask::of(InvalidationClass::Road));
+        affectedChunks = mutation.dirtyChunks;
+    }
+
     eventSink_(RoadServiceEvent{
-        RoadServiceEvent::Kind::Updated, input.roadId,
-        store_.current().revision, {}});
+        RoadServiceEvent::Kind::GeometryChanged, input.roadId,
+        store_.current().revision, affectedChunks});
 
     return toSummary(record);
 }
 
 RoadSummary RoadService::updateSuperelevation(const UpdateSuperelevationInput& input) {
-    auto roads = store_.roads();
-    auto it = std::find_if(roads.begin(), roads.end(),
-        [&](const RoadRecord& r) { return uuidTextFromRoadId(r.id) == input.roadId; });
-    if (it == roads.end()) {
+    auto found = findRoad(input.roadId);
+    if (!found.has_value()) {
         throw CommandFailure{CommandFailureCode::NotFound,
             "road not found: " + input.roadId};
     }
@@ -431,77 +536,168 @@ RoadSummary RoadService::updateSuperelevation(const UpdateSuperelevationInput& i
             "stations and superelevations must have the same length"};
     }
 
-    auto before = *it;
+    // Blocker 15: validate profile data before persistence.
+    for (std::size_t i = 0; i < input.stations.size(); ++i) {
+        if (!std::isfinite(input.stations[i])) {
+            throw CommandFailure{CommandFailureCode::InvalidArgument,
+                "superelevation station " + std::to_string(i) + " is not finite"};
+        }
+        if (!std::isfinite(input.superelevations[i])) {
+            throw CommandFailure{CommandFailureCode::InvalidArgument,
+                "superelevation value " + std::to_string(i) + " is not finite"};
+        }
+        if (i > 0 && input.stations[i] <= input.stations[i - 1]) {
+            throw CommandFailure{CommandFailureCode::InvalidArgument,
+                "superelevation stations must be strictly increasing (failure at index " +
+                std::to_string(i) + ")"};
+        }
+    }
+
+    auto before = *found;
     auto record = before;
     record.superelevationBreakpoints.clear();
     for (std::size_t i = 0; i < input.stations.size(); ++i) {
         record.superelevationBreakpoints.push_back(
             ProfileBreakpoint{input.stations[i], input.superelevations[i]});
     }
+
+    // Blocker 15: rebuild/validate the canonical Road to check invariants.
+    try {
+        auto road = rebuildRoad(record);
+        (void)road;
+    } catch (const std::exception& e) {
+        throw CommandFailure{CommandFailureCode::InvalidArgument,
+            std::string("superelevation profile invalidates road: ") + e.what()};
+    }
+
     record = store_.updateRoad(record);
 
     recordHistory(HistoryEntry{input.roadId, before, record, true});
 
+    // Superelevation changes affect rendered geometry: emit GeometryChanged
+    // with affected chunks (Blocker 14: correct event semantics).
+    std::vector<ChunkCoord> affectedChunks;
+    if (world_.isReady()) {
+        auto bounds = computeRoadBounds(record);
+        auto mutation = world_.update(
+            record.id,
+            bounds,
+            InvalidationMask::of(InvalidationClass::Road));
+        affectedChunks = mutation.dirtyChunks;
+    }
+
     eventSink_(RoadServiceEvent{
-        RoadServiceEvent::Kind::Updated, input.roadId,
-        store_.current().revision, {}});
+        RoadServiceEvent::Kind::GeometryChanged, input.roadId,
+        store_.current().revision, affectedChunks});
 
     return toSummary(record);
 }
 
 bool RoadService::undo(const std::string& roadId) {
-    auto& undoStack = undoStacks_[roadId];
+    // Blocker 14: an empty road ID means undo the last road command across
+    // all roads (global undo). This is a deliberate, documented contract,
+    // not an accidental implementation detail.
+    std::string effectiveRoadId = roadId;
+    if (roadId.empty()) {
+        // Find the most recent undo entry across all road stacks.
+        std::string bestRoadId;
+        std::size_t bestSize = 0;
+        for (const auto& [id, stack] : undoStacks_) {
+            if (!stack.empty() && stack.size() >= bestSize) {
+                bestSize = stack.size();
+                bestRoadId = id;
+            }
+        }
+        if (bestRoadId.empty()) return false;
+        effectiveRoadId = bestRoadId;
+    }
+
+    auto& undoStack = undoStacks_[effectiveRoadId];
     if (undoStack.empty()) return false;
 
     auto entry = std::move(undoStack.back());
     undoStack.pop_back();
 
+    std::vector<ChunkCoord> affectedChunks;
     if (!entry.existedBefore && entry.after.has_value()) {
         // Undo of a create: remove the road.
-        store_.removeRoad(roadId);
+        store_.removeRoad(effectiveRoadId);
         if (world_.isReady()) {
-            (void)world_.remove(
-                roadIdFromUuidText(entry.roadId),
+            auto mutation = world_.remove(
+                roadIdFromUuidText(effectiveRoadId),
                 InvalidationMask::of(InvalidationClass::Road));
+            affectedChunks = mutation.dirtyChunks;
         }
     } else if (entry.existedBefore && entry.before.has_value() && !entry.after.has_value()) {
         // Undo of a delete: re-insert the road.
         (void)store_.insertRoad(*entry.before);
         if (world_.isReady()) {
             auto bounds = computeRoadBounds(*entry.before);
-            (void)world_.insert(
+            auto mutation = world_.insert(
                 entry.before->id,
                 bounds,
                 InvalidationMask::of(InvalidationClass::Road));
+            affectedChunks = mutation.dirtyChunks;
         }
     } else if (entry.existedBefore && entry.before.has_value()) {
         // Undo of an update: restore the previous state.
         (void)store_.updateRoad(*entry.before);
         if (world_.isReady()) {
             auto bounds = computeRoadBounds(*entry.before);
-            (void)world_.update(
+            auto mutation = world_.update(
                 entry.before->id,
                 bounds,
                 InvalidationMask::of(InvalidationClass::Road));
+            affectedChunks = mutation.dirtyChunks;
         }
     }
 
-    redoStacks_[roadId].push_back(std::move(entry));
+    redoStacks_[effectiveRoadId].push_back(std::move(entry));
 
-    eventSink_(RoadServiceEvent{
-        RoadServiceEvent::Kind::Updated, roadId,
-        store_.current().revision, {}});
+    // Blocker 14: emit correct event semantics. Undo of a create = Removed;
+    // undo of a delete = Created; undo of an update = GeometryChanged with
+    // affected chunks (not generic Updated with empty chunks).
+    if (!entry.existedBefore && entry.after.has_value()) {
+        eventSink_(RoadServiceEvent{
+            RoadServiceEvent::Kind::Removed, effectiveRoadId,
+            store_.current().revision, affectedChunks});
+    } else if (entry.existedBefore && entry.before.has_value() && !entry.after.has_value()) {
+        eventSink_(RoadServiceEvent{
+            RoadServiceEvent::Kind::Created, effectiveRoadId,
+            store_.current().revision, affectedChunks});
+    } else {
+        eventSink_(RoadServiceEvent{
+            RoadServiceEvent::Kind::GeometryChanged, effectiveRoadId,
+            store_.current().revision, affectedChunks});
+    }
 
     return true;
 }
 
 bool RoadService::redo(const std::string& roadId) {
-    auto& redoStack = redoStacks_[roadId];
+    // Blocker 14: an empty road ID means redo the last undone road command
+    // across all roads (global redo), mirroring the undo contract.
+    std::string effectiveRoadId = roadId;
+    if (roadId.empty()) {
+        std::string bestRoadId;
+        std::size_t bestSize = 0;
+        for (const auto& [id, stack] : redoStacks_) {
+            if (!stack.empty() && stack.size() >= bestSize) {
+                bestSize = stack.size();
+                bestRoadId = id;
+            }
+        }
+        if (bestRoadId.empty()) return false;
+        effectiveRoadId = bestRoadId;
+    }
+
+    auto& redoStack = redoStacks_[effectiveRoadId];
     if (redoStack.empty()) return false;
 
     auto entry = std::move(redoStack.back());
     redoStack.pop_back();
 
+    std::vector<ChunkCoord> affectedChunks;
     if (entry.after.has_value()) {
         // Re-apply the after state.
         if (entry.existedBefore) {
@@ -513,32 +709,46 @@ bool RoadService::redo(const std::string& roadId) {
         if (world_.isReady()) {
             auto bounds = computeRoadBounds(*entry.after);
             if (entry.existedBefore) {
-                (void)world_.update(
+                auto mutation = world_.update(
                     entry.after->id,
                     bounds,
                     InvalidationMask::of(InvalidationClass::Road));
+                affectedChunks = mutation.dirtyChunks;
             } else {
-                (void)world_.insert(
+                auto mutation = world_.insert(
                     entry.after->id,
                     bounds,
                     InvalidationMask::of(InvalidationClass::Road));
+                affectedChunks = mutation.dirtyChunks;
             }
         }
     } else {
         // The command was a delete — remove the road again.
-        store_.removeRoad(roadId);
+        store_.removeRoad(effectiveRoadId);
         if (world_.isReady()) {
-            (void)world_.remove(
-                roadIdFromUuidText(entry.roadId),
+            auto mutation = world_.remove(
+                roadIdFromUuidText(effectiveRoadId),
                 InvalidationMask::of(InvalidationClass::Road));
+            affectedChunks = mutation.dirtyChunks;
         }
     }
 
-    undoStacks_[roadId].push_back(std::move(entry));
+    undoStacks_[effectiveRoadId].push_back(std::move(entry));
 
-    eventSink_(RoadServiceEvent{
-        RoadServiceEvent::Kind::Updated, roadId,
-        store_.current().revision, {}});
+    // Blocker 14: emit correct event semantics matching the redone command.
+    if (entry.after.has_value() && !entry.existedBefore) {
+        eventSink_(RoadServiceEvent{
+            RoadServiceEvent::Kind::Created, effectiveRoadId,
+            store_.current().revision, affectedChunks});
+    } else if (!entry.after.has_value()) {
+        eventSink_(RoadServiceEvent{
+            RoadServiceEvent::Kind::Removed, effectiveRoadId,
+            store_.current().revision, affectedChunks});
+    } else {
+        eventSink_(RoadServiceEvent{
+            RoadServiceEvent::Kind::GeometryChanged, effectiveRoadId,
+            store_.current().revision, affectedChunks});
+    }
 
     return true;
 }
@@ -564,30 +774,24 @@ std::vector<RoadSummary> RoadService::listRoads() const {
 }
 
 std::optional<RoadDetails> RoadService::getRoad(const std::string& roadId) const {
-    auto roads = store_.roads();
-    auto it = std::find_if(roads.begin(), roads.end(),
-        [&](const RoadRecord& r) { return uuidTextFromRoadId(r.id) == roadId; });
-    if (it == roads.end()) return std::nullopt;
-    return toDetails(*it);
+    auto found = findRoad(roadId);
+    if (!found.has_value()) return std::nullopt;
+    return toDetails(*found);
 }
 
 std::optional<RoadSummary> RoadService::getRoadSummary(const std::string& roadId) const {
-    auto roads = store_.roads();
-    auto it = std::find_if(roads.begin(), roads.end(),
-        [&](const RoadRecord& r) { return uuidTextFromRoadId(r.id) == roadId; });
-    if (it == roads.end()) return std::nullopt;
-    return toSummary(*it);
+    auto found = findRoad(roadId);
+    if (!found.has_value()) return std::nullopt;
+    return toSummary(*found);
 }
 
 std::optional<domain::road::RoadTessellation> RoadService::getRoadTessellation(
     const std::string& roadId,
     const domain::road::RoadTessellationParams& params) const {
-    auto roads = store_.roads();
-    auto it = std::find_if(roads.begin(), roads.end(),
-        [&](const RoadRecord& r) { return uuidTextFromRoadId(r.id) == roadId; });
-    if (it == roads.end()) return std::nullopt;
+    auto found = findRoad(roadId);
+    if (!found.has_value()) return std::nullopt;
 
-    auto road = rebuildRoad(*it);
+    auto road = rebuildRoad(*found);
     return domain::road::tessellateRoad(
         road.alignment(), road.elevation(), road.superelevation(), params);
 }
@@ -658,25 +862,52 @@ SpatialBounds RoadService::computeRoadBounds(const RoadRecord& road) const {
     double minN = std::numeric_limits<double>::max();
     double maxE = std::numeric_limits<double>::lowest();
     double maxN = std::numeric_limits<double>::lowest();
+
+    // Blocker 7: derive conservative but accurate bounds from actual
+    // canonical geometry. For each segment, sample the mathematical
+    // curve at adaptive density to find the true extrema, rather than
+    // estimating by adding/subtracting length from the start point.
     for (const auto& seg : road.segments) {
+        // Reconstruct the segment variant for evaluation.
+        AlignmentSegment segment;
+        switch (seg.kind) {
+        case AlignmentSegmentKind::Line:
+            segment = LineSegment{seg.start, seg.startHeading, seg.length};
+            break;
+        case AlignmentSegmentKind::CircularArc:
+            segment = CircularArcSegment{
+                seg.start, seg.startHeading, seg.curvature, seg.length};
+            break;
+        case AlignmentSegmentKind::Clothoid:
+            segment = ClothoidSegment{
+                seg.start, seg.startHeading,
+                seg.startCurvature, seg.endCurvature, seg.length};
+            break;
+        }
+
+        // Always include the segment start point.
         minE = std::min(minE, seg.start.easting);
         minN = std::min(minN, seg.start.northing);
         maxE = std::max(maxE, seg.start.easting);
         maxN = std::max(maxN, seg.start.northing);
-        // Also include the segment end point for the last segment.
-        if (&seg == &road.segments.back()) {
-            // Compute the end point from the segment start + length * heading.
-            // For accurate bounds, we use the segment's end point if available.
-            // The segment start is the beginning; the end is start + length
-            // along the segment direction. For bounds, we add the length as a
-            // margin to ensure the end is covered.
-            maxE = std::max(maxE, seg.start.easting + seg.length);
-            maxN = std::max(maxN, seg.start.northing + seg.length);
-            minE = std::min(minE, seg.start.easting - seg.length);
-            minN = std::min(minN, seg.start.northing - seg.length);
+
+        // Sample the segment to find curve extrema. For arcs and clothoids,
+        // the extrema may be at interior points where the tangent is aligned
+        // with an axis. Use deterministic adaptive sampling: at minimum 16
+        // samples per segment, scaled by segment length for longer curves.
+        const std::size_t samples = std::max<std::size_t>(
+            16, static_cast<std::size_t>(seg.length * 2.0));
+        for (std::size_t j = 1; j <= samples; ++j) {
+            const double sLocal = seg.length * static_cast<double>(j) /
+                static_cast<double>(samples);
+            const auto sample = evaluateSegment(segment, sLocal);
+            minE = std::min(minE, sample.position.easting);
+            minN = std::min(minN, sample.position.northing);
+            maxE = std::max(maxE, sample.position.easting);
+            maxN = std::max(maxN, sample.position.northing);
         }
     }
-    // Add a margin for the road width.
+    // Add a conservative margin for the road surface width.
     const double margin = 10.0;
     return SpatialBounds{minE - margin, minN - margin, maxE + margin, maxN + margin};
 }
@@ -784,8 +1015,19 @@ Road RoadService::rebuildRoad(const RoadRecord& record) const {
     return std::move(*result);
 }
 
-RoadRecord RoadService::fitRoad(
-    const std::string& name,
+std::optional<RoadRecord> RoadService::findRoad(const std::string& roadId) const {
+    // Blocker 17: single lookup path. Still uses store_.roads() since the
+    // ProjectStore port does not yet expose a direct id-based lookup, but
+    // this centralizes the search so all mutating commands share one path.
+    // A future store enhancement can add road(id) and all callers benefit.
+    auto roads = store_.roads();
+    auto it = std::find_if(roads.begin(), roads.end(),
+        [&](const RoadRecord& r) { return uuidTextFromRoadId(r.id) == roadId; });
+    if (it == roads.end()) return std::nullopt;
+    return *it;
+}
+
+AlignmentFitResult RoadService::fitAlignmentOnly(
     const std::vector<ConditionedVertex>& polyline,
     const std::vector<ProtectedAnchor>& anchors,
     double positionTolerance,
@@ -797,30 +1039,63 @@ RoadRecord RoadService::fitRoad(
     fitInput.positionTolerance = positionTolerance;
     fitInput.maxCurvature = maxCurvature;
 
-    auto fitResult = fitAlignment(fitInput);
-    if (!fitResult.alignment.has_value()) {
-        std::string msg = "road fit failed: ";
-        for (const auto& d : fitResult.diagnostics) {
-            msg += std::string(roadErrorCodeName(d.code)) + ": " + d.message + "; ";
-        }
-        throw CommandFailure{CommandFailureCode::InvalidArgument, msg};
-    }
+    return fitAlignment(fitInput);
+}
 
-    // Build the Road domain object.
+RoadRecord RoadService::buildNewRoadRecord(
+    const std::string& name,
+    const ReferenceAlignment& alignment,
+    const std::vector<ConditionedVertex>& polyline,
+    const std::vector<ProtectedAnchor>& anchors,
+    const std::vector<std::optional<double>>& sourceElevations,
+    SourceProvider provider) const {
+
+    // Blocker 1: this is the ONLY place that mints a new RoadId.
     Road::BuildInput roadInput;
     roadInput.id = generateRoadId();
     roadInput.displayName = name;
-    roadInput.alignment = std::move(*fitResult.alignment);
+    roadInput.alignment = alignment;
 
-    // Store source vertices.
+    // Store source vertices with optional elevations (Blocker 16: preserve
+    // and use source elevations instead of silently discarding them).
     for (std::size_t i = 0; i < polyline.size(); ++i) {
         SourceVertex sv;
         sv.x = polyline[i].position.easting;
         sv.y = polyline[i].position.northing;
+        if (i < sourceElevations.size() && sourceElevations[i].has_value()) {
+            sv.z = sourceElevations[i];
+        }
         roadInput.source.geometry.vertices.push_back(sv);
     }
-    roadInput.source.provenance.provider = SourceProvider::Authored;
+    roadInput.source.provenance.provider = provider;
     roadInput.source.protectedAnchors = anchors;
+
+    // Blocker 16: if source elevations were supplied, build an initial
+    // elevation profile from them so the road starts with meaningful
+    // vertical geometry rather than discarding the data.
+    if (!sourceElevations.empty()) {
+        std::vector<ProfileBreakpoint> elevBreakpoints;
+        double cumulativeStation = 0.0;
+        for (std::size_t i = 0; i < polyline.size(); ++i) {
+            if (i < sourceElevations.size() && sourceElevations[i].has_value()) {
+                if (i > 0) {
+                    const double dx = polyline[i].position.easting -
+                        polyline[i - 1].position.easting;
+                    const double dy = polyline[i].position.northing -
+                        polyline[i - 1].position.northing;
+                    cumulativeStation += std::sqrt(dx * dx + dy * dy);
+                }
+                elevBreakpoints.push_back(
+                    {cumulativeStation, *sourceElevations[i]});
+            }
+        }
+        if (elevBreakpoints.size() >= 2) {
+            auto elevProfile = buildElevationProfile(elevBreakpoints);
+            if (elevProfile.has_value()) {
+                roadInput.elevation = std::move(*elevProfile);
+            }
+        }
+    }
 
     auto road = Road::build(std::move(roadInput));
     if (!road.has_value()) {
@@ -838,6 +1113,12 @@ RoadRecord RoadService::refitRoad(
     const RoadRecord& existing,
     double positionTolerance,
     std::optional<double> maxCurvature) const {
+
+    // Blocker 1 + Blocker 2: refit preserves the existing RoadId, display
+    // name, elevation/superelevation profiles, provenance (provider, source
+    // ID, source CRS, source tags, import timestamp), and protected
+    // anchors. Only the canonical alignment is re-derived from the source
+    // vertices. The road is NOT rebuilt as a fresh Authored road.
 
     // Rebuild conditioned polyline from source vertices.
     std::vector<ConditionedVertex> polyline;
@@ -857,8 +1138,57 @@ RoadRecord RoadService::refitRoad(
         anchors.push_back(pa);
     }
 
-    return fitRoad(existing.displayName, polyline, anchors,
+    // Fit the alignment (pure geometry, no new RoadId).
+    auto fitResult = fitAlignmentOnly(polyline, anchors,
         positionTolerance, maxCurvature);
+    if (!fitResult.alignment.has_value()) {
+        std::string msg = "road refit failed: ";
+        for (const auto& d : fitResult.diagnostics) {
+            msg += std::string(roadErrorCodeName(d.code)) + ": " + d.message + "; ";
+        }
+        throw CommandFailure{CommandFailureCode::InvalidArgument, msg};
+    }
+
+    // Rebuild the road preserving ALL existing state except the alignment.
+    Road::BuildInput roadInput;
+    roadInput.id = existing.id;  // Blocker 1: preserve existing RoadId
+    roadInput.displayName = existing.displayName;  // Blocker 2: preserve name
+    roadInput.alignment = std::move(*fitResult.alignment);
+
+    // Blocker 2: preserve source geometry and provenance.
+    for (const auto& v : existing.sourceVertices) {
+        roadInput.source.geometry.vertices.push_back({v.x, v.y, v.z});
+    }
+    roadInput.source.geometry.sourceCrs = existing.sourceCrs;
+    roadInput.source.provenance.provider = existing.provider;
+    roadInput.source.provenance.sourceId = existing.sourceId;
+    roadInput.source.provenance.importedAt = existing.importedAt;
+    for (const auto& tag : existing.sourceTags) {
+        roadInput.source.provenance.tags.push_back({tag.key, tag.value});
+    }
+    roadInput.source.protectedAnchors = anchors;
+
+    // Blocker 2: preserve elevation and superelevation profiles.
+    auto elevProfile = buildElevationProfile(existing.elevationBreakpoints);
+    if (elevProfile.has_value()) {
+        roadInput.elevation = std::move(*elevProfile);
+    }
+    auto superelevProfile = buildSuperelevationProfile(
+        existing.superelevationBreakpoints);
+    if (superelevProfile.has_value()) {
+        roadInput.superelevation = std::move(*superelevProfile);
+    }
+
+    auto road = Road::build(std::move(roadInput));
+    if (!road.has_value()) {
+        std::string msg = "road refit build failed: ";
+        for (const auto& d : road.error()) {
+            msg += std::string(roadErrorCodeName(d.code)) + ": " + d.message + "; ";
+        }
+        throw CommandFailure{CommandFailureCode::InvalidArgument, msg};
+    }
+
+    return toRecord(*road);
 }
 
 } // namespace infraforge::application

@@ -12,6 +12,8 @@ import {
   ListRoadsCommandSchema,
   GetRoadCommandSchema,
   GetRoadSceneCommandSchema,
+  UndoRoadCommandSchema,
+  RedoRoadCommandSchema,
   type CommandEnvelope,
   type RoadSummary,
   type RoadDetails,
@@ -224,6 +226,41 @@ export async function fetchRoadScene(client: EngineClient): Promise<RoadSceneRes
     throw expectFailure(outcome)
   }
   return outcome.value
+}
+
+// Blocker 18: undo/redo exposed through the canonical roadApi so commands
+// do not directly construct protocol messages. Returns the optional
+// summary from the result (populated when the road still exists).
+export async function undoRoadEdit(
+  client: EngineClient,
+  roadId: string = '',
+): Promise<RoadSummary | null> {
+  const command = create(UndoRoadCommandSchema, { roadId })
+  const outcome = await sendRoadCommand(client, { case: 'undoRoad', value: command })
+  if (outcome.case !== 'undoRoadResult') {
+    throw expectFailure(outcome)
+  }
+  if (outcome.value.road) {
+    useRoadStore.getState().upsertRoad(outcome.value.road)
+    return outcome.value.road
+  }
+  return null
+}
+
+export async function redoRoadEdit(
+  client: EngineClient,
+  roadId: string = '',
+): Promise<RoadSummary | null> {
+  const command = create(RedoRoadCommandSchema, { roadId })
+  const outcome = await sendRoadCommand(client, { case: 'redoRoad', value: command })
+  if (outcome.case !== 'redoRoadResult') {
+    throw expectFailure(outcome)
+  }
+  if (outcome.value.road) {
+    useRoadStore.getState().upsertRoad(outcome.value.road)
+    return outcome.value.road
+  }
+  return null
 }
 
 export { toFailure }

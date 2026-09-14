@@ -1,10 +1,14 @@
 import { inspectorSectionRegistry, type InspectorSectionContext } from '../../editor/inspector/inspectorRegistry'
 import { useRoadStore } from './roadStore'
-import { getRoad, fetchRoadScene } from './roadApi'
+import { getRoad } from './roadApi'
 import type { EngineClient } from '../../lib/engineSession'
 
 // Road inspector section: shows real canonical road metadata for the
 // selected road through the Issue #5 inspector section registry.
+// Blocker 21: the manual "Update Road Scene" button has been removed.
+// Road scene updates flow through the event-driven scene publisher
+// (roadEvents.ts -> scenePublisher -> desktop -> viewport) and require
+// no manual user action.
 
 export interface RoadInspectorDeps {
   getEngineClient: () => EngineClient | null
@@ -40,20 +44,6 @@ export function registerRoadInspectorSection(deps: RoadInspectorDeps): void {
 
       return (
         <div className="inspector-section road-inspector">
-          <button
-            className="button secondary"
-            type="button"
-            disabled={!client || !window.infraforgeDesktop?.setViewportScene}
-            onClick={() => {
-              if (!client) return
-              void fetchRoadScene(client).then((scene) => {
-                if (!scene) return
-                window.infraforgeDesktop?.setViewportScene?.(scene as Record<string, unknown>)
-              }).catch(() => undefined)
-            }}
-          >
-            Update Road Scene
-          </button>
           <dl className="inspector-fields">
             <dt>Road ID</dt>
             <dd className="mono">{road.roadId}</dd>

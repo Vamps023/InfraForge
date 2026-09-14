@@ -386,10 +386,15 @@ app.whenReady().then(async () => {
       return
     }
     const record = scene as Record<string, unknown>
-    if (!Array.isArray(record.tiles)) {
-      return
+    // Blocker 10: terrain scenes have a 'tiles' array; road scenes have a
+    // 'meshes' array. Forward each through its dedicated narrow channel
+    // so road scenes are not rejected by terrain-only validation.
+    if (Array.isArray(record.tiles)) {
+      viewportSupervisor.sendScene(record)
     }
-    viewportSupervisor.sendScene(record)
+    if (Array.isArray(record.meshes)) {
+      viewportSupervisor.sendRoadScene(record)
+    }
   })
 
   ipcMain.on('viewport:camera', (_event, action: unknown, datasetUuid: unknown) => {

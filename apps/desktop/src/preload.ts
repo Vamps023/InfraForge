@@ -58,6 +58,11 @@ const desktopApi = Object.freeze({
       ipcRenderer.removeListener('viewport:status', channelListener)
     }
   },
+  onMapTileDiagnostic: (listener: (diagnostic: unknown) => void) => {
+    const channelListener = (_event: unknown, diagnostic: unknown) => listener(diagnostic)
+    ipcRenderer.on('map-tile:diagnostic', channelListener)
+    return () => ipcRenderer.removeListener('map-tile:diagnostic', channelListener)
+  },
 })
 
 contextBridge.exposeInMainWorld('infraforgeDesktop', desktopApi)

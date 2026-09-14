@@ -1,10 +1,9 @@
 import { randomBytes } from 'node:crypto'
 import { spawn, type ChildProcessByStdio } from 'node:child_process'
-import { stat } from 'node:fs/promises'
 import net from 'node:net'
-import path from 'node:path'
 import readline from 'node:readline'
 import type { Readable } from 'node:stream'
+import { resolveNativeExecutable } from './NativeExecutableResolver.js'
 
 export interface EngineConnectionInfo {
   host: '127.0.0.1'
@@ -42,20 +41,6 @@ async function chooseLoopbackPortCandidate(): Promise<number> {
   })
 }
 
-async function resolveConfiguredEnginePath(): Promise<string | null> {
-  const configured = process.env.INFRAFORGE_ENGINE_PATH
-  if (!configured) {
-    return null
-  }
-
-  const resolved = path.resolve(configured)
-  const info = await stat(resolved)
-  if (!info.isFile()) {
-    throw new Error(`INFRAFORGE_ENGINE_PATH is not a file: ${resolved}`)
-  }
-  return resolved
-}
-
 export class EngineSupervisor {
   private child: EngineChildProcess | null = null
   private bootstrap: EngineBootstrap = {
@@ -66,7 +51,7 @@ export class EngineSupervisor {
   async start(): Promise<void> {
     let enginePath: string | null
     try {
-      enginePath = await resolveConfiguredEnginePath()
+      enginePath = await resolveNativeExecutable('engine')
     } catch (error) {
       this.bootstrap = { state: 'failed', message: error instanceof Error ? error.message : String(error) }
       return
@@ -75,7 +60,7 @@ export class EngineSupervisor {
     if (!enginePath) {
       this.bootstrap = {
         state: 'unavailable',
-        message: 'Set INFRAFORGE_ENGINE_PATH to the built infraforge-engine executable for desktop development.',
+        message: 'Native engine was not found in packaged resources or the source build directory.',
       }
       return
     }

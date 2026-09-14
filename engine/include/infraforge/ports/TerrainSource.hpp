@@ -25,11 +25,17 @@ struct TerrainSourceInfo {
     double originY{0.0};
     double pixelSizeX{0.0};
     double pixelSizeY{0.0};
-    // Resolved elevation unit name ("metre", "international foot",
-    // "US survey foot"). Empty sample-type units normalize to metre, the
-    // documented convention for DEMs without vertical metadata.
+    std::string horizontalUnitName;
+    std::string horizontalUnitSymbol;
+    bool horizontalUnitIsAngular{false};
+    // Resolved elevation sample unit. "unknown" means the source carries no
+    // authoritative vertical/band unit metadata; horizontal CRS units never
+    // supply elevation semantics.
     std::string elevationUnit;
     double elevationUnitToMetre{1.0};
+    std::string elevationUnitSource;
+    double sampleScale{1.0};
+    double sampleOffset{0.0};
     // Sample type name as reported by the raster library ("Float32",
     // "Int16", ...); used for the supported-type gate and diagnostics.
     std::string sampleTypeName;

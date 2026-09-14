@@ -730,7 +730,7 @@ describe('Runtime Configuration Layer (terrainConfig)', () => {
         attribution: 'Internal Geocoder Service',
         userAgent: 'InfraForge/0.3.0',
       },
-      mapTile: {
+      mapTiles: {
         url: 'https://tiles.corp.net/{z}/{x}/{y}.png',
         attribution: '&copy; Internal Tiles',
         maxZoom: 20,
@@ -822,7 +822,7 @@ describe('HTTPS tile URL validation (CSP regression)', () => {
 
   it('initTerrainConfig ignores an insecure tile URL from the desktop bridge', async () => {
     const mockGetRuntimeConfig = vi.fn().mockResolvedValue({
-      mapTile: {
+      mapTiles: {
         url: 'http://insecure.example.com/{z}/{x}/{y}.png',
         attribution: 'Insecure Bridge',
         maxZoom: 14,

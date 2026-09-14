@@ -8,6 +8,6 @@ namespace infraforge {
 inline constexpr std::string_view kEngineExecutableName = "infraforge-engine";
 inline constexpr std::string_view kEngineVersion = "0.4.0";
 inline constexpr std::uint32_t kProtocolMajor = 1;
-inline constexpr std::uint32_t kProtocolMinor = 4;
+inline constexpr std::uint32_t kProtocolMinor = 5;
 
 } // namespace infraforge

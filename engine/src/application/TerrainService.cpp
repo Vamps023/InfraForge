@@ -76,6 +76,19 @@ constexpr double kDlCommitEnd = 0.95;
     throw TerrainError(code, message);
 }
 
+struct ConfirmedElevationUnit {
+    std::string name;
+    double toMetre;
+};
+
+[[nodiscard]] ConfirmedElevationUnit confirmedElevationUnit(const std::string& value) {
+    if (value == "metre") return {"metre", 1.0};
+    if (value == "international foot") return {"international foot", 0.3048};
+    if (value == "US survey foot") return {"US survey foot", 1200.0 / 3937.0};
+    failImport(TerrainErrorCode::InvalidArgument,
+        "unknown source elevation unit requires an explicit supported unit selection");
+}
+
 // BLOCKER 5: Map a typed ProviderErrorCode to the corresponding
 // TerrainErrorCode so the typed failure survives through JobRecord →
 // protocol event → frontend diagnostics. Cancellation stays cancellation.
@@ -561,6 +574,14 @@ JobRecord TerrainService::startImport(const TerrainImportSpec& spec) {
     // Full source validation up front so CRS/raster problems surface as a
     // typed command error before any job starts or byte is copied.
     const TerrainProbeResult probe = probeSource(spec.sourcePath);
+    std::optional<ConfirmedElevationUnit> overrideUnit;
+    if (probe.source.elevationUnit == "unknown") {
+        if (spec.elevationUnitOverride.empty()) {
+            failImport(TerrainErrorCode::InvalidArgument,
+                "source does not declare an elevation unit; explicitly choose how sample values are interpreted");
+        }
+        overrideUnit = confirmedElevationUnit(spec.elevationUnitOverride);
+    }
 
     const std::string datasetUuid = runtime::generateUuidV4();
     const std::filesystem::path projectDirectory = projectDirectory_();
@@ -573,6 +594,7 @@ JobRecord TerrainService::startImport(const TerrainImportSpec& spec) {
         .tempFile = projectDirectory / "terrain" / "elevation" / (datasetUuid + ".tif.importing"),
         .grid = world_.grid(),
         .project = *project_,
+        .elevationUnitOverride = spec.elevationUnitOverride,
     });
 
     domain::terrain::TerrainDataset& dataset = payload->dataset;
@@ -587,8 +609,14 @@ JobRecord TerrainService::startImport(const TerrainImportSpec& spec) {
     dataset.originY = probe.source.originY;
     dataset.cellSizeX = probe.source.pixelSizeX;
     dataset.cellSizeY = probe.source.pixelSizeY;
-    dataset.elevationUnit = probe.source.elevationUnit;
-    dataset.elevationUnitToMetre = probe.source.elevationUnitToMetre;
+    dataset.horizontalUnitName = probe.source.horizontalUnitName;
+    dataset.horizontalUnitSymbol = probe.source.horizontalUnitSymbol;
+    dataset.horizontalUnitIsAngular = probe.source.horizontalUnitIsAngular;
+    dataset.elevationUnit = overrideUnit ? overrideUnit->name : probe.source.elevationUnit;
+    dataset.elevationUnitToMetre = overrideUnit ? overrideUnit->toMetre : probe.source.elevationUnitToMetre;
+    dataset.elevationUnitSource = overrideUnit ? "user override" : probe.source.elevationUnitSource;
+    dataset.sampleScale = probe.source.sampleScale;
+    dataset.sampleOffset = probe.source.sampleOffset;
     dataset.hasNodata = probe.source.hasNodata;
     dataset.nodataValue = probe.source.nodataValue;
     dataset.sourceBytes = probe.source.fileBytes;
@@ -669,8 +697,21 @@ JobRecord TerrainService::startImport(const TerrainImportSpec& spec) {
         payload->dataset.originY = stored.originY;
         payload->dataset.cellSizeX = stored.pixelSizeX;
         payload->dataset.cellSizeY = stored.pixelSizeY;
-        payload->dataset.elevationUnit = stored.elevationUnit;
-        payload->dataset.elevationUnitToMetre = stored.elevationUnitToMetre;
+        payload->dataset.horizontalUnitName = stored.horizontalUnitName;
+        payload->dataset.horizontalUnitSymbol = stored.horizontalUnitSymbol;
+        payload->dataset.horizontalUnitIsAngular = stored.horizontalUnitIsAngular;
+        if (stored.elevationUnit == "unknown") {
+            const auto selected = confirmedElevationUnit(payload->elevationUnitOverride);
+            payload->dataset.elevationUnit = selected.name;
+            payload->dataset.elevationUnitToMetre = selected.toMetre;
+            payload->dataset.elevationUnitSource = "user override";
+        } else {
+            payload->dataset.elevationUnit = stored.elevationUnit;
+            payload->dataset.elevationUnitToMetre = stored.elevationUnitToMetre;
+            payload->dataset.elevationUnitSource = stored.elevationUnitSource;
+        }
+        payload->dataset.sampleScale = stored.sampleScale;
+        payload->dataset.sampleOffset = stored.sampleOffset;
         payload->dataset.hasNodata = stored.hasNodata;
         payload->dataset.nodataValue = stored.nodataValue;
         payload->dataset.sourceBytes = stored.fileBytes;
@@ -741,6 +782,12 @@ JobRecord TerrainService::startImport(const TerrainImportSpec& spec) {
             / project.linearUnit.toMetre;
         payload->dataset.maxZ = maxZSource * payload->dataset.elevationUnitToMetre
             / project.linearUnit.toMetre;
+        if (stored.sampleTypeName == "UInt16" && stored.elevationUnit == "unknown"
+            && stored.sampleScale == 1.0 && stored.sampleOffset == 0.0
+            && !stored.hasNodata && maxZSource >= 65500.0) {
+            payload->dataset.diagnostics.push_back({TerrainErrorCode::SuspiciousEncoding,
+                "This raster may be an encoded/normalized heightmap rather than elevations in physical units. Verify elevation unit and scale before import."});
+        }
         if (nodataCells > 0) {
             payload->dataset.hasNodata = true;
             payload->dataset.diagnostics.push_back({TerrainErrorCode::NodataCells,
@@ -1587,8 +1634,14 @@ JobRecord TerrainService::startDownload(
         dataset.originY = sourceInfo.originY;
         dataset.cellSizeX = sourceInfo.pixelSizeX;
         dataset.cellSizeY = sourceInfo.pixelSizeY;
+        dataset.horizontalUnitName = sourceInfo.horizontalUnitName;
+        dataset.horizontalUnitSymbol = sourceInfo.horizontalUnitSymbol;
+        dataset.horizontalUnitIsAngular = sourceInfo.horizontalUnitIsAngular;
         dataset.elevationUnit = sourceInfo.elevationUnit;
         dataset.elevationUnitToMetre = sourceInfo.elevationUnitToMetre;
+        dataset.elevationUnitSource = sourceInfo.elevationUnitSource;
+        dataset.sampleScale = sourceInfo.sampleScale;
+        dataset.sampleOffset = sourceInfo.sampleOffset;
         dataset.hasNodata = sourceInfo.hasNodata;
         dataset.nodataValue = sourceInfo.nodataValue;
         dataset.sourceBytes = sourceInfo.fileBytes;

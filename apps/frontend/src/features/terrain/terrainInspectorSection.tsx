@@ -1,6 +1,6 @@
 import { inspectorSectionRegistry, type InspectorSectionContext } from '../../editor/inspector/inspectorRegistry'
 import { useTerrainStore } from './terrainStore'
-import { refreshDatasetDetails } from './terrainApi'
+import { fetchTerrainScene, refreshDatasetDetails } from './terrainApi'
 import type { EngineClient } from '../../lib/engineSession'
 
 // Terrain inspector section: shows real canonical terrain metadata for the
@@ -40,6 +40,19 @@ export function registerTerrainInspectorSection(deps: TerrainInspectorDeps): voi
 
       return (
         <div className="inspector-section terrain-inspector">
+          <button
+            className="button secondary"
+            type="button"
+            disabled={!client || !window.infraforgeDesktop?.setViewportScene}
+            onClick={() => {
+              if (!client) return
+              void fetchTerrainScene(client).then((scene) => {
+                window.infraforgeDesktop?.setViewportScene?.(scene as Record<string, unknown>)
+              }).catch(() => undefined)
+            }}
+          >
+            Focus Terrain
+          </button>
           <dl className="inspector-fields">
             <dt>Dataset ID</dt>
             <dd className="mono">{dataset.datasetUuid}</dd>
@@ -51,22 +64,24 @@ export function registerTerrainInspectorSection(deps: TerrainInspectorDeps): voi
             <dd>
               {dataset.rasterWidth.toString()} × {dataset.rasterHeight.toString()} px
             </dd>
-            <dt>Cell Size</dt>
+            <dt>Source Pixel Size</dt>
             <dd>
               {dataset.cellSizeX.toPrecision(6)} × {dataset.cellSizeY.toPrecision(6)}{' '}
-              {dataset.elevationUnit === 'metre' ? 'm' : 'units'}
+              {dataset.horizontalUnitSymbol || dataset.horizontalUnitName || 'units'}
             </dd>
             <dt>Elevation Unit</dt>
-            <dd>{dataset.elevationUnit}</dd>
+            <dd>{dataset.elevationUnit === 'unknown' ? 'Unknown' : dataset.elevationUnit}</dd>
             <dt>Elevation Range</dt>
             <dd>
-              {dataset.minZ.toPrecision(6)} – {dataset.maxZ.toPrecision(6)} m
+              {dataset.minZ.toPrecision(6)} – {dataset.maxZ.toPrecision(6)} project units
             </dd>
-            <dt>Canonical Bounds</dt>
+            <dt>Project-global Bounds</dt>
             <dd className="mono small">
               E: {dataset.boundsWest.toPrecision(6)} – {dataset.boundsEast.toPrecision(6)}
               <br />
               N: {dataset.boundsSouth.toPrecision(6)} – {dataset.boundsNorth.toPrecision(6)}
+              <br />
+              (project linear units)
             </dd>
             <dt>NoData</dt>
             <dd>{dataset.hasNodata ? `present (${dataset.nodataValue})` : 'none'}</dd>

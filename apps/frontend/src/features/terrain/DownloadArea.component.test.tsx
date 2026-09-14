@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor, act } from '@testing-library/react'
+import { cleanup, render, screen, waitFor, act, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { JobState } from '@infraforge/protocol'
@@ -140,6 +140,28 @@ beforeEach(() => {
 })
 
 describe('Download Area - component tests', () => {
+  it('dispatches only one local import for rapid repeated clicks', async () => {
+    let resolveImport!: (value: string) => void
+    vi.mocked(terrainApi.importTerrainDataset).mockReturnValue(new Promise((resolve) => { resolveImport = resolve }))
+    useTerrainStore.getState().setProbe({
+      source: {
+        format: 'GTiff', crsDefinition: 'EPSG:32633', width: 32n, height: 32n,
+        pixelSizeX: 10, pixelSizeY: 10, horizontalUnitSymbol: 'm',
+        elevationUnit: 'metre', sampleType: 'Float32', hasNodata: false, fileBytes: 1024n,
+      },
+      crsName: 'WGS 84 / UTM zone 33N', crsAuthority: 'EPSG', crsCode: '32633',
+    } as never)
+    render(<ImportTerrainDialog client={client} busy={false} onClose={vi.fn()} />)
+    fireEvent.change(screen.getByPlaceholderText('Absolute path to a GeoTIFF DEM'), { target: { value: 'C:\\dem.tif' } })
+    fireEvent.change(screen.getByPlaceholderText('Imported terrain'), { target: { value: 'DEM' } })
+    const button = screen.getByRole('button', { name: 'Import Terrain' })
+    fireEvent.click(button)
+    fireEvent.click(button)
+    expect(terrainApi.importTerrainDataset).toHaveBeenCalledTimes(1)
+    resolveImport('job-local')
+    await waitFor(() => expect(button).toBeDisabled())
+  })
+
   it('switches to Download Area mode and loads providers', async () => {
     const user = userEvent.setup()
     render(<ImportTerrainDialog client={client} busy={false} onClose={vi.fn()} />)

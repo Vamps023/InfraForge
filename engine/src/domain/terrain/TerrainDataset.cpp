@@ -26,6 +26,8 @@ std::string_view errorCodeName(TerrainErrorCode code) noexcept {
         return "source_data_missing";
     case TerrainErrorCode::NodataCells:
         return "nodata_cells";
+    case TerrainErrorCode::SuspiciousEncoding:
+        return "suspicious_encoding";
     case TerrainErrorCode::TileGenerationFailed:
         return "tile_generation_failed";
     case TerrainErrorCode::InvalidArgument:

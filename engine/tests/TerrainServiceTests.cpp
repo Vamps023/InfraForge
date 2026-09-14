@@ -188,9 +188,50 @@ TEST_CASE("probe reports detected CRS, geometry, unit, and NoData") {
     CHECK(info.height == 32);
     CHECK(info.pixelSizeX == doctest::Approx(10.0));
     CHECK(info.pixelSizeY == doctest::Approx(10.0));
+    CHECK(info.horizontalUnitSymbol == "m");
+    CHECK_FALSE(info.horizontalUnitIsAngular);
     CHECK(info.elevationUnit == "metre");
+    CHECK(info.elevationUnitSource == "raster band metadata");
     CHECK(info.hasNodata);
     CHECK(info.nodataValue == doctest::Approx(-9999.0));
+}
+
+TEST_CASE("geographic pixel units stay angular and missing elevation unit stays unknown") {
+    infraforge::testhelpers::ScratchDirectory scratch;
+    const auto demPath = scratch.path() / "geographic-unknown-unit.tif";
+    infraforge::testhelpers::TerrainDemSpec spec;
+    spec.crs = "EPSG:4326";
+    spec.originX = 73.85;
+    spec.originY = 18.55;
+    spec.cellSize = 0.00001;
+    spec.elevationUnit.clear();
+    spec.withNodata = false;
+    infraforge::testhelpers::writeDemGeoTiff(demPath, spec);
+
+    infraforge::persistence::GdalTerrainSource reader;
+    const auto info = reader.probe(demPath);
+    CHECK(info.horizontalUnitIsAngular);
+    CHECK(info.horizontalUnitSymbol == "°");
+    CHECK(info.elevationUnit == "unknown");
+    CHECK(info.elevationUnitSource == "unknown");
+}
+
+TEST_CASE("raster scale and offset are honored when reading samples") {
+    infraforge::testhelpers::ScratchDirectory scratch;
+    const auto demPath = scratch.path() / "scaled-dem.tif";
+    infraforge::testhelpers::TerrainDemSpec spec;
+    spec.withNodata = false;
+    spec.sampleScale = 0.5;
+    spec.sampleOffset = 10.0;
+    infraforge::testhelpers::writeDemGeoTiff(demPath, spec);
+
+    infraforge::persistence::GdalTerrainSource reader;
+    const auto info = reader.probe(demPath);
+    CHECK(info.sampleScale == doctest::Approx(0.5));
+    CHECK(info.sampleOffset == doctest::Approx(10.0));
+    const auto block = reader.readBlock(demPath, 0, 0, 1, 1);
+    REQUIRE(block.elevations.size() == 1);
+    CHECK(block.elevations[0] == doctest::Approx(60.0));
 }
 
 TEST_CASE("probe rejects CRS-less rasters explicitly") {

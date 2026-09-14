@@ -7,7 +7,8 @@ package infraforge.protocol.v1;
 // derived-tile regeneration. The frontend receives projections, events,
 // and diagnostics only — never raster payloads (docs/03_PROTOCOL/COMMANDS.md).
 //
-// Protocol 1.4: terrain additions. The generic job lifecycle (JobState,
+// Protocol 1.5: truthful terrain source-unit semantics and explicit unknown
+// elevation-unit confirmation. The generic job lifecycle (JobState,
 // JobQueuedEvent, JobStartedEvent, JobProgressEvent, JobCompletedEvent,
 // JobFailedEvent, JobCancelledEvent, JobRecord, JobCancelCommand/Result,
 // JobListCommand/Result, JobStartedResult) is owned by project.proto
@@ -42,6 +43,12 @@ message TerrainSourceInfo {
   bool has_nodata = 11;
   double nodata_value = 12;
   uint64 file_bytes = 13;
+  string horizontal_unit_name = 14;
+  string horizontal_unit_symbol = 15;
+  bool horizontal_unit_is_angular = 16;
+  double sample_scale = 17;
+  double sample_offset = 18;
+  string elevation_unit_source = 19;
 }
 
 message TerrainProbeSourceCommand {
@@ -62,6 +69,9 @@ message TerrainImportDatasetCommand {
   // Absolute path of the DEM file to ingest into project-owned storage.
   string path = 1;
   string display_name = 2;
+  // Required when the source does not authoritatively declare a vertical
+  // sample unit. Empty never implies metres.
+  string elevation_unit_override = 3;
 }
 
 // Canonical terrain dataset projection (inspector/outliner). Geometry is
@@ -93,6 +103,12 @@ message TerrainDatasetInfo {
   // Attribution/provenance for remote-acquired terrain (BLOCKER 3).
   // Empty for local-file imports without source attribution metadata.
   string source_attribution = 22;
+  string horizontal_unit_name = 23;
+  string horizontal_unit_symbol = 24;
+  bool horizontal_unit_is_angular = 25;
+  string elevation_unit_source = 26;
+  double sample_scale = 27;
+  double sample_offset = 28;
 }
 
 message TerrainListDatasetsCommand {}

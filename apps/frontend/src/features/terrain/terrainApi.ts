@@ -58,12 +58,12 @@ export async function probeTerrainSource(
 // Starts the import job: project-owned copy, CRS-validated registration,
 // then derived tile generation. Progress and cancellation flow through
 // job events and job.cancel.
-export async function importTerrainDataset(client: EngineClient, path: string, displayName: string): Promise<string> {
+export async function importTerrainDataset(client: EngineClient, path: string, displayName: string, elevationUnitOverride = ''): Promise<string> {
   const store = useTerrainStore.getState()
   store.setImporting(true)
   store.setLastError(null)
   try {
-    const command = create(TerrainImportDatasetCommandSchema, { path, displayName })
+    const command = create(TerrainImportDatasetCommandSchema, { path, displayName, elevationUnitOverride })
     const outcome = await sendTerrainCommand(client, { case: 'terrainImportDataset', value: command })
     if (outcome.case !== 'jobStarted') {
       throw expectFailure(outcome)

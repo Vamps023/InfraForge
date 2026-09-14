@@ -177,15 +177,35 @@ app.whenReady().then(async () => {
   const runtimeConfig = loadAppRuntimeConfig()
   const geocoderService = new GeocoderService(runtimeConfig.geocoder)
 
+  const tileProbeUrl = runtimeConfig.mapTiles.url
+    .replace('{z}', '0').replace('{x}', '0').replace('{y}', '0')
+  const tileOrigin = new URL(tileProbeUrl)
+  const tileRequestFilter = { urls: [`${tileOrigin.protocol}//${tileOrigin.host}/*`] }
+  const publishTileDiagnostic = (payload: Record<string, unknown>) => {
+    for (const browserWindow of BrowserWindow.getAllWindows()) {
+      if (!browserWindow.isDestroyed()) browserWindow.webContents.send('map-tile:diagnostic', payload)
+    }
+  }
+
   // Configure Electron session User-Agent to satisfy OSM/Nominatim policy
   session.defaultSession.setUserAgent(runtimeConfig.mapTiles.userAgent)
   session.defaultSession.webRequest.onBeforeSendHeaders(
-    { urls: ['*://*.tile.openstreetmap.org/*', '*://tile.openstreetmap.org/*'] },
+    tileRequestFilter,
     (details, callback) => {
       details.requestHeaders['User-Agent'] = runtimeConfig.mapTiles.userAgent
       callback({ requestHeaders: details.requestHeaders })
     },
   )
+  session.defaultSession.webRequest.onBeforeRequest(tileRequestFilter, (details, callback) => {
+    publishTileDiagnostic({ state: 'started', url: details.url })
+    callback({})
+  })
+  session.defaultSession.webRequest.onCompleted(tileRequestFilter, (details) => {
+    publishTileDiagnostic({ state: 'completed', url: details.url, statusCode: details.statusCode })
+  })
+  session.defaultSession.webRequest.onErrorOccurred(tileRequestFilter, (details) => {
+    publishTileDiagnostic({ state: 'failed', url: details.url, error: details.error })
+  })
 
   ipcMain.handle('app:get-runtime-config', () => runtimeConfig)
   ipcMain.handle('geocoder:search', async (_event, query: unknown) => {

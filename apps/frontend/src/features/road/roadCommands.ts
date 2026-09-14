@@ -21,7 +21,7 @@ export function registerRoadCommands(deps: RoadCommandDeps): void {
       description: 'Create a new road from a source polyline.',
       category: 'Road',
       group: 'road',
-      surfaces: ['menu', 'palette'],
+      surfaces: ['menu', 'palette', 'toolbar'],
       requiresEngine: true,
       requiresProject: true,
       requiresNotBusy: true,

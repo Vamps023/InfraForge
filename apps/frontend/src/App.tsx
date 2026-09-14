@@ -29,6 +29,8 @@ import { useProblemDiagnostics } from './editor/problems/useProblemDiagnostics'
 
 import { ImportTerrainDialog } from './features/terrain/ImportTerrainDialog'
 import { DiagnosticsDialog } from './editor/shell/DiagnosticsDialog'
+import { CreateRoadDialog } from './features/road/CreateRoadDialog'
+import { RenameRoadDialog } from './features/road/RenameRoadDialog'
 import { registerTerrainCommands, unregisterTerrainCommands } from './features/terrain/terrainCommands'
 import { registerTerrainOutlinerProjection, unregisterTerrainOutlinerProjection } from './features/terrain/terrainOutlinerProjection'
 import { registerTerrainInspectorSection, unregisterTerrainInspectorSection } from './features/terrain/terrainInspectorSection'

@@ -590,6 +590,24 @@ std::vector<domain::terrain::TerrainDataset> SqliteProjectStore::terrainDatasets
                 "persisted terrain dataset failed validation: " + *validationError
                     + " (corrupt project database)");
         }
+
+        // BLOCKER 6: Load canonical coverage pieces for sparse/disconnected
+        // terrain. If the table has no rows for this dataset, coveragePieces
+        // stays empty and the enclosing bounds is used (legacy behavior for
+        // projects created before migration 5).
+        {
+            SqliteStatement pieces{*connection_,
+                "SELECT min_easting, min_northing, max_easting, max_northing "
+                "FROM terrain_dataset_coverage WHERE dataset_id = ? "
+                "ORDER BY piece_index"};
+            pieces.bindText(1, domain::terrain::uuidTextFromEntityId(dataset.id));
+            while (pieces.step()) {
+                dataset.coveragePieces.push_back(domain::world::SpatialBounds::ofEdges(
+                    pieces.columnDouble(0), pieces.columnDouble(1),
+                    pieces.columnDouble(2), pieces.columnDouble(3)));
+            }
+        }
+
         datasets.push_back(std::move(dataset));
     }
     return datasets;
@@ -655,6 +673,27 @@ ports::TerrainDatasetInsertResult SqliteProjectStore::insertTerrainDatasetImpl(
         insert.bindText(27, dataset.modifiedAt);
         insert.bindText(28, dataset.sourceAttribution);
         (void)insert.step();
+
+        // BLOCKER 6: Persist canonical coverage pieces so sparse/disconnected
+        // terrain coverage survives save/reopen. Each piece is a project-global
+        // rectangle. Local imports have one piece; remote sparse imports have
+        // one piece per selected application tile.
+        if (!dataset.coveragePieces.empty()) {
+            for (std::size_t i = 0; i < dataset.coveragePieces.size(); ++i) {
+                const auto& piece = dataset.coveragePieces[i];
+                SqliteStatement pieceStmt{*connection_,
+                    "INSERT INTO terrain_dataset_coverage "
+                    "(dataset_id, piece_index, min_easting, min_northing, max_easting, max_northing) "
+                    "VALUES (?, ?, ?, ?, ?, ?)"};
+                pieceStmt.bindText(1, domain::terrain::uuidTextFromEntityId(dataset.id));
+                pieceStmt.bindInt64(2, static_cast<std::int64_t>(i));
+                pieceStmt.bindDouble(3, piece.minEasting);
+                pieceStmt.bindDouble(4, piece.minNorthing);
+                pieceStmt.bindDouble(5, piece.maxEasting);
+                pieceStmt.bindDouble(6, piece.maxNorthing);
+                (void)pieceStmt.step();
+            }
+        }
 
         SqliteStatement state{*connection_,
             "UPDATE project_state SET revision = revision + 1, modified_at = ? WHERE id = 1"};

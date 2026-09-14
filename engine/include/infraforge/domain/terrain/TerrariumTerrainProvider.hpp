@@ -38,7 +38,8 @@ public:
     std::filesystem::path fetchRequest(
         const ProviderRequest& request,
         const std::filesystem::path& tempDir,
-        const std::string& credentialHint) const override;
+        const std::string& credentialHint,
+        const CancellationCallback& cancel) const override;
 
     [[nodiscard]] bool supportsSelectiveRequests() const noexcept override;
 

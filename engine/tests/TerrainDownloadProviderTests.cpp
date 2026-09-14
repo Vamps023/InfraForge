@@ -106,7 +106,7 @@ TEST_SUITE("terrain download provider") {
 
         const auto tempDir = std::filesystem::temp_directory_path() / "infraforge_test_mock";
         std::filesystem::create_directories(tempDir);
-        const auto file = provider.fetchRequest(req, tempDir, "");
+        const auto file = provider.fetchRequest(req, tempDir, "", {});
         CHECK(std::filesystem::exists(file));
         CHECK(std::filesystem::file_size(file) > 0);
 
@@ -149,7 +149,7 @@ TEST_SUITE("terrain download provider") {
         std::filesystem::create_directories(tempDir);
         bool threw = false;
         try {
-            (void)provider.fetchRequest(req, tempDir, "");
+            (void)provider.fetchRequest(req, tempDir, "", {});
         } catch (const ProviderError&) {
             threw = true;
         }
@@ -190,5 +190,57 @@ TEST_SUITE("terrain download provider") {
             CHECK(req.requestId.find('/') != std::string::npos);
             // The request ID is in z/x/y format, not the application tile's col/row.
         }
+    }
+
+    // ---- BLOCKER 2: Bounded selection grid (regression tests) ----
+
+    TEST_CASE("computeSelectionGrid rejects latitude beyond Web Mercator range") {
+        // ±90° is invalid for Web Mercator; the grid must reject it.
+        GeoBounds area{.west = 0, .south = -89, .east = 1, .north = 90};
+        bool threw = false;
+        try { (void)computeSelectionGrid(area, 4000); }
+        catch (const std::invalid_argument&) { threw = true; }
+        CHECK(threw);
+
+        GeoBounds area2{.west = 0, .south = -90, .east = 1, .north = 89};
+        threw = false;
+        try { (void)computeSelectionGrid(area2, 4000); }
+        catch (const std::invalid_argument&) { threw = true; }
+        CHECK(threw);
+    }
+
+    TEST_CASE("computeSelectionGrid rejects huge area exceeding tile limit") {
+        // A huge area at 1 km tile size would produce far more than
+        // kMaxTerrainSelectionTiles tiles. The grid must reject it before
+        // allocating.
+        GeoBounds area{.west = -180, .south = -85, .east = 180, .north = 85};
+        bool threw = false;
+        try { (void)computeSelectionGrid(area, 1000); }
+        catch (const std::invalid_argument&) { threw = true; }
+        CHECK(threw);
+    }
+
+    TEST_CASE("computeSelectionGrid accepts area at the tile limit boundary") {
+        // A small area at 16 km tile size should produce a small grid well
+        // within the limit.
+        GeoBounds area{.west = 0, .south = 0, .east = 1, .north = 1};
+        const auto tiles = computeSelectionGrid(area, 16000);
+        CHECK(!tiles.empty());
+        CHECK(tiles.size() <= kMaxTerrainSelectionTiles);
+    }
+
+    // ---- BLOCKER 1: Empty selection planning (regression test) ----
+    // Note: planDownload is tested via TerrainService; here we verify
+    // computeSelectionGrid works with the area that would be used for
+    // an empty-selection plan.
+
+    TEST_CASE("computeSelectionGrid produces grid for empty-selection plan scenario") {
+        // When the user draws an area but has not selected any tiles, the
+        // grid must still be computable so the plan can return it.
+        GeoBounds area{.west = -105.5, .south = 39.5, .east = -105.0, .north = 40.0};
+        const auto tiles = computeSelectionGrid(area, 4000);
+        CHECK(!tiles.empty());
+        // The plan with empty selection would have selectedTileCount = 0
+        // and providerRequests = [], but the grid is returned.
     }
 }

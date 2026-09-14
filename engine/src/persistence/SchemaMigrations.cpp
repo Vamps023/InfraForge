@@ -11,7 +11,7 @@
 namespace infraforge::persistence {
 namespace {
 
-constexpr std::array<MigrationDefinition, 4> kCanonicalMigrations{{
+constexpr std::array<MigrationDefinition, 5> kCanonicalMigrations{{
     {
         .id = 1,
         .name = "core project foundation",
@@ -87,6 +87,23 @@ CREATE TABLE terrain_datasets (
         .sql = R"sql(
 ALTER TABLE terrain_datasets
     ADD COLUMN source_attribution TEXT NOT NULL DEFAULT '';
+)sql",
+    },
+    {
+        .id = 5,
+        .name = "terrain coverage pieces",
+        .sql = R"sql(
+CREATE TABLE terrain_dataset_coverage (
+    dataset_id TEXT NOT NULL,
+    piece_index INTEGER NOT NULL,
+    min_easting REAL NOT NULL,
+    min_northing REAL NOT NULL,
+    max_easting REAL NOT NULL,
+    max_northing REAL NOT NULL,
+    PRIMARY KEY (dataset_id, piece_index),
+    FOREIGN KEY (dataset_id) REFERENCES terrain_datasets(id) ON DELETE CASCADE
+);
+CREATE INDEX idx_terrain_coverage_dataset ON terrain_dataset_coverage(dataset_id);
 )sql",
     },
 }};

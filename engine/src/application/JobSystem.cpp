@@ -233,6 +233,26 @@ void JobSystem::markFailed(const std::string& jobId, std::string message) {
     evictFinished();
 }
 
+void JobSystem::markFailed(const std::string& jobId, std::string message, std::string errorCode) {
+    std::lock_guard lock{mutex_};
+    const auto found = jobs_.find(jobId);
+    if (found == jobs_.end()) {
+        return;
+    }
+    Entry& entry = *found->second;
+    if (entry.state != JobState::Running) {
+        return;
+    }
+    entry.state = JobState::Failed;
+    entry.finalizing_ = false;
+    entry.message = std::move(message);
+    entry.errorCode = std::move(errorCode);
+    if (entry.finishedSequence == 0) {
+        entry.finishedSequence = ++nextFinishedSequence_;
+    }
+    evictFinished();
+}
+
 JobRecord JobSystem::recordFromEntry(const Entry& entry) const {
     JobRecord record;
     record.jobId = entry.jobId;
@@ -240,6 +260,7 @@ JobRecord JobSystem::recordFromEntry(const Entry& entry) const {
     record.state = entry.state;
     record.progress = entry.progress;
     record.message = entry.message;
+    record.errorCode = entry.errorCode;
     record.createdAt = entry.createdAt;
     record.cancellable = !entry.finalizing_ && (entry.state == JobState::Queued || entry.state == JobState::Running);
     return record;
@@ -281,6 +302,8 @@ void JobSystem::finishEntry(Entry& entry, const JobState state, std::string mess
     outcome.record.state = state;
     outcome.record.progress = entry.progress;
     outcome.record.message = message;
+    // Preserve typed failure code set by the body (BLOCKER 5).
+    outcome.record.errorCode = entry.context.failureCode();
     outcome.record.createdAt = entry.createdAt;
     outcome.record.cancellable = false;
     outcome.payload = std::move(payload);
@@ -302,6 +325,7 @@ void JobSystem::finishEntry(Entry& entry, const JobState state, std::string mess
         std::lock_guard lock{mutex_};
         entry.state = state;
         entry.message = std::move(message);
+        entry.errorCode = entry.context.failureCode();
         entry.finalizing_ = false;
         if (entry.finishedSequence == 0) {
             entry.finishedSequence = ++nextFinishedSequence_;

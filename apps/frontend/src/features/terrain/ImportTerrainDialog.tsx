@@ -376,11 +376,14 @@ function DownloadAreaImport({ client, onClose }: { client: EngineClient; onClose
   }, [client])
 
   // Fetch plan when area, tile size, or selection changes.
+  // NON-BLOCKING 2: Use a generation counter to ignore stale plan responses
+  // that arrive after a newer request was issued.
   useEffect(() => {
     if (!area || !selectedProvider) {
       setPlan(null)
       return
     }
+    let cancelled = false
     void (async () => {
       try {
         const result = await planTerrainDownload(
@@ -390,6 +393,7 @@ function DownloadAreaImport({ client, onClose }: { client: EngineClient; onClose
           tileSize,
           [...selectedIndices],
         )
+        if (cancelled) return
         if (!result.plan) {
           setPlan(null)
           return
@@ -420,9 +424,11 @@ function DownloadAreaImport({ client, onClose }: { client: EngineClient; onClose
           selectedAreaSqm: result.plan.selectedAreaSqm,
         })
       } catch (err) {
+        if (cancelled) return
         setFormError(err instanceof Error ? err.message : 'Failed to plan download')
       }
     })()
+    return () => { cancelled = true }
   }, [client, area, tileSize, selectedIndices, selectedProvider])
 
   const handleAreaDraw = (drawnArea: GeoBounds) => {
@@ -432,8 +438,8 @@ function DownloadAreaImport({ client, onClose }: { client: EngineClient; onClose
       return
     }
     if (drawnArea.west < -180 || drawnArea.east > 180 ||
-        drawnArea.south < -90 || drawnArea.north > 90) {
-      setFormError('Coordinates out of range (lon: [-180,180], lat: [-90,90])')
+        drawnArea.south < -85.05112878 || drawnArea.north > 85.05112878) {
+      setFormError('Coordinates out of range (lon: [-180,180], lat: [-85.05,85.05])')
       return
     }
     setArea(drawnArea)

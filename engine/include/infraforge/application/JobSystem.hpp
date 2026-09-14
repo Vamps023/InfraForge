@@ -45,6 +45,11 @@ struct JobRecord {
     JobState state{JobState::Queued};
     JobProgress progress;
     std::string message; // failure detail when Failed; empty otherwise
+    // Stable error code string for typed failure classification (BLOCKER 5).
+    // Empty for non-failed jobs. For terrain jobs this carries the
+    // TerrainErrorCode name (e.g. "provider_rate_limited") so Operations
+    // and Problems can display actionable diagnostics.
+    std::string errorCode;
     std::string createdAt;
     bool cancellable{true};
 };
@@ -77,6 +82,14 @@ public:
     // describes the current phase.
     void reportNormalizedProgress(double normalized, std::string label);
 
+    // Sets a stable error code for typed failure classification (BLOCKER 5).
+    // The body should call this before throwing if it wants the final
+    // JobRecord to carry a typed error code (e.g. "provider_rate_limited").
+    // The code is consumed by finishEntry when the body throws.
+    void setFailureCode(std::string code) { failureCode_ = std::move(code); }
+    void setFailureCode(std::string_view code) { failureCode_ = std::string{code}; }
+    [[nodiscard]] const std::string& failureCode() const noexcept { return failureCode_; }
+
 private:
     friend class JobSystem;
     std::atomic_bool cancelled_{false};
@@ -87,6 +100,7 @@ private:
     std::uint64_t unitsTotal_{0};
     double normalized_{0.0};
     std::string label_;
+    std::string failureCode_; // typed failure code set by the body (BLOCKER 5)
 };
 
 // Result of a finished job, delivered on the application executor.
@@ -148,6 +162,8 @@ public:
     // markFailed: the canonical commit failed; state becomes Failed with the
     // given message. The registry is the authoritative source.
     void markFailed(const std::string& jobId, std::string message);
+    // markFailed with a stable error code for typed failure classification.
+    void markFailed(const std::string& jobId, std::string message, std::string errorCode);
 
     // For jobs whose completion handler does not perform canonical commit
     // (e.g. tile generation), the body's success is the terminal state.
@@ -174,6 +190,7 @@ private:
         JobState state{JobState::Queued};
         JobProgress progress;
         std::string message;
+        std::string errorCode; // stable error code for typed failures (BLOCKER 5)
         JobContext context;
         Body body;
         ProgressHandler onProgress;

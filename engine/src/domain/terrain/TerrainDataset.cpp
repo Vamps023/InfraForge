@@ -30,6 +30,22 @@ std::string_view errorCodeName(TerrainErrorCode code) noexcept {
         return "tile_generation_failed";
     case TerrainErrorCode::InvalidArgument:
         return "invalid_argument";
+    case TerrainErrorCode::ProviderAuthenticationFailed:
+        return "provider_authentication_failed";
+    case TerrainErrorCode::ProviderRateLimited:
+        return "provider_rate_limited";
+    case TerrainErrorCode::ProviderNetworkTimeout:
+        return "provider_network_timeout";
+    case TerrainErrorCode::ProviderUnavailable:
+        return "provider_unavailable";
+    case TerrainErrorCode::ProviderUnsupportedCoverage:
+        return "provider_unsupported_coverage";
+    case TerrainErrorCode::ProviderInvalidResponse:
+        return "provider_invalid_response";
+    case TerrainErrorCode::ProviderCorruptResponse:
+        return "provider_corrupt_response";
+    case TerrainErrorCode::SelectionTooLarge:
+        return "selection_too_large";
     }
     return "unknown";
 }
@@ -91,6 +107,22 @@ std::optional<std::string> validateTerrainDataset(const TerrainDataset& dataset)
     }
     if (dataset.bounds.isEmpty()) {
         return std::string{"terrain canonical bounds must not be empty"};
+    }
+    // Coverage pieces validation (BLOCKER 6): if present, each must be
+    // finite and non-empty, and the count must be within bounds.
+    if (dataset.coveragePieces.size() > kMaxCoveragePieces) {
+        return std::string{"terrain coverage piece count exceeds maximum"};
+    }
+    for (const auto& piece : dataset.coveragePieces) {
+        if (!piece.isFinite() || piece.isEmpty()) {
+            return std::string{"terrain coverage piece must be finite and non-empty"};
+        }
+    }
+    // If coverage pieces exist, the enclosing bounds must contain all of them.
+    for (const auto& piece : dataset.coveragePieces) {
+        if (!dataset.bounds.contains(piece)) {
+            return std::string{"terrain coverage piece is outside the enclosing bounds"};
+        }
     }
     if (dataset.sourceSha256.size() != 64) {
         return std::string{"terrain source digest must be 64 hex characters"};

@@ -1230,7 +1230,11 @@ void CommandProcessor::publishTerrainEvent(const TerrainServiceEvent& event) {
         case JobState::Failed: {
             auto* failed = envelope->mutable_job_failed();
             failed->set_job_id(record.jobId);
-            failed->set_error_code("TERRAIN_UNSUPPORTED");
+            // Use the typed error code from the job body (BLOCKER 5).
+            // If no code was set, fall back to a generic internal error code.
+            failed->set_error_code(record.errorCode.empty()
+                ? "INTERNAL"
+                : record.errorCode);
             failed->set_error_message(record.message);
             break;
         }

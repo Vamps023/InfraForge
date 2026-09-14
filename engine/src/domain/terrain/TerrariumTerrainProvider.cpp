@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <limits>
 #include <mutex>
 #include <sstream>
 #include <stdexcept>
@@ -79,45 +80,74 @@ TileBounds tileBoundsWebMercator(int z, int x, int y) {
     return {minX, minY, maxX, maxY};
 }
 
+// Half-open tile-index helpers for XYZ tile coverage (BLOCKER 1).
+// Semantics:
+//   west/minX  = inclusive (floor)
+//   east/maxX  = exclusive (nudge below boundary so floor skips extra tile)
+//   north/maxY = inclusive (floor on ne.y gives the tile containing north)
+//   south/minY = exclusive (nudge above boundary so floor skips extra tile)
+//
+// For XYZ Y (flipped): y = floor((originShift - mercatorY) / tileSize).
+// If sw.y is exactly on a tile boundary, the tile starting at sw.y is
+// SOUTH of the coverage — we must NOT include it. Nudging sw.y northward
+// (toward +originShift) decreases (originShift - sw.y) so floor returns
+// the tile just north of the boundary (the last tile we actually need).
+// Nudging southward (the old bug) increased the quotient and still
+// included the extra southern tile.
+static int tileIndexInclusive(double coord, double originShift, double tileSize) {
+    return static_cast<int>(std::floor((coord + originShift) / tileSize));
+}
+
+static int tileIndexExclusiveMax(double coord, double originShift, double tileSize) {
+    // If coord is exactly on a tile boundary, nudge just below so floor
+    // gives the last tile we actually need (half-open [min, max)).
+    double adjusted = coord;
+    if (coord > -originShift && coord < originShift) {
+        const double tileIdxD = (coord + originShift) / tileSize;
+        if (std::abs(tileIdxD - std::round(tileIdxD)) < 1e-9) {
+            adjusted = std::nextafter(coord, -std::numeric_limits<double>::infinity());
+        }
+    }
+    return static_cast<int>(std::floor((adjusted + originShift) / tileSize));
+}
+
+static int tileIndexYInclusive(double mercatorY, double originShift, double tileSize) {
+    // North edge: inclusive. y = floor((originShift - ne.y) / tileSize).
+    return static_cast<int>(std::floor((originShift - mercatorY) / tileSize));
+}
+
+static int tileIndexYExclusiveMax(double mercatorY, double originShift, double tileSize) {
+    // South edge: exclusive. If sw.y is exactly on a tile boundary,
+    // nudge NORTHWARD (toward +originShift) so (originShift - sw.y)
+    // decreases and floor returns the tile just north of the boundary.
+    double adjusted = mercatorY;
+    if (mercatorY > -originShift && mercatorY < originShift) {
+        const double tileIdxD = (originShift - mercatorY) / tileSize;
+        if (std::abs(tileIdxD - std::round(tileIdxD)) < 1e-9) {
+            adjusted = std::nextafter(mercatorY, std::numeric_limits<double>::infinity());
+        }
+    }
+    return static_cast<int>(std::floor((originShift - adjusted) / tileSize));
+}
+
 // Convert WGS84 bounds to the set of XYZ tiles at a given zoom.
-// Uses half-open interval [min, max) for the east/north edges so that
-// an area ending exactly on a tile boundary does not request an extra
-// adjacent tile (Finding 9). The south/west edges use closed [min, max]
-// semantics (floor) to ensure full coverage.
+// Uses half-open interval semantics (BLOCKER 1):
+//   X: [west, east)  — west inclusive, east exclusive
+//   Y: (south, north] — south exclusive, north inclusive
+// This ensures an area ending exactly on a tile boundary does not
+// request an extra adjacent tile on the east or south edge.
 struct XyzTile { int z, x, y; };
 std::vector<XyzTile> tilesForBounds(
     const GeoBounds& bounds, int zoom) {
-    // Convert bounds to Web Mercator.
     const auto sw = toWebMercator(bounds.west, bounds.south);
     const auto ne = toWebMercator(bounds.east, bounds.north);
 
     const double tileSize = (2.0 * kOriginShift) / static_cast<double>(1 << zoom);
 
-    // Tile x range: closed on min (floor), half-open on max.
-    // If ne.x falls exactly on a tile boundary, floor(ne.x/tileSize)
-    // would give the tile starting at ne.x, which we don't need.
-    // Use std::nextafter to nudge just below the boundary so floor
-    // gives the last tile we actually need.
-    int xMin = static_cast<int>(std::floor((sw.x + kOriginShift) / tileSize));
-    double neXAdjusted = ne.x;
-    if (ne.x > -kOriginShift && ne.x < kOriginShift) {
-        // Check if ne.x is exactly on a tile boundary.
-        const double tileIdxD = (ne.x + kOriginShift) / tileSize;
-        if (std::abs(tileIdxD - std::round(tileIdxD)) < 1e-9) {
-            neXAdjusted = std::nextafter(ne.x, -kOriginShift);
-        }
-    }
-    int xMax = static_cast<int>(std::floor((neXAdjusted + kOriginShift) / tileSize));
-    // Tile y range (Y is flipped): closed on min, half-open on max.
-    int yMin = static_cast<int>(std::floor((kOriginShift - ne.y) / tileSize));
-    double swYAdjusted = sw.y;
-    if (sw.y > -kOriginShift && sw.y < kOriginShift) {
-        const double tileIdxD = (kOriginShift - sw.y) / tileSize;
-        if (std::abs(tileIdxD - std::round(tileIdxD)) < 1e-9) {
-            swYAdjusted = std::nextafter(sw.y, -kOriginShift);
-        }
-    }
-    int yMax = static_cast<int>(std::floor((kOriginShift - swYAdjusted) / tileSize));
+    int xMin = tileIndexInclusive(sw.x, kOriginShift, tileSize);
+    int xMax = tileIndexExclusiveMax(ne.x, kOriginShift, tileSize);
+    int yMin = tileIndexYInclusive(ne.y, kOriginShift, tileSize);
+    int yMax = tileIndexYExclusiveMax(sw.y, kOriginShift, tileSize);
 
     const int maxTile = (1 << zoom) - 1;
     xMin = std::max(0, std::min(xMin, maxTile));
@@ -346,12 +376,40 @@ TerrariumTerrainProvider::TerrariumTerrainProvider(
     // lists all contributing sources and their licenses.
     // Verified 2026-09-14 against:
     //   https://github.com/tilezen/joerd/blob/master/docs/attribution.md
-    // The dataset includes: SRTM, SRTM-Plus, USGS 3DEP, GMTED2010, NED,
-    // and other open elevation data. See the joerd attribution page for
-    // the full source list and license details.
+    //
+    // BLOCKER 7: The joerd attribution documentation explicitly contains a
+    // "Required attribution" section with individual source attribution
+    // requirements. A link alone is not equivalent to displaying the
+    // required attribution. Since current Terrarium responses do not
+    // expose which underlying source contributed to each pixel/tile, we
+    // retain the full conservative required attribution set.
     info_.attribution =
-        "Elevation data © Mapzen, USGS, NASA, and other open data sources. "
-        "Full attribution: https://github.com/tilezen/joerd/blob/master/docs/attribution.md";
+        "Elevation data from AWS Terrain Tiles (Terrarium). Required "
+        "attribution:\n"
+        "* ArcticDEM terrain data DEM(s) were created from DigitalGlobe, "
+        "Inc., imagery and funded under National Science Foundation awards "
+        "1043681, 1559691, and 1542736;\n"
+        "* Australia terrain data (c) Commonwealth of Australia "
+        "(Geoscience Australia) 2017;\n"
+        "* Austria terrain data (c) offene Daten Osterreichs - Digitales "
+        "Gelandemodell (DGM) Osterreich;\n"
+        "* Canada terrain data contains information licensed under the "
+        "Open Government Licence - Canada;\n"
+        "* Europe terrain data produced using Copernicus data and "
+        "information funded by the European Union - EU-DEM layers;\n"
+        "* Global ETOPO1 terrain data U.S. National Oceanic and "
+        "Atmospheric Administration;\n"
+        "* Mexico terrain data source: INEGI, Continental relief, 2016;\n"
+        "* New Zealand terrain data Copyright 2011 Crown copyright (c) "
+        "Land Information New Zealand and the New Zealand Government (All "
+        "rights reserved);\n"
+        "* Norway terrain data (c) Kartverket;\n"
+        "* United Kingdom terrain data (c) Environment Agency copyright "
+        "and/or database right 2015. All rights reserved;\n"
+        "* United States 3DEP (formerly NED) and global GMTED2010 and SRTM "
+        "terrain data courtesy of the U.S. Geological Survey.\n"
+        "Full attribution details: "
+        "https://github.com/tilezen/joerd/blob/master/docs/attribution.md";
     info_.requiresAuth = false;
     // Provider native maximum resolution is not a single fixed value —
     // the Terrarium dataset is available at zoom 0-15, and the effective
@@ -421,6 +479,20 @@ std::vector<ProviderRequest> TerrariumTerrainProvider::planRequests(
         requests.push_back(req);
     }
     return requests;
+}
+
+double TerrariumTerrainProvider::effectiveResolutionMpp(
+    const GeoBounds& area) const {
+    // BLOCKER 8: Provider owns the resolution computation. Terrarium uses
+    // a fixed zoom of 11 with 256px tiles. Ground resolution varies with
+    // latitude in Web Mercator: (tileSizeM * cos(lat)) / pixelsPerTile.
+    constexpr int kZoom = 11;
+    constexpr int kPixelsPerTile = 256;
+    const double tileSizeM = (2.0 * kOriginShift) /
+        static_cast<double>(std::int64_t{1} << kZoom);
+    const double centerLat = (area.south + area.north) / 2.0;
+    const double latRad = centerLat * kPi / 180.0;
+    return (tileSizeM * std::cos(latRad)) / static_cast<double>(kPixelsPerTile);
 }
 
 std::filesystem::path TerrariumTerrainProvider::fetchRequest(

@@ -1310,26 +1310,12 @@ domain::terrain::DownloadPlan TerrainService::planDownload(
         plan.estimatedBytes += req.estimatedBytes;
     }
 
-    // Effective resolution: compute from the selected zoom level and the
-    // area's latitude, NOT from the provider's maxResolutionMpp (Finding 5).
-    // The provider's maxResolutionMpp is a capability descriptor (0 = unknown
-    // for Terrarium since it varies with latitude). The effective plan
-    // resolution is the actual ground resolution at the selected zoom and
-    // latitude. For Web Mercator, ground resolution =
-    // (tileSizeMeters * cos(lat)) / pixelsPerTile.
-    // Terrarium uses a fixed zoom of 11 with 256px tiles.
-    {
-        const double kEarthRadius = 6378137.0;
-        const double kOriginShift = 3.14159265358979323846 * kEarthRadius;
-        const int kTerrariumZoom = 11;
-        const int kPixelsPerTile = 256;
-        const double tileSizeM = (2.0 * kOriginShift) /
-            static_cast<double>(std::int64_t{1} << kTerrariumZoom);
-        const double centerLat = (area.south + area.north) / 2.0;
-        const double latRad = centerLat * 3.14159265358979323846 / 180.0;
-        plan.effectiveResolutionMpp =
-            (tileSizeM * std::cos(latRad)) / static_cast<double>(kPixelsPerTile);
-    }
+    // Effective resolution: ask the provider (BLOCKER 8). The provider owns
+    // the resolution computation since it is provider-specific (Terrarium
+    // uses z11, 256px, Web Mercator latitude-dependent ground resolution).
+    // TerrainService must not hard-code Terrarium-specific zoom/pixel/CRS
+    // assumptions.
+    plan.effectiveResolutionMpp = provider->effectiveResolutionMpp(area);
 
     // BLOCKER 14: Coverage checking — distinguish fully covered, partially
     // covered, and outside. Do not report fullCoverage = true merely because

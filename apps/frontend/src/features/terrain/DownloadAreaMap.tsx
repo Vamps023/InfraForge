@@ -10,12 +10,13 @@ import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import type { LocationSearchClient, SearchResult } from './locationSearch'
 
-// Real interactive map for the Download Area UX (BLOCKER 5).
+// Real interactive map for the Download Area UX (Issue #6).
 // Provides pan, zoom, rectangular drawing, go-to lat/lon, and a selection
 // grid overlay. The frontend owns only interaction/projection — it does
 // NOT decode DEMs or create terrain truth.
 //
-// Map tiles: OpenStreetMap (attribution required, CC BY-SA).
+// BLOCKER 6: Map tile provider is configurable via MapTileConfig.
+// Default: OpenStreetMap public tiles (CC BY-SA).
 // The map library (Leaflet) is lightweight (~150KB) and well-suited for
 // this use case.
 
@@ -32,6 +33,23 @@ export interface SelectionTileInfo {
   selected: boolean
 }
 
+// Map tile provider configuration (BLOCKER 6).
+export interface MapTileConfig {
+  url: string
+  attribution: string
+  maxZoom: number
+}
+
+// Default OSM public tiles configuration (BLOCKER 6).
+// Canonical endpoint: https://tile.openstreetmap.org/{z}/{x}/{y}.png
+// Attribution required: © OpenStreetMap contributors (CC BY-SA).
+// Policy: https://operations.osmfoundation.org/policies/tiles/
+export const defaultMapTileConfig: MapTileConfig = {
+  url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+  maxZoom: 19,
+}
+
 interface DownloadAreaMapProps {
   area: GeoBounds | null
   onAreaChange: (area: GeoBounds) => void
@@ -39,6 +57,7 @@ interface DownloadAreaMapProps {
   onTileToggle: (index: number) => void
   tileSize: number
   searchClient?: LocationSearchClient
+  mapTileConfig?: MapTileConfig
 }
 
 // Convert WebMercator lat/lon to leaflet LatLngBounds.
@@ -61,7 +80,7 @@ function fromLeafletBounds(b: L.LatLngBounds): GeoBounds {
 type MapMode = 'navigate' | 'draw'
 
 // Component that handles map click-and-drag to draw a rectangle.
-// Only active in 'draw' mode (NON-BLOCKING 1: separate pan and draw modes).
+// Only active in 'draw' mode (separate pan and draw modes).
 function DrawHandler({
   onDraw,
   mode,
@@ -125,23 +144,33 @@ export function DownloadAreaMap({
   onTileToggle,
   tileSize,
   searchClient,
+  mapTileConfig = defaultMapTileConfig,
 }: DownloadAreaMapProps) {
   const [goToLat, setGoToLat] = useState('')
   const [goToLon, setGoToLon] = useState('')
   const [mode, setMode] = useState<MapMode>('navigate')
   const fitRef = useRef<L.Map | null>(null)
 
-  // Location search state (IMPORTANT 6, Finding 2).
+  // Location search state (Issue #6).
   // Explicit search: user enters a location, presses Search or Enter,
   // and exactly one request is made. No autocomplete on every keystroke.
-  // Throttling is owned by the search client (Finding 2), not the UI.
-  // Explicit UX states: searching, no-results, error, results (Finding 2).
+  // Throttling is owned by the search client, not the UI.
+  // Explicit UX states: searching, no-results, error, results.
   const [searchQuery, setSearchQuery] = useState('')
   const [searchResults, setSearchResults] = useState<SearchResult[]>([])
   const [searching, setSearching] = useState(false)
   const [searchError, setSearchError] = useState<string | null>(null)
   const [hasSearched, setHasSearched] = useState(false)
   const searchGenRef = useRef(0)
+
+  // BLOCKER 3: Cancel pending search on unmount to prevent requests
+  // after component destruction and avoid React state updates after
+  // unmount.
+  useEffect(() => {
+    return () => {
+      searchClient?.cancelPending()
+    }
+  }, [searchClient])
 
   const handleSearch = useCallback(() => {
     const query = searchQuery.trim()
@@ -195,7 +224,7 @@ export function DownloadAreaMap({
 
   const handleDraw = useCallback((bounds: GeoBounds) => {
     onAreaChange(bounds)
-    // Automatically return to navigate mode after drawing (NON-BLOCKING 1).
+    // Automatically return to navigate mode after drawing.
     setMode('navigate')
   }, [onAreaChange])
 
@@ -295,9 +324,9 @@ export function DownloadAreaMap({
         }}
       >
         <TileLayer
-          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-          url="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
-          maxZoom={19}
+          attribution={mapTileConfig.attribution}
+          url={mapTileConfig.url}
+          maxZoom={mapTileConfig.maxZoom}
         />
         <DrawHandler onDraw={handleDraw} mode={mode} />
         <FitBounds bounds={area} />

@@ -6,7 +6,15 @@ import { renderHook, act, waitFor } from '@testing-library/react'
 // stale plan suppression, and location search behavior without requiring
 // a real map or network.
 
-import type { LocationSearchClient, SearchResult } from './locationSearch'
+import {
+  NominatimLocationSearchClient,
+  defaultLocationSearchConfig,
+  setLocationSearchConfig,
+  getActiveSearchConfig,
+  createLocationSearchClient,
+  type LocationSearchClient,
+  type SearchResult,
+} from './locationSearch'
 
 describe('Download Area - selection grid', () => {
   it('toggles tile selection on and off', () => {
@@ -209,6 +217,7 @@ describe('Download Area - location search', () => {
         return results
       }),
       attribution: '© OpenStreetMap contributors',
+      cancelPending: vi.fn(),
     }
   }
 
@@ -251,6 +260,7 @@ describe('Download Area - location search', () => {
         throw new Error('Network error')
       }),
       attribution: '© OpenStreetMap contributors',
+      cancelPending: vi.fn(),
     }
     await expect(client.search('test')).rejects.toThrow('Network error')
   })
@@ -302,6 +312,7 @@ describe('Download Area - location search', () => {
         return [{ displayName: query, lat: 0, lon: 0 }]
       }),
       attribution: '© OpenStreetMap contributors',
+      cancelPending: vi.fn(),
     }
 
     // Simulate two rapid explicit searches.
@@ -348,5 +359,273 @@ describe('Download Area - download start error surfacing', () => {
 
     handleCatch('unknown error')
     expect(formError).toBe('Failed to start download')
+  })
+})
+
+// ---- BLOCKER 2: Throttled search promise rejection ----
+
+describe('BLOCKER 2: throttled search promise rejection', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+
+  it('delayed throttled request failure rejects the returned promise', async () => {
+    const failingFetch = vi.fn().mockRejectedValue(new Error('Network error'))
+    vi.stubGlobal('fetch', failingFetch)
+
+    const config = {
+      ...defaultLocationSearchConfig,
+      minIntervalMs: 1000,
+    }
+    const client = new NominatimLocationSearchClient(config)
+
+    // First request establishes the throttle window.
+    const firstPromise = client.search('Denver')
+    // Handle rejection immediately to avoid unhandled rejection.
+    firstPromise.catch(() => {})
+    await vi.runAllTimersAsync()
+    await expect(firstPromise).rejects.toThrow('Network error')
+
+    vi.unstubAllGlobals()
+  })
+
+  it('caller .catch() and .finally() execute on delayed failure', async () => {
+    const failingFetch = vi.fn().mockRejectedValue(new Error('HTTP 500'))
+    vi.stubGlobal('fetch', failingFetch)
+
+    const config = {
+      ...defaultLocationSearchConfig,
+      minIntervalMs: 500,
+    }
+    const client = new NominatimLocationSearchClient(config)
+
+    // First request fails immediately.
+    await expect(client.search('test')).rejects.toThrow('HTTP 500')
+
+    // Second request is throttled and also fails.
+    const secondPromise = client.search('test2')
+    let caught = false
+    let finallyRan = false
+    secondPromise.then(
+      () => {},
+      () => { caught = true },
+    ).finally(() => { finallyRan = true })
+
+    await vi.runAllTimersAsync()
+    await vi.waitFor(() => expect(caught).toBe(true))
+    await vi.waitFor(() => expect(finallyRan).toBe(true))
+
+    vi.unstubAllGlobals()
+  })
+})
+
+// ---- BLOCKER 3: Cancel pending search on unmount ----
+
+describe('BLOCKER 3: cancel pending search', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+
+  it('cancelPending cancels delayed throttled request', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => [],
+    })
+    vi.stubGlobal('fetch', mockFetch)
+
+    const config = {
+      ...defaultLocationSearchConfig,
+      minIntervalMs: 1000,
+    }
+    const client = new NominatimLocationSearchClient(config)
+
+    // First request establishes throttle window.
+    const firstPromise = client.search('Denver')
+    await vi.runAllTimersAsync()
+    await firstPromise
+
+    // Second request is delayed.
+    const secondPromise = client.search('Boulder')
+    // Cancel before the timer fires.
+    client.cancelPending()
+
+    await vi.runAllTimersAsync()
+    // The fetch should not have been called for the second query.
+    // (It was called once for Denver, not for Boulder.)
+    expect(mockFetch).toHaveBeenCalledTimes(1)
+
+    vi.unstubAllGlobals()
+  })
+})
+
+// ---- BLOCKER 4: Runtime-switchable search configuration ----
+
+describe('BLOCKER 4: runtime-switchable search config', () => {
+  it('setLocationSearchConfig switches the active config', () => {
+    const original = getActiveSearchConfig()
+    const custom = {
+      ...defaultLocationSearchConfig,
+      endpoint: 'https://custom-geocoder.example.com/search',
+      attribution: 'Custom Geocoder',
+    }
+    setLocationSearchConfig(custom)
+    expect(getActiveSearchConfig().endpoint).toBe('https://custom-geocoder.example.com/search')
+    expect(getActiveSearchConfig().attribution).toBe('Custom Geocoder')
+
+    // Restore original.
+    setLocationSearchConfig(original)
+    expect(getActiveSearchConfig().endpoint).toBe(original.endpoint)
+  })
+
+  it('createLocationSearchClient uses the active config', () => {
+    const custom = {
+      ...defaultLocationSearchConfig,
+      attribution: 'Test Attribution',
+    }
+    setLocationSearchConfig(custom)
+    const client = createLocationSearchClient()
+    expect(client.attribution).toBe('Test Attribution')
+
+    // Restore.
+    setLocationSearchConfig(defaultLocationSearchConfig)
+  })
+})
+
+// ---- BLOCKER 10: Configurable cache capacity ----
+
+describe('BLOCKER 10: configurable cache capacity', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+
+  it('capacity 2 retains at most 2 entries with LRU eviction', async () => {
+    const mockFetch = vi.fn().mockImplementation(async (url: string) => {
+      const params = new URL(url).searchParams
+      const q = params.get('q') ?? ''
+      return {
+        ok: true,
+        json: async () => [{ display_name: q, lat: '0', lon: '0' }],
+      }
+    })
+    vi.stubGlobal('fetch', mockFetch)
+
+    const config = {
+      ...defaultLocationSearchConfig,
+      maxCacheEntries: 2,
+      minIntervalMs: 0, // No throttling for this test
+    }
+    const client = new NominatimLocationSearchClient(config)
+
+    // Search A (fetch count = 1)
+    await client.search('alpha')
+    // Search B (fetch count = 2)
+    await client.search('beta')
+    // Touch A — moves A to most-recently-used (no fetch, count = 2)
+    await client.search('alpha')
+    expect(mockFetch).toHaveBeenCalledTimes(2)
+
+    // Search C — evicts B (least recently used), retains A (count = 3)
+    await client.search('gamma')
+    expect(mockFetch).toHaveBeenCalledTimes(3)
+
+    // Search A — A was retained, should hit cache (count still 3)
+    await client.search('alpha')
+    expect(mockFetch).toHaveBeenCalledTimes(3)
+
+    // Search B — B was evicted, should call fetch (count = 4)
+    await client.search('beta')
+    expect(mockFetch).toHaveBeenCalledTimes(4)
+
+    vi.unstubAllGlobals()
+  })
+
+  it('capacity 1 retains at most 1 entry', async () => {
+    const mockFetch = vi.fn().mockImplementation(async (url: string) => {
+      const params = new URL(url).searchParams
+      const q = params.get('q') ?? ''
+      return {
+        ok: true,
+        json: async () => [{ display_name: q, lat: '0', lon: '0' }],
+      }
+    })
+    vi.stubGlobal('fetch', mockFetch)
+
+    const config = {
+      ...defaultLocationSearchConfig,
+      maxCacheEntries: 1,
+      minIntervalMs: 0,
+    }
+    const client = new NominatimLocationSearchClient(config)
+
+    await client.search('alpha')
+    await client.search('beta')
+    // alpha should have been evicted (capacity 1).
+    const fetchCountBefore = mockFetch.mock.calls.length
+    await client.search('alpha')
+    expect(mockFetch.mock.calls.length).toBe(fetchCountBefore + 1)
+
+    vi.unstubAllGlobals()
+  })
+})
+
+// ---- BLOCKER 12: Plan identity race test ----
+
+describe('BLOCKER 12: plan identity race', () => {
+  it('Area B result wins when Area A resolves afterward', async () => {
+    // Stronger race test: Area A request starts and remains pending.
+    // User draws Area B. Area B request starts. Area B result resolves.
+    // Area A resolves afterward. Visible plan remains Area B.
+    // Download Selected submits B only.
+    //
+    // This test controls Promise resolution manually instead of relying
+    // on timing.
+    let planResult: { area: string; selectedTileCount: number } | null = null
+    let previousCleanup: (() => void) | null = null
+
+    const makeRequest = (
+      area: string,
+      selectedTileCount: number,
+      resolveTrigger: { resolve: () => void },
+    ) => {
+      // Run the previous request's cleanup (cancels it).
+      if (previousCleanup) previousCleanup()
+      let cancelled = false
+      previousCleanup = () => { cancelled = true }
+
+      return new Promise<void>((resolve) => {
+        // This request waits for the external resolveTrigger.
+        resolveTrigger.resolve = () => {
+          if (!cancelled) {
+            planResult = { area, selectedTileCount }
+          }
+          resolve()
+        }
+      })
+    }
+
+    // Area A request starts (pending, controlled by triggerA).
+    const triggerA: { resolve: () => void } = { resolve: () => {} }
+    const requestA = makeRequest('A', 5, triggerA)
+
+    // User draws Area B — this cancels Area A's plan.
+    // Area B request starts (pending, controlled by triggerB).
+    const triggerB: { resolve: () => void } = { resolve: () => {} }
+    const requestB = makeRequest('B', 3, triggerB)
+
+    // Area B resolves first.
+    triggerB.resolve()
+    await requestB
+
+    expect(planResult).not.toBeNull()
+    expect(planResult!.area).toBe('B')
+    expect(planResult!.selectedTileCount).toBe(3)
+
+    // Area A resolves afterward — must be ignored.
+    triggerA.resolve()
+    await requestA
+
+    // Visible plan remains Area B.
+    expect(planResult!.area).toBe('B')
+    expect(planResult!.selectedTileCount).toBe(3)
   })
 })

@@ -35,6 +35,9 @@ public:
     [[nodiscard]] std::vector<ProviderRequest> planRequests(
         const std::vector<SelectionTile>& selectedTiles) const override;
 
+    [[nodiscard]] double effectiveResolutionMpp(
+        const GeoBounds& area) const override;
+
     std::filesystem::path fetchRequest(
         const ProviderRequest& request,
         const std::filesystem::path& tempDir,

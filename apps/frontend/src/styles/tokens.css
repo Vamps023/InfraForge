@@ -1,0 +1,141 @@
+/* =========================================================================
+   InfraForge Design Tokens
+   -------------------------------------------------------------------------
+   Semantic token system for a professional dark engineering desktop theme.
+   Layered charcoal/slate surfaces, cool blue accent, restrained styling.
+   No pure black; panels are slightly lighter than canvas; elevated controls
+   add one additional level. All component CSS references these tokens —
+   never hardcoded colors.
+   ========================================================================= */
+
+:root {
+  /* ---- Surface backgrounds (layered charcoal/slate) ---- */
+  --if-bg-canvas: #0d1014;        /* darkest — viewport background area */
+  --if-bg-panel: #141920;          /* panels (outliner, inspector) */
+  --if-bg-elevated: #1b2129;       /* raised controls, dropdowns, cards */
+  --if-bg-hover: #222a34;          /* hover state for rows/buttons */
+  --if-bg-active: #1c2b41;         /* active/selected button background */
+  --if-bg-input: #12161c;          /* input field backgrounds */
+
+  /* ---- Borders ---- */
+  --if-border-subtle: #222934;     /* lightest — subtle separators */
+  --if-border-default: #29313b;    /* standard panel borders */
+  --if-border-strong: #37424f;     /* stronger — inputs, dropdowns */
+  --if-border-focus: #4f8cff;      /* focus ring */
+
+  /* ---- Text ---- */
+  --if-text-primary: #d8dde6;      /* main text */
+  --if-text-secondary: #a4b0c2;    /* secondary labels */
+  --if-text-muted: #8c98a8;        /* muted hints, metadata */
+  --if-text-disabled: #596473;     /* disabled state */
+  --if-text-on-accent: #cfe2ff;    /* text on accent/selection backgrounds */
+
+  /* ---- Accent (cool blue) ---- */
+  --if-accent: #4f8cff;
+  --if-accent-hover: #5e98ff;
+  --if-accent-active: #3a78f0;
+  --if-accent-subtle: #1c2b41;     /* subtle accent fill (selected rows) */
+  --if-accent-border: #31527f;     /* accent border for active states */
+
+  /* ---- Selection */
+  --if-selection: #285ea8;
+  --if-selection-hover: #2f6cb9;
+
+  /* ---- Status colors ---- */
+  --if-success: #65b68a;
+  --if-warning: #d5a442;
+  --if-danger: #df7373;
+  --if-info: #4f8cff;
+
+  /* ---- Status background tints (subtle) ---- */
+  --if-success-bg: rgba(101, 182, 138, 0.12);
+  --if-warning-bg: rgba(213, 164, 66, 0.12);
+  --if-danger-bg: rgba(223, 115, 115, 0.12);
+  --if-info-bg: rgba(79, 140, 255, 0.12);
+
+  /* ---- Spacing scale (4px base) ---- */
+  --if-space-0: 0;
+  --if-space-1: 2px;
+  --if-space-2: 4px;
+  --if-space-3: 6px;
+  --if-space-4: 8px;
+  --if-space-5: 10px;
+  --if-space-6: 12px;
+  --if-space-8: 16px;
+  --if-space-10: 20px;
+  --if-space-12: 24px;
+  --if-space-16: 32px;
+  --if-space-20: 40px;
+  --if-space-24: 48px;
+
+  /* ---- Radius ---- */
+  --if-radius-sm: 3px;
+  --if-radius-md: 4px;
+  --if-radius-lg: 6px;
+  --if-radius-xl: 8px;
+  --if-radius-pill: 12px;
+
+  /* ---- Shadows ---- */
+  --if-shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3);
+  --if-shadow-md: 0 10px 28px rgba(0, 0, 0, 0.45);
+  --if-shadow-lg: 0 12px 42px rgba(0, 0, 0, 0.5);
+
+  /* ---- Control heights ---- */
+  --if-control-sm: 24px;
+  --if-control-md: 28px;
+  --if-control-lg: 32px;
+  --if-control-xl: 36px;
+
+  /* ---- Panel header heights ---- */
+  --if-header-app: 40px;          /* top application header */
+  --if-header-panel: 34px;        /* panel title bars */
+  --if-header-tab: 32px;          /* tab bars */
+  --if-header-status: 26px;       /* status bar */
+  --if-rail-width: 52px;          /* workspace rail width */
+
+  /* ---- Font sizes ---- */
+  --if-font-app-title: 14px;      /* application title */
+  --if-font-panel-title: 11px;    /* panel titles */
+  --if-font-body: 12px;           /* body text */
+  --if-font-body-lg: 13px;        /* larger body / search */
+  --if-font-metadata: 11px;       /* metadata, hints */
+  --if-font-status: 10px;          /* status bar text */
+  --if-font-label: 10px;           /* uppercase engineering labels */
+  --if-font-heading: 17px;         /* empty-state headings */
+  --if-font-display: 22px;         /* home screen title */
+
+  /* ---- Font weights ---- */
+  --if-weight-normal: 400;
+  --if-weight-medium: 500;
+  --if-weight-semibold: 600;
+  --if-weight-bold: 650;
+
+  /* ---- Line heights ---- */
+  --if-leading-tight: 1.3;
+  --if-leading-normal: 1.5;
+  --if-leading-relaxed: 1.6;
+
+  /* ---- Letter spacing ---- */
+  --if-tracking-label: 0.08em;    /* uppercase labels */
+  --if-tracking-tight: 0.01em;    /* titles */
+
+  /* ---- Z-index scale ---- */
+  --if-z-base: 0;
+  --if-z-panel: 5;                 /* resize handles */
+  --if-z-sticky: 10;               /* sticky panel headers */
+  --if-z-overlay: 40;              /* dialog overlays */
+  --if-z-dropdown: 50;             /* dropdowns, popovers */
+  --if-z-dialog: 60;               /* dialogs */
+  --if-z-command-palette: 1000;   /* command palette */
+
+  /* ---- Transitions ---- */
+  --if-transition-fast: 0.1s ease;
+  --if-transition-normal: 0.15s ease;
+  --if-transition-slow: 0.2s ease;
+
+  /* ---- Icon sizes ---- */
+  --if-icon-sm: 14px;
+  --if-icon-md: 16px;
+  --if-icon-lg: 18px;
+  --if-icon-xl: 20px;
+}

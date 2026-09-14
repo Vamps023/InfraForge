@@ -1,0 +1,431 @@
+/* =========================================================================
+   InfraForge Panel Styles
+   -------------------------------------------------------------------------
+   Outliner, inspector, panel headers, resize handles, bottom panel.
+   ========================================================================= */
+
+/* ---- Generic panel ---- */
+.panel {
+  min-width: 0;
+  background: var(--if-bg-panel);
+  display: flex;
+  flex-direction: column;
+}
+
+.outliner-panel {
+  border-right: 1px solid var(--if-border-default);
+}
+
+.inspector-panel {
+  border-left: 1px solid var(--if-border-default);
+}
+
+.panel-title-row {
+  height: var(--if-header-panel);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 var(--if-space-6);
+  border-bottom: 1px solid var(--if-border-default);
+  text-transform: uppercase;
+  letter-spacing: var(--if-tracking-label);
+  font-size: var(--if-font-panel-title);
+  font-weight: var(--if-weight-semibold);
+  color: var(--if-text-muted);
+}
+
+.panel-empty {
+  padding: var(--if-space-8);
+  color: var(--if-text-disabled);
+  font-size: var(--if-font-body);
+  text-align: center;
+}
+
+/* ---- Panel tab bar (for Scene/Layers/Assets etc.) ---- */
+.panel-tabs {
+  display: flex;
+  align-items: center;
+  gap: var(--if-space-1);
+  padding: 0 var(--if-space-4);
+  height: var(--if-header-tab);
+  border-bottom: 1px solid var(--if-border-default);
+  flex-shrink: 0;
+}
+
+.panel-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--if-space-2);
+  padding: 0 var(--if-space-4);
+  height: 100%;
+  background: transparent;
+  color: var(--if-text-muted);
+  font-size: var(--if-font-metadata);
+  border-bottom: 2px solid transparent;
+  transition: color var(--if-transition-fast), border-color var(--if-transition-fast);
+}
+
+.panel-tab:hover {
+  color: var(--if-text-primary);
+}
+
+.panel-tab.active {
+  color: var(--if-text-primary);
+  border-bottom-color: var(--if-accent);
+}
+
+/* ---- Search box ---- */
+.search-box {
+  display: flex;
+  gap: var(--if-space-3);
+  margin: var(--if-space-4);
+  padding: var(--if-space-3) var(--if-space-4);
+  align-items: center;
+  border: 1px solid var(--if-border-default);
+  border-radius: var(--if-radius-md);
+  color: var(--if-text-disabled);
+  background: var(--if-bg-input);
+  transition: border-color var(--if-transition-fast);
+}
+
+.search-box:focus-within {
+  border-color: var(--if-accent);
+}
+
+.search-box input {
+  width: 100%;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--if-text-primary);
+  font-size: var(--if-font-body);
+}
+
+.search-box input::placeholder {
+  color: var(--if-text-disabled);
+}
+
+/* ---- Outliner ---- */
+.outliner-body {
+  position: relative;
+  flex: 1;
+  overflow: auto;
+  min-height: 0;
+}
+
+.outliner-row {
+  display: flex;
+  align-items: center;
+  gap: var(--if-space-1);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  transition: background var(--if-transition-fast);
+}
+
+.outliner-row:hover {
+  background: var(--if-bg-hover);
+}
+
+.outliner-row.selected {
+  background: var(--if-selection);
+  color: var(--if-text-on-accent);
+}
+
+.outliner-disclosure {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  padding: 0;
+}
+
+.outliner-disclosure-spacer {
+  width: 16px;
+  flex-shrink: 0;
+}
+
+.outliner-label {
+  font-size: var(--if-font-body);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---- Inspector ---- */
+.inspector-body {
+  padding: var(--if-space-4);
+  overflow: auto;
+  min-height: 0;
+}
+
+.inspector-section {
+  margin-bottom: var(--if-space-8);
+}
+
+.inspector-section-title {
+  text-transform: uppercase;
+  letter-spacing: var(--if-tracking-label);
+  font-size: var(--if-font-label);
+  font-weight: var(--if-weight-semibold);
+  color: var(--if-text-muted);
+  padding-bottom: var(--if-space-3);
+  border-bottom: 1px solid var(--if-border-default);
+  margin-bottom: var(--if-space-4);
+}
+
+.inspector-section-body {
+  font-size: var(--if-font-body);
+}
+
+.inspector-fields {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--if-space-3);
+}
+
+.inspector-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--if-space-1);
+}
+
+.inspector-field dt {
+  color: var(--if-text-muted);
+  font-size: var(--if-font-label);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.inspector-field dd {
+  margin: 0;
+  color: var(--if-text-primary);
+  font-size: var(--if-font-body);
+  word-break: break-all;
+}
+
+/* ---- Editor layout (dockable/resizable panels) ---- */
+.editor-layout {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+
+.editor-layout-row {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+}
+
+.editor-panel {
+  background: var(--if-bg-panel);
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.editor-panel-left {
+  border-right: 1px solid var(--if-border-default);
+}
+
+.editor-panel-right {
+  border-left: 1px solid var(--if-border-default);
+}
+
+.editor-panel-bottom {
+  border-top: 1px solid var(--if-border-default);
+  background: var(--if-bg-input);
+}
+
+.editor-center {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+}
+
+/* ---- Resize handles ---- */
+.resize-handle {
+  flex-shrink: 0;
+  background: transparent;
+  position: relative;
+  z-index: var(--if-z-panel);
+  transition: background var(--if-transition-fast);
+}
+
+.resize-left,
+.resize-right {
+  width: 5px;
+  cursor: col-resize;
+}
+
+.resize-bottom {
+  height: 5px;
+  cursor: row-resize;
+}
+
+.resize-handle:hover,
+.resize-handle:focus-visible {
+  background: var(--if-accent);
+  opacity: 0.35;
+  outline: none;
+}
+
+.resize-handle:focus-visible {
+  outline: 1px solid var(--if-accent);
+  outline-offset: -1px;
+}
+
+/* ---- Bottom panel ---- */
+.bottom-panel {
+  min-height: 0;
+  border-top: 1px solid var(--if-border-default);
+  background: var(--if-bg-input);
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.bottom-tabs {
+  height: var(--if-header-tab);
+  display: flex;
+  align-items: center;
+  gap: var(--if-space-1);
+  padding: 0 var(--if-space-6);
+  border-bottom: 1px solid var(--if-border-default);
+  color: var(--if-text-muted);
+}
+
+.bottom-tab {
+  height: 100%;
+  padding: 0 var(--if-space-6);
+  background: transparent;
+  color: var(--if-text-muted);
+  font-size: var(--if-font-metadata);
+  border-bottom: 2px solid transparent;
+  transition: color var(--if-transition-fast), border-color var(--if-transition-fast);
+}
+
+.bottom-tab:hover {
+  color: var(--if-text-primary);
+}
+
+.bottom-tab.active {
+  color: var(--if-text-primary);
+  border-bottom-color: var(--if-accent);
+}
+
+.bottom-content {
+  padding: var(--if-space-6) var(--if-space-6);
+  color: var(--if-text-disabled);
+  font-size: var(--if-font-body);
+}
+
+.bottom-empty {
+  color: var(--if-text-disabled);
+}
+
+/* ---- Problems ---- */
+.problem-list,
+.operation-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--if-space-1);
+}
+
+.problem-row {
+  display: flex;
+  gap: var(--if-space-4);
+  align-items: center;
+  padding: var(--if-space-2) var(--if-space-3);
+  border-radius: var(--if-radius-sm);
+  font-size: var(--if-font-body);
+  transition: background var(--if-transition-fast);
+}
+
+.problem-row:hover {
+  background: var(--if-bg-hover);
+}
+
+.problem-severity {
+  text-transform: uppercase;
+  font-size: var(--if-font-label);
+  padding: 1px var(--if-space-2);
+  border-radius: var(--if-radius-sm);
+}
+
+.problem-error .problem-severity { color: var(--if-danger); }
+.problem-warning .problem-severity { color: var(--if-warning); }
+.problem-info .problem-severity { color: var(--if-accent); }
+
+.problem-source {
+  color: var(--if-text-muted);
+  font-size: var(--if-font-metadata);
+}
+
+.problem-message {
+  color: var(--if-text-primary);
+}
+
+.problem-row.problem-error { color: var(--if-danger); }
+
+/* ---- Operations ---- */
+.operation-row {
+  display: flex;
+  gap: var(--if-space-4);
+  align-items: center;
+  padding: var(--if-space-2) var(--if-space-3);
+  font-size: var(--if-font-body);
+}
+
+.operation-name {
+  color: var(--if-text-primary);
+}
+
+.operation-state {
+  color: var(--if-text-muted);
+  font-size: var(--if-font-metadata);
+  text-transform: capitalize;
+}
+
+.operation-progress {
+  color: var(--if-accent);
+}
+
+.operation-count {
+  color: var(--if-text-muted);
+}
+
+.operation-message {
+  color: var(--if-danger);
+}
+
+.operation-cancel {
+  margin-left: auto;
+  padding: var(--if-space-1) var(--if-space-4);
+  border: 1px solid var(--if-border-strong);
+  border-radius: var(--if-radius-sm);
+  background: transparent;
+  color: var(--if-text-muted);
+  font-size: var(--if-font-metadata);
+}
+
+.operation-cancel:disabled {
+  color: var(--if-text-disabled);
+  cursor: default;
+}
+
+.operation-recent .operation-row {
+  opacity: 0.7;
+}
+
+.operation-completed .operation-state { color: var(--if-success); }
+.operation-failed .operation-state { color: var(--if-danger); }

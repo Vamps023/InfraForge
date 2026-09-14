@@ -3,6 +3,7 @@
 #include "infraforge/viewport/platform/SurfaceInput.hpp"
 #include "infraforge/viewport/renderer/EditorCameraController.hpp"
 #include "infraforge/viewport/renderer/GridPass.hpp"
+#include "infraforge/viewport/renderer/RoadPass.hpp"
 #include "infraforge/viewport/renderer/RenderThread.hpp"
 #include "infraforge/viewport/renderer/SwapchainState.hpp"
 #include "infraforge/viewport/renderer/TerrainPass.hpp"
@@ -60,6 +61,9 @@ public:
     // first time a non-empty scene arrives.
     void setTerrainScene(const TerrainScene& scene);
 
+    // Thread-safe road scene hand-off (control path).
+    void setRoadScene(const RoadScene& scene);
+
     // Thread-safe raw mouse input (surface window procedure).
     void postCameraInput(const SurfaceInputEvent& event);
 
@@ -87,6 +91,7 @@ private:
     VulkanDevice device_;
     VulkanSwapchain swapchain_;
     TerrainPass terrainPass_;
+    RoadPass roadPass_;
     GridPass gridPass_;
     EditorCameraController cameraController_;
 
@@ -109,6 +114,7 @@ private:
     bool sizeDirty_{false};
     bool visible_{true};
     std::optional<TerrainScene> pendingScene_;
+    std::optional<RoadScene> pendingRoadScene_;
 
     // Raw input queue: the window procedure posts, the render thread drains
     // and applies (camera stays render-thread-owned).

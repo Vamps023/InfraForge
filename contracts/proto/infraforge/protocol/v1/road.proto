@@ -213,6 +213,38 @@ message GetRoadResult {
   RoadDetails road = 1;
 }
 
+// ---- Road Scene Projection (for viewport rendering) ----
+
+// One vertex of a road scene mesh, in render-local float coordinates.
+message RoadSceneVertex {
+  float x = 1;
+  float y = 2;
+  float z = 3;
+  float nx = 4;
+  float ny = 5;
+  float nz = 6;
+}
+
+// One road mesh for the viewport: a triangle list with vertices and indices.
+message RoadSceneMesh {
+  string road_id = 1;
+  repeated RoadSceneVertex vertices = 2;
+  repeated uint32 indices = 3;
+}
+
+// Road scene projection: all road meshes for the viewport, in render-local
+// coordinates relative to the scene origin.
+message RoadSceneResult {
+  double origin_easting = 1;
+  double origin_northing = 2;
+  double origin_height = 3;
+  repeated RoadSceneMesh meshes = 4;
+  uint64 revision = 5;
+}
+
+// Get the road scene projection for the viewport.
+message GetRoadSceneCommand {}
+
 // ---- Events ----
 
 // Emitted when a road is created.

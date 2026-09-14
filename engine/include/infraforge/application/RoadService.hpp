@@ -71,6 +71,32 @@ struct RoadDetails {
     std::uint64_t revision{0};
 };
 
+// One vertex of a road scene mesh, in render-local float coordinates.
+struct RoadSceneVertex {
+    float x{0.0f};
+    float y{0.0f};
+    float z{0.0f};
+    float nx{0.0f};
+    float ny{0.0f};
+    float nz{1.0f};
+};
+
+// One road mesh for the viewport: a triangle list with vertices and indices.
+struct RoadSceneMesh {
+    std::string roadId;
+    std::vector<RoadSceneVertex> vertices;
+    std::vector<std::uint32_t> indices;
+};
+
+// Road scene projection: all road meshes in render-local coordinates.
+struct RoadSceneProjection {
+    double originEasting{0.0};
+    double originNorthing{0.0};
+    double originHeight{0.0};
+    std::vector<RoadSceneMesh> meshes;
+    std::uint64_t revision{0};
+};
+
 // Input for creating a road from a source polyline.
 struct CreateRoadInput {
     std::string name;
@@ -169,6 +195,11 @@ public:
     [[nodiscard]] std::optional<domain::road::RoadTessellation> getRoadTessellation(
         const std::string& roadId,
         const domain::road::RoadTessellationParams& params = {}) const;
+
+    // Produces the road scene projection for the viewport: all road meshes
+    // in render-local float coordinates relative to the scene origin.
+    // The origin is the project georeference origin.
+    [[nodiscard]] RoadSceneProjection roadSceneProjection() const;
 
 private:
     // Undo/redo history entry: stores the full road record before/after.

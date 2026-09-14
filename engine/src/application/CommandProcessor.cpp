@@ -623,6 +623,9 @@ void CommandProcessor::processCommand(
         case protocol::v1::CommandEnvelope::kGetRoad:
             handleGetRoad(connectionId, frame);
             break;
+        case protocol::v1::CommandEnvelope::kGetRoadScene:
+            handleGetRoadScene(connectionId, frame);
+            break;
         case protocol::v1::CommandEnvelope::COMMAND_NOT_SET:
             throw CommandFailure{CommandFailureCode::InvalidArgument, "command envelope is empty"};
         }
@@ -1743,6 +1746,35 @@ void CommandProcessor::handleGetRoad(const std::string& connectionId, const Prot
     ProtocolFrame response;
     response.set_request_id(frame.request_id());
     fillRoadDetails(response.mutable_result()->mutable_get_road_result()->mutable_road(), *details);
+    sink_.sendToConnection(connectionId, response);
+}
+
+void CommandProcessor::handleGetRoadScene(const std::string& connectionId, const ProtocolFrame& frame) {
+    auto projection = roadService_->roadSceneProjection();
+
+    ProtocolFrame response;
+    response.set_request_id(frame.request_id());
+    auto* scene = response.mutable_result()->mutable_road_scene_result();
+    scene->set_origin_easting(projection.originEasting);
+    scene->set_origin_northing(projection.originNorthing);
+    scene->set_origin_height(projection.originHeight);
+    scene->set_revision(projection.revision);
+    for (const auto& mesh : projection.meshes) {
+        auto* meshOut = scene->add_meshes();
+        meshOut->set_road_id(mesh.roadId);
+        for (const auto& v : mesh.vertices) {
+            auto* vOut = meshOut->add_vertices();
+            vOut->set_x(v.x);
+            vOut->set_y(v.y);
+            vOut->set_z(v.z);
+            vOut->set_nx(v.nx);
+            vOut->set_ny(v.ny);
+            vOut->set_nz(v.nz);
+        }
+        for (const auto idx : mesh.indices) {
+            meshOut->add_indices(idx);
+        }
+    }
     sink_.sendToConnection(connectionId, response);
 }
 

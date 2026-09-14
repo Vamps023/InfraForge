@@ -591,6 +591,57 @@ std::optional<domain::road::RoadTessellation> RoadService::getRoadTessellation(
         road.alignment(), road.elevation(), road.superelevation(), params);
 }
 
+RoadSceneProjection RoadService::roadSceneProjection() const {
+    RoadSceneProjection projection;
+    const auto& record = store_.current();
+    projection.originEasting = record.georeference.originEasting;
+    projection.originNorthing = record.georeference.originNorthing;
+    projection.originHeight = record.georeference.originHeight;
+    projection.revision = record.revision;
+
+    const auto roads = store_.roads();
+    for (const auto& roadRecord : roads) {
+        auto road = rebuildRoad(roadRecord);
+        auto tess = domain::road::tessellateRoad(
+            road.alignment(), road.elevation(), road.superelevation(), {});
+
+        if (tess.isEmpty()) continue;
+
+        RoadSceneMesh mesh;
+        mesh.roadId = uuidTextFromRoadId(roadRecord.id);
+
+        // Build vertices: left and right edge of each cross-section.
+        // Vertex layout: for cross-section i, left = 2*i, right = 2*i+1.
+        mesh.vertices.reserve(tess.crossSections.size() * 2);
+        for (const auto& cs : tess.crossSections) {
+            // Left edge vertex.
+            RoadSceneVertex left;
+            left.x = static_cast<float>(cs.leftEdge.easting - projection.originEasting);
+            left.y = static_cast<float>(cs.leftEdge.northing - projection.originNorthing);
+            left.z = static_cast<float>(cs.leftHeight - projection.originHeight);
+            left.nx = 0.0f;
+            left.ny = 0.0f;
+            left.nz = 1.0f;
+            mesh.vertices.push_back(left);
+
+            // Right edge vertex.
+            RoadSceneVertex right;
+            right.x = static_cast<float>(cs.rightEdge.easting - projection.originEasting);
+            right.y = static_cast<float>(cs.rightEdge.northing - projection.originNorthing);
+            right.z = static_cast<float>(cs.rightHeight - projection.originHeight);
+            right.nx = 0.0f;
+            right.ny = 0.0f;
+            right.nz = 1.0f;
+            mesh.vertices.push_back(right);
+        }
+
+        mesh.indices = tess.indices;
+        projection.meshes.push_back(std::move(mesh));
+    }
+
+    return projection;
+}
+
 void RoadService::recordHistory(HistoryEntry entry) {
     const auto roadId = entry.roadId;
     undoStacks_[roadId].push_back(std::move(entry));

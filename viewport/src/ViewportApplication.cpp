@@ -313,8 +313,9 @@ int runViewportApplication(const ApplicationArguments& arguments) {
                         report->vulkanVersion, report->validationEnabled);
                 }
             } else if (auto* scene = std::get_if<SceneCommand>(&command)) {
-                // Engine-derived terrain scene hand-off to the render thread.
+                // Engine-derived terrain + road scene hand-off to the render thread.
                 renderer.setTerrainScene(scene->scene);
+                renderer.setRoadScene(scene->roads);
             } else if (auto* camera = std::get_if<CameraCommand>(&command)) {
                 renderer.postCameraInput(SurfaceInputEvent{
                     .action = camera->action,

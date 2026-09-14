@@ -142,6 +142,7 @@ private:
     void handleRedoRoad(const std::string& connectionId, const protocol::v1::Frame& frame);
     void handleListRoads(const std::string& connectionId, const protocol::v1::Frame& frame);
     void handleGetRoad(const std::string& connectionId, const protocol::v1::Frame& frame);
+    void handleGetRoadScene(const std::string& connectionId, const protocol::v1::Frame& frame);
 
     // Executes one service use case, then emits the correlated result frame
     // (state or closed) and the derived event frames. Argument-validation

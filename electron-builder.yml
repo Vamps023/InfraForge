@@ -1,0 +1,45 @@
+appId: com.infraforge.desktop
+productName: InfraForge
+artifactName: InfraForge-0.1.0-rc1-win-x64-setup.${ext}
+directories:
+  output: dist-release
+  app: .
+files:
+  - dist/**
+  - package.json
+  - ../../apps/frontend/dist/**
+extraResources:
+  - from: ../../apps/frontend/dist
+    to: frontend/dist
+    filter:
+      - '**/*'
+  - from: ../../build/engine/Release
+    to: native
+    filter:
+      - infraforge-engine.exe
+      - '*.dll'
+  - from: ../../build/viewport/Release
+    to: native
+    filter:
+      - infraforge-viewport.exe
+      - '*.dll'
+  - from: ../../build/vcpkg_installed/x64-windows/share/proj
+    to: proj
+    filter:
+      - proj.db
+      - '**/*'
+  - from: ../../shaders
+    to: shaders
+    filter:
+      - '*.glsl'
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true

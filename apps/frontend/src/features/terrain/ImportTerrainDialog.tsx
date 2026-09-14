@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Download, FileWarning, FolderOpen, Info, MapPin, Square } from 'lucide-react'
+import { Download, FileWarning, FolderOpen, Info, MapPin, ChevronDown, X } from 'lucide-react'
 import { JobState } from '@infraforge/protocol'
 import type { EngineClient } from '../../lib/engineSession'
 import {
@@ -60,34 +60,48 @@ export function ImportTerrainDialog({ client, onClose }: ImportTerrainDialogProp
 
   return (
     <div className="dialog-overlay" role="presentation">
-      <div className="dialog" role="dialog" aria-modal="true" aria-label="Import terrain">
-        <h2>Import terrain</h2>
-
-        <div className="form-row">
-          <span className="form-label">Source</span>
-          <div className="form-inline">
-            <button
-              className={`button ${sourceMode === 'local-file' ? 'primary' : 'secondary'}`}
-              type="button"
-              onClick={() => setSourceMode('local-file')}
-            >
-              <FolderOpen size={14} /> Local File
-            </button>
-            <button
-              className={`button ${sourceMode === 'download-area' ? 'primary' : 'secondary'}`}
-              type="button"
-              onClick={() => setSourceMode('download-area')}
-            >
-              <Download size={14} /> Download Area
-            </button>
-          </div>
+      <div
+        className={`dialog dialog-terrain ${sourceMode === 'download-area' ? 'dialog-large' : ''}`}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Import terrain"
+        data-dialog-size={sourceMode === 'download-area' ? 'large' : 'compact'}
+      >
+        <div className="dialog-header">
+          <h2>Import terrain</h2>
+          <button type="button" className="dialog-close" aria-label="Close dialog" onClick={onClose}>
+            <X size={16} />
+          </button>
         </div>
 
-        {sourceMode === 'local-file' ? (
-          <LocalFileImport client={client} onClose={onClose} />
-        ) : (
-          <DownloadAreaImport client={client} onClose={onClose} />
-        )}
+        <div className="source-tabs" role="tablist" aria-label="Terrain source">
+          <button
+            className={`source-tab ${sourceMode === 'local-file' ? 'active' : ''}`}
+            type="button"
+            role="tab"
+            aria-selected={sourceMode === 'local-file'}
+            onClick={() => setSourceMode('local-file')}
+          >
+            <FolderOpen size={14} /> Local File
+          </button>
+          <button
+            className={`source-tab ${sourceMode === 'download-area' ? 'active' : ''}`}
+            type="button"
+            role="tab"
+            aria-selected={sourceMode === 'download-area'}
+            onClick={() => setSourceMode('download-area')}
+          >
+            <Download size={14} /> Download Area
+          </button>
+        </div>
+
+        <div className="dialog-body">
+          {sourceMode === 'local-file' ? (
+            <LocalFileImport client={client} onClose={onClose} />
+          ) : (
+            <DownloadAreaImport client={client} onClose={onClose} />
+          )}
+        </div>
       </div>
     </div>
   )
@@ -205,7 +219,7 @@ function LocalFileImport({ client, onClose }: { client: EngineClient; onClose: (
   return (
     <>
       <div className="form-row">
-        <span className="form-label">DEM source</span>
+        <span className="form-label">Source file</span>
         <div className="form-inline">
           <input
             className="form-input grow"
@@ -237,21 +251,49 @@ function LocalFileImport({ client, onClose }: { client: EngineClient; onClose: (
       ) : null}
 
       {probe?.source ? (
-        <div className="form-static">
-          <div>
-            <strong>CRS:</strong> {probe.crsName || probe.source.crsDefinition}
-            {probe.crsAuthority && probe.crsCode ? ` (${probe.crsAuthority}:${probe.crsCode})` : ''}
-          </div>
-          <div>
-            {probe.source.width} × {probe.source.height} pixels ·{' '}
-            {Number(probe.source.pixelSizeX).toPrecision(6)} ×{' '}
-            {Number(probe.source.pixelSizeY).toPrecision(6)} {probe.source.elevationUnit === 'metre' ? 'm' : 'units'}{' '}
-            per pixel · {probe.source.elevationUnit} elevation
-          </div>
-          <div>
-            {probe.source.sampleType} samples · {probe.source.hasNodata ? 'NoData present' : 'no NoData'} ·{' '}
-            {formatBytes(probe.source.fileBytes)} · {probe.source.format}
-          </div>
+        <div className="metadata-card">
+          <div className="metadata-card-title">Source metadata</div>
+          <dl className="metadata-grid">
+            <div className="metadata-field">
+              <dt>CRS</dt>
+              <dd>
+                {probe.crsName || probe.source.crsDefinition}
+                {probe.crsAuthority && probe.crsCode ? ` (${probe.crsAuthority}:${probe.crsCode})` : ''}
+              </dd>
+            </div>
+            <div className="metadata-field">
+              <dt>Dimensions</dt>
+              <dd>{probe.source.width} × {probe.source.height} px</dd>
+            </div>
+            <div className="metadata-field">
+              <dt>Pixel resolution</dt>
+              <dd>
+                {Number(probe.source.pixelSizeX).toPrecision(6)} ×{' '}
+                {Number(probe.source.pixelSizeY).toPrecision(6)}{' '}
+                {probe.source.elevationUnit === 'metre' ? 'm' : 'units'}/px
+              </dd>
+            </div>
+            <div className="metadata-field">
+              <dt>Elevation unit</dt>
+              <dd>{probe.source.elevationUnit}</dd>
+            </div>
+            <div className="metadata-field">
+              <dt>NoData</dt>
+              <dd>{probe.source.hasNodata ? 'present' : 'none'}</dd>
+            </div>
+            <div className="metadata-field">
+              <dt>File size</dt>
+              <dd>{formatBytes(probe.source.fileBytes)}</dd>
+            </div>
+            <div className="metadata-field">
+              <dt>Format</dt>
+              <dd>{probe.source.format}</dd>
+            </div>
+            <div className="metadata-field">
+              <dt>Sample type</dt>
+              <dd>{probe.source.sampleType}</dd>
+            </div>
+          </dl>
         </div>
       ) : null}
 
@@ -261,15 +303,15 @@ function LocalFileImport({ client, onClose }: { client: EngineClient; onClose: (
           className="form-input"
           value={displayName}
           onChange={(event) => setDisplayName(event.target.value)}
-          placeholder="Area DEM"
+          placeholder="Imported terrain"
           disabled={startedJobId !== null}
         />
       </label>
 
       {importJob && !importFinished ? (
-        <div className="form-static" aria-live="polite">
-          <div>
-            Importing — {importJob.label || 'working'} ({progressPercent}%)
+        <div className="job-progress" aria-live="polite">
+          <div className="job-progress-header">
+            <span>Importing terrain — {progressPercent}%</span>
           </div>
           <div className="progress-track" role="progressbar" aria-valuenow={progressPercent} aria-valuemin={0} aria-valuemax={100}>
             <div className="progress-fill" style={{ width: `${progressPercent}%` }} />
@@ -281,14 +323,14 @@ function LocalFileImport({ client, onClose }: { client: EngineClient; onClose: (
       ) : null}
 
       {importJob && importJob.state === JobState.COMPLETED ? (
-        <div className="form-static" role="status">
-          Import complete. The terrain dataset is registered and its render tiles are generating or present; see the
+        <div className="form-static success" role="status">
+          Terrain imported successfully. The dataset is registered and its render tiles are generating or present; see the
           Operations tab for tile-generation progress.
         </div>
       ) : null}
       {importJob && importJob.state === JobState.CANCELLED ? (
         <div className="form-error" role="alert">
-          <p>Import cancelled. No terrain data was committed to the project.</p>
+          <p>Import cancelled — no terrain was committed.</p>
         </div>
       ) : null}
       {importJob && importJob.state === JobState.FAILED ? (
@@ -309,7 +351,7 @@ function LocalFileImport({ client, onClose }: { client: EngineClient; onClose: (
           {importFinished || startedJobId !== null ? 'Close' : 'Cancel'}
         </button>
         <button className="button primary" type="submit" disabled={starting || !probe || startedJobId !== null} onClick={submit}>
-          {starting ? 'Starting…' : 'Import'}
+          {starting ? 'Starting…' : 'Import Terrain'}
         </button>
       </div>
     </>
@@ -372,13 +414,12 @@ function AttributionDisplay({ attribution }: { attribution: string }) {
   const summary = attribution.split('\n')[0] ?? attribution
   const isLong = attribution.length > 100 || attribution.includes('\n')
   return (
-    <div className="form-static form-attribution">
+    <div className="provider-attribution">
       <Info size={12} /> {summary}
       {isLong && (
         <button
           type="button"
-          className="button secondary"
-          style={{ marginLeft: '0.5rem', fontSize: '0.85em' }}
+          className="attribution-toggle"
           aria-expanded={expanded}
           aria-controls="attribution-details"
           onClick={() => setExpanded(!expanded)}
@@ -389,14 +430,7 @@ function AttributionDisplay({ attribution }: { attribution: string }) {
       {expanded && isLong && (
         <div
           id="attribution-details"
-          className="form-attribution-details"
-          style={{
-            marginTop: '0.5rem',
-            maxHeight: '150px',
-            overflowY: 'auto',
-            whiteSpace: 'pre-wrap',
-            fontSize: '0.85em',
-          }}
+          className="attribution-details"
         >
           {attribution}
         </div>
@@ -430,6 +464,8 @@ function DownloadAreaImport({ client, onClose }: { client: EngineClient; onClose
   const [formError, setFormError] = useState<string | null>(null)
   const [searchClient, setSearchClient] = useState(() => createLocationSearchClient())
   const [mapTileConfig, setMapTileConfig] = useState(() => getTerrainMapTileConfig())
+  const [showTileList, setShowTileList] = useState(false)
+  const [mapResizeToken, setMapResizeToken] = useState(0)
 
   useEffect(() => {
     let active = true
@@ -442,6 +478,11 @@ function DownloadAreaImport({ client, onClose }: { client: EngineClient; onClose
     return () => {
       active = false
     }
+  }, [])
+
+  // Refresh the Leaflet map size when this tab becomes active.
+  useEffect(() => {
+    setMapResizeToken((t) => t + 1)
   }, [])
 
   const jobs = useTerrainStore((state) => state.jobs)
@@ -632,49 +673,65 @@ function DownloadAreaImport({ client, onClose }: { client: EngineClient; onClose
     }
   }
 
+  const downloadDisabled =
+    starting ||
+    !area ||
+    selectedIndices.size === 0 ||
+    startedJobId !== null ||
+    !plan ||
+    (area !== null && !planIdentityMatches(
+      plan.identity,
+      makePlanIdentity(selectedProvider, tileSize, area),
+    )) ||
+    [...selectedIndices].some((idx) => idx < 0 || idx >= plan.selectionTiles.length)
+
+  const downloadLabel = starting
+    ? 'Starting…'
+    : selectedIndices.size > 0
+      ? `Download ${selectedIndices.size} Selected Tiles`
+      : 'Download Selected'
+
+  const selectedProviderInfo = providers.find((p) => p.providerId === selectedProvider)
+
   return (
     <>
-      <div className="form-row">
+      <div className="form-row provider-row">
         <span className="form-label">Provider</span>
-        <select
-          className="form-input"
-          value={selectedProvider}
-          onChange={(e) => {
-            setSelectedProvider(e.target.value)
-            // IMPORTANT 4: Reset selection when provider changes — the
-            // new provider may have different coverage/resolution.
-            setSelectedIndices(new Set())
-            setPlan(null)
-          }}
-          disabled={startedJobId !== null}
-        >
-          {providers.map((p) => (
-            <option key={p.providerId} value={p.providerId}>
-              {p.displayName}
-            </option>
-          ))}
-        </select>
-        {(() => {
-          const selected = providers.find((p) => p.providerId === selectedProvider)
-          if (selected && selected.attribution) {
-            return <AttributionDisplay attribution={selected.attribution} />
-          }
-          return null
-        })()}
-      </div>
-
-      <div className="form-row">
-        <span className="form-label">Working area</span>
-        <div className="form-inline">
-          {area ? (
-            <span className="form-static">
-              <MapPin size={14} /> {area.west.toFixed(4)}, {area.south.toFixed(4)} → {area.east.toFixed(4)}, {area.north.toFixed(4)}
-            </span>
-          ) : (
-            <span className="form-static">No area drawn — use the map below</span>
-          )}
+        <div className="provider-controls">
+          <select
+            className="form-input"
+            value={selectedProvider}
+            onChange={(e) => {
+              setSelectedProvider(e.target.value)
+              // IMPORTANT 4: Reset selection when provider changes — the
+              // new provider may have different coverage/resolution.
+              setSelectedIndices(new Set())
+              setPlan(null)
+            }}
+            disabled={startedJobId !== null}
+          >
+            {providers.map((p) => (
+              <option key={p.providerId} value={p.providerId}>
+                {p.displayName}
+              </option>
+            ))}
+          </select>
+          {selectedProviderInfo && selectedProviderInfo.attribution ? (
+            <AttributionDisplay attribution={selectedProviderInfo.attribution} />
+          ) : null}
         </div>
       </div>
+
+      {area ? (
+        <div className="working-area-summary" aria-live="polite">
+          <MapPin size={12} />
+          <span>Working area: {area.west.toFixed(4)}, {area.south.toFixed(4)} → {area.east.toFixed(4)}, {area.north.toFixed(4)}</span>
+        </div>
+      ) : (
+        <div className="working-area-summary empty">
+          <span>No working area drawn — use Draw Area on the map.</span>
+        </div>
+      )}
 
       {/* BLOCKER 5: Real interactive map for Download Area UX */}
       <DownloadAreaMap
@@ -698,79 +755,88 @@ function DownloadAreaImport({ client, onClose }: { client: EngineClient; onClose
         tileSize={tileSize}
         searchClient={searchClient}
         mapTileConfig={mapTileConfig}
+        resizeToken={mapResizeToken}
       />
 
-      <div className="form-row">
-        <span className="form-label">Tile size</span>
-        <select
-          className="form-input"
-          value={tileSize}
-          onChange={(e) => {
-            setTileSize(Number(e.target.value))
-            // IMPORTANT 4: Reset selection when tile size changes — old
-            // indices are invalid for the new grid.
-            setSelectedIndices(new Set())
-            setPlan(null)
-          }}
-          disabled={startedJobId !== null}
-        >
-          {TILE_SIZES.map((t) => (
-            <option key={t.value} value={t.value}>
-              {t.label}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      {plan && plan.selectionTiles.length > 0 ? (
-        <div className="form-static">
-          <div>
-            <strong>Tiles:</strong> {plan.totalTileCount} total · {plan.selectedTileCount} selected
-          </div>
-          <div>
-            <strong>Selected area:</strong> {(plan.selectedAreaSqm / 1_000_000).toFixed(3)} km²
-          </div>
-          <div>
-            <strong>Provider requests:</strong> {plan.requestCount} (deduplicated)
-          </div>
-          <div>
-            <strong>Effective resolution:</strong> {plan.effectiveResolutionMpp.toFixed(1)} m/px
-          </div>
-          <div>
-            <strong>Estimated size:</strong> {formatBytes(plan.estimatedBytes)}
-          </div>
-          {plan.warnings.length > 0 ? (
-            <div className="form-error">
-              <FileWarning size={14} /> {plan.warnings.join('; ')}
-            </div>
-          ) : null}
-          <div className="form-inline" style={{ marginTop: '0.5rem' }}>
-            <button className="button secondary" type="button" onClick={selectAll} disabled={startedJobId !== null}>
+      <div className="selection-bar">
+        <div className="selection-bar-left">
+          <label className="form-inline tile-size-control">
+            <span className="form-label">Tile size</span>
+            <select
+              className="form-input"
+              value={tileSize}
+              onChange={(e) => {
+                setTileSize(Number(e.target.value))
+                // IMPORTANT 4: Reset selection when tile size changes — old
+                // indices are invalid for the new grid.
+                setSelectedIndices(new Set())
+                setPlan(null)
+              }}
+              disabled={startedJobId !== null}
+            >
+              {TILE_SIZES.map((t) => (
+                <option key={t.value} value={t.value}>
+                  {t.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="selection-actions">
+            <button className="button secondary" type="button" onClick={selectAll} disabled={startedJobId !== null || !plan}>
               Select All
             </button>
-            <button className="button secondary" type="button" onClick={clearSelection} disabled={startedJobId !== null}>
+            <button className="button secondary" type="button" onClick={clearSelection} disabled={startedJobId !== null || selectedIndices.size === 0}>
               Clear
             </button>
           </div>
-          <div style={{ marginTop: '0.5rem', maxHeight: '200px', overflowY: 'auto' }}>
-            {plan.selectionTiles.map((tile, i) => (
-              <label key={i} className="form-inline" style={{ display: 'inline-flex', margin: '2px' }}>
-                <input
-                  type="checkbox"
-                  checked={selectedIndices.has(i)}
-                  onChange={() => toggleTile(i)}
-                  disabled={startedJobId !== null}
-                />
-                <span style={{ fontSize: '0.85em' }}>
-                  ({tile.col},{tile.row})
-                </span>
-              </label>
-            ))}
+        </div>
+        {plan && plan.selectionTiles.length > 0 ? (
+          <div className="selection-chips" role="status" aria-live="polite">
+            <span className="chip">{plan.totalTileCount} tiles</span>
+            <span className="chip">{plan.selectedTileCount} selected</span>
+            <span className="chip">{plan.requestCount} requests</span>
+            <span className="chip">~{plan.effectiveResolutionMpp.toFixed(1)} m/px</span>
+            <span className="chip">Estimated size: {formatBytes(plan.estimatedBytes)}</span>
           </div>
+        ) : null}
+      </div>
+
+      {plan && plan.warnings.length > 0 ? (
+        <div className="form-error">
+          <FileWarning size={14} /> {plan.warnings.join('; ')}
         </div>
       ) : null}
 
-      <label className="form-row">
+      {plan && plan.selectionTiles.length > 0 ? (
+        <div className="tile-list-section">
+          <button
+            type="button"
+            className="tile-list-toggle"
+            aria-expanded={showTileList}
+            onClick={() => setShowTileList((v) => !v)}
+          >
+            <ChevronDown size={12} className={showTileList ? 'expanded' : ''} />
+            {showTileList ? 'Hide' : 'Show'} tile list ({plan.selectionTiles.length})
+          </button>
+          {showTileList && (
+            <div className="tile-list">
+              {plan.selectionTiles.map((tile, i) => (
+                <label key={i} className="tile-list-item">
+                  <input
+                    type="checkbox"
+                    checked={selectedIndices.has(i)}
+                    onChange={() => toggleTile(i)}
+                    disabled={startedJobId !== null}
+                  />
+                  <span>({tile.col},{tile.row})</span>
+                </label>
+              ))}
+            </div>
+          )}
+        </div>
+      ) : null}
+
+      <label className="form-row terrain-name-row">
         <span className="form-label">Terrain name</span>
         <input
           className="form-input"
@@ -782,9 +848,9 @@ function DownloadAreaImport({ client, onClose }: { client: EngineClient; onClose
       </label>
 
       {downloadJob && !downloadFinished ? (
-        <div className="form-static" aria-live="polite">
-          <div>
-            Downloading — {downloadJob.label || 'working'} ({progressPercent}%)
+        <div className="job-progress" aria-live="polite">
+          <div className="job-progress-header">
+            <span>Downloading terrain — {progressPercent}%</span>
           </div>
           <div className="progress-track" role="progressbar" aria-valuenow={progressPercent} aria-valuemin={0} aria-valuemax={100}>
             <div className="progress-fill" style={{ width: `${progressPercent}%` }} />
@@ -796,13 +862,13 @@ function DownloadAreaImport({ client, onClose }: { client: EngineClient; onClose
       ) : null}
 
       {downloadJob && downloadJob.state === JobState.COMPLETED ? (
-        <div className="form-static" role="status">
-          Download complete. The terrain dataset is registered and its render tiles are generating.
+        <div className="form-static success" role="status">
+          Terrain downloaded successfully.
         </div>
       ) : null}
       {downloadJob && downloadJob.state === JobState.CANCELLED ? (
         <div className="form-error" role="alert">
-          <p>Download cancelled. No terrain data was committed to the project.</p>
+          <p>Download cancelled — no terrain was committed.</p>
         </div>
       ) : null}
       {downloadJob && downloadJob.state === JobState.FAILED ? (
@@ -825,24 +891,10 @@ function DownloadAreaImport({ client, onClose }: { client: EngineClient; onClose
         <button
           className="button primary"
           type="submit"
-          disabled={
-            starting ||
-            !area ||
-            selectedIndices.size === 0 ||
-            startedJobId !== null ||
-            // Finding 1: Download Selected is only enabled if a plan exists,
-            // its identity matches the current provider/area/tileSize, and
-            // the selected indices are valid for that exact plan.
-            !plan ||
-            (area !== null && !planIdentityMatches(
-              plan.identity,
-              makePlanIdentity(selectedProvider, tileSize, area),
-            )) ||
-            [...selectedIndices].some((idx) => idx < 0 || idx >= plan.selectionTiles.length)
-          }
+          disabled={downloadDisabled}
           onClick={submit}
         >
-          {starting ? 'Starting…' : 'Download Selected'}
+          {downloadLabel}
         </button>
       </div>
     </>

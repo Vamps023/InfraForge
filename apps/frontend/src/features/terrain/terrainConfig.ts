@@ -1,4 +1,4 @@
-﻿// Runtime configuration layer for terrain search and basemap services (Issue #6).
+// Runtime configuration layer for terrain search and basemap services (Issue #6).
 // Loads configuration from the desktop bridge (Electron main process), environment
 // variables, or fallbacks without requiring rebuilds.
 // Canonical project truth is never stored here; this is runtime network/service configuration.
@@ -45,11 +45,27 @@ export function setTerrainSearchConfig(config: Partial<TerrainSearchConfig>): vo
   activeSearchConfig = { ...activeSearchConfig, ...config }
 }
 
+export function isSecureTileUrl(url: string): boolean {
+  if (!url || typeof url !== 'string') return false
+  const trimmed = url.trim().toLowerCase()
+  return (
+    trimmed.startsWith('https://') ||
+    trimmed.startsWith('http://localhost') ||
+    trimmed.startsWith('http://127.0.0.1')
+  )
+}
+
 export function getTerrainMapTileConfig(): TerrainMapTileConfig {
   return activeMapTileConfig
 }
 
 export function setTerrainMapTileConfig(config: Partial<TerrainMapTileConfig>): void {
+  if (config.url && !isSecureTileUrl(config.url)) {
+    console.warn(`Ignoring insecure tile URL: ${config.url}. Map tile endpoints must use HTTPS.`)
+    const { url: _ignored, ...rest } = config
+    activeMapTileConfig = { ...activeMapTileConfig, ...rest }
+    return
+  }
   activeMapTileConfig = { ...activeMapTileConfig, ...config }
 }
 
@@ -74,9 +90,11 @@ export async function initTerrainConfig(): Promise<void> {
         }
       }
       if (desktopConfig?.mapTile) {
+        const url = desktopConfig.mapTile.url
+        const validUrl = url && isSecureTileUrl(url) ? url : activeMapTileConfig.url
         activeMapTileConfig = {
           ...activeMapTileConfig,
-          url: desktopConfig.mapTile.url || activeMapTileConfig.url,
+          url: validUrl,
           attribution: desktopConfig.mapTile.attribution || activeMapTileConfig.attribution,
           maxZoom: desktopConfig.mapTile.maxZoom ?? activeMapTileConfig.maxZoom,
         }

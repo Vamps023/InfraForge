@@ -26,6 +26,7 @@ import {
   resetTerrainConfig,
   defaultTerrainSearchConfig,
   defaultTerrainMapTileConfig,
+  isSecureTileUrl,
 } from './terrainConfig'
 
 describe('Download Area - selection grid', () => {
@@ -767,6 +768,79 @@ describe('Runtime Configuration Layer (terrainConfig)', () => {
 
     expect(getTerrainSearchConfig().endpoint).toBe(defaultTerrainSearchConfig.endpoint)
     expect(getTerrainMapTileConfig().url).toBe(defaultTerrainMapTileConfig.url)
+
+    vi.unstubAllGlobals()
+  })
+})
+
+describe('HTTPS tile URL validation (CSP regression)', () => {
+  beforeEach(() => {
+    resetTerrainConfig()
+  })
+
+  it('isSecureTileUrl accepts HTTPS endpoints', () => {
+    expect(isSecureTileUrl('https://tile.openstreetmap.org/{z}/{x}/{y}.png')).toBe(true)
+    expect(isSecureTileUrl('https://custom-tiles.example.com/{z}/{x}/{y}.png')).toBe(true)
+  })
+
+  it('isSecureTileUrl accepts localhost/loopback HTTP for local tile servers', () => {
+    expect(isSecureTileUrl('http://localhost:8080/{z}/{x}/{y}.png')).toBe(true)
+    expect(isSecureTileUrl('http://127.0.0.1:8080/{z}/{x}/{y}.png')).toBe(true)
+  })
+
+  it('isSecureTileUrl rejects plain HTTP remote endpoints', () => {
+    expect(isSecureTileUrl('http://tile.openstreetmap.org/{z}/{x}/{y}.png')).toBe(false)
+    expect(isSecureTileUrl('http://example.com/tiles/{z}/{x}/{y}.png')).toBe(false)
+  })
+
+  it('isSecureTileUrl rejects empty / non-string / garbage', () => {
+    expect(isSecureTileUrl('')).toBe(false)
+    expect(isSecureTileUrl('ftp://tiles.example.com/{z}/{x}/{y}.png')).toBe(false)
+    expect(isSecureTileUrl('javascript:alert(1)')).toBe(false)
+  })
+
+  it('setTerrainMapTileConfig ignores an insecure URL while applying other fields', () => {
+    const before = getTerrainMapTileConfig()
+    setTerrainMapTileConfig({
+      url: 'http://insecure.example.com/{z}/{x}/{y}.png',
+      attribution: 'Insecure',
+      maxZoom: 12,
+    })
+    // URL must NOT be applied.
+    expect(getTerrainMapTileConfig().url).toBe(before.url)
+    // Other fields are still applied.
+    expect(getTerrainMapTileConfig().attribution).toBe('Insecure')
+    expect(getTerrainMapTileConfig().maxZoom).toBe(12)
+  })
+
+  it('setTerrainMapTileConfig applies a secure HTTPS URL', () => {
+    setTerrainMapTileConfig({
+      url: 'https://secure.example.com/{z}/{x}/{y}.png',
+    })
+    expect(getTerrainMapTileConfig().url).toBe('https://secure.example.com/{z}/{x}/{y}.png')
+  })
+
+  it('initTerrainConfig ignores an insecure tile URL from the desktop bridge', async () => {
+    const mockGetRuntimeConfig = vi.fn().mockResolvedValue({
+      mapTile: {
+        url: 'http://insecure.example.com/{z}/{x}/{y}.png',
+        attribution: 'Insecure Bridge',
+        maxZoom: 14,
+      },
+    })
+    vi.stubGlobal('window', {
+      infraforgeDesktop: {
+        getRuntimeConfig: mockGetRuntimeConfig,
+      },
+    })
+
+    await initTerrainConfig()
+
+    // Insecure URL must fall back to the default (HTTPS) endpoint.
+    expect(getTerrainMapTileConfig().url).toBe(defaultTerrainMapTileConfig.url)
+    // Non-URL fields from the bridge are still applied.
+    expect(getTerrainMapTileConfig().attribution).toBe('Insecure Bridge')
+    expect(getTerrainMapTileConfig().maxZoom).toBe(14)
 
     vi.unstubAllGlobals()
   })

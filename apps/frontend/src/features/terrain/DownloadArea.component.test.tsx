@@ -186,7 +186,7 @@ describe('Download Area - component tests', () => {
 
     // Download Selected should be enabled after selecting a tile and entering a name.
     await user.type(screen.getByPlaceholderText('Downloaded area DEM'), 'Test DEM')
-    expect(screen.getByRole('button', { name: 'Download Selected' })).not.toBeDisabled()
+    expect(screen.getByRole('button', { name: /Download.*Selected/i })).not.toBeDisabled()
   })
 
   it('drawing Area B immediately clears plan and selection from Area A', async () => {
@@ -263,7 +263,7 @@ describe('Download Area - component tests', () => {
     })
 
     // Download Selected should be disabled (no tiles selected).
-    expect(screen.getByRole('button', { name: 'Download Selected' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /Download.*Selected/i })).toBeDisabled()
   })
 
   it('tile size change clears plan and selection', async () => {
@@ -338,7 +338,7 @@ describe('Download Area - component tests', () => {
     })
 
     // Download Selected should be disabled (selection cleared).
-    expect(screen.getByRole('button', { name: 'Download Selected' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /Download.*Selected/i })).toBeDisabled()
   })
 
   it('Download Selected sends exact current provider/area/tileSize/indices', async () => {
@@ -359,7 +359,7 @@ describe('Download Area - component tests', () => {
     await user.click(screen.getByTestId('tile-2'))
     await user.type(screen.getByPlaceholderText('Downloaded area DEM'), 'My DEM')
 
-    await user.click(screen.getByRole('button', { name: 'Download Selected' }))
+    await user.click(screen.getByRole('button', { name: /Download.*Selected/i }))
 
     await waitFor(() => {
       expect(terrainApi.downloadSelectedTerrain).toHaveBeenCalledTimes(1)
@@ -394,7 +394,7 @@ describe('Download Area - component tests', () => {
     await user.click(screen.getByTestId('tile-0'))
     await user.type(screen.getByPlaceholderText('Downloaded area DEM'), 'Test')
 
-    await user.click(screen.getByRole('button', { name: 'Download Selected' }))
+    await user.click(screen.getByRole('button', { name: /Download.*Selected/i }))
 
     await waitFor(() => {
       expect(screen.getByText(/selection_too_large/)).toBeInTheDocument()
@@ -437,5 +437,93 @@ describe('Download Area - component tests', () => {
     })
     const sizeLine = screen.getByText(/Estimated size:/).parentElement ?? screen.getByText(/Estimated size:/)
     expect(sizeLine.textContent).toContain('—')
+  })
+})
+
+describe('Download Area - dialog layout structure (Issue #6 redesign)', () => {
+  it('uses the compact dialog size for Local File and large for Download Area', async () => {
+    const user = userEvent.setup()
+    render(<ImportTerrainDialog client={client} busy={false} onClose={vi.fn()} />)
+
+    const dialog = screen.getByRole('dialog', { name: 'Import terrain' })
+    // Local File (default) is compact.
+    expect(dialog.getAttribute('data-dialog-size')).toBe('compact')
+
+    await user.click(screen.getByText('Download Area'))
+    await waitFor(() => {
+      expect(terrainApi.listTerrainSources).toHaveBeenCalled()
+    })
+    // Download Area uses the large map-first layout.
+    expect(dialog.getAttribute('data-dialog-size')).toBe('large')
+  })
+
+  it('renders a keyboard-accessible source tablist with Local File and Download Area', () => {
+    render(<ImportTerrainDialog client={client} busy={false} onClose={vi.fn()} />)
+    const tablist = screen.getByRole('tablist', { name: 'Terrain source' })
+    const tabs = tablist.querySelectorAll('[role="tab"]')
+    expect(tabs).toHaveLength(2)
+    expect(screen.getByRole('tab', { name: /Local File/i, selected: true })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: /Download Area/i, selected: false })).toBeInTheDocument()
+  })
+
+  it('renders the map region and primary action in Download Area mode', async () => {
+    const user = userEvent.setup()
+    render(<ImportTerrainDialog client={client} busy={false} onClose={vi.fn()} />)
+
+    await user.click(screen.getByText('Download Area'))
+    await waitFor(() => {
+      expect(terrainApi.listTerrainSources).toHaveBeenCalled()
+    })
+
+    // Map region (mocked) is present.
+    expect(screen.getByTestId('download-area-map-mock')).toBeInTheDocument()
+    // Primary action exists and is disabled until area + selection + name.
+    const primary = screen.getByRole('button', { name: /Download.*Selected/i })
+    expect(primary).toBeDisabled()
+  })
+
+  it('renders a compact selection summary with chips after a plan loads', async () => {
+    const user = userEvent.setup()
+    render(<ImportTerrainDialog client={client} busy={false} onClose={vi.fn()} />)
+
+    await user.click(screen.getByText('Download Area'))
+    await waitFor(() => {
+      expect(terrainApi.listTerrainSources).toHaveBeenCalled()
+    })
+
+    await user.click(screen.getByTestId('draw-area-a'))
+    await waitFor(() => {
+      expect(screen.getByTestId('tile-0')).toBeInTheDocument()
+    })
+
+    // Selection chips are present (tiles / selected / requests / resolution / size).
+    expect(screen.getByText(/tiles$/)).toBeInTheDocument()
+    expect(screen.getByText(/selected$/)).toBeInTheDocument()
+    expect(screen.getByText(/requests$/)).toBeInTheDocument()
+    expect(screen.getByText(/m\/px$/)).toBeInTheDocument()
+    expect(screen.getByText(/Estimated size:/)).toBeInTheDocument()
+  })
+
+  it('primary action label includes the selected tile count', async () => {
+    const user = userEvent.setup()
+    render(<ImportTerrainDialog client={client} busy={false} onClose={vi.fn()} />)
+
+    await user.click(screen.getByText('Download Area'))
+    await waitFor(() => {
+      expect(terrainApi.listTerrainSources).toHaveBeenCalled()
+    })
+
+    await user.click(screen.getByTestId('draw-area-a'))
+    await waitFor(() => {
+      expect(screen.getByTestId('tile-0')).toBeInTheDocument()
+    })
+
+    await user.click(screen.getByTestId('tile-0'))
+    await user.type(screen.getByPlaceholderText('Downloaded area DEM'), 'Named DEM')
+
+    const primary = screen.getByRole('button', { name: /Download.*Selected/i })
+    expect(primary).not.toBeDisabled()
+    // Label reflects the single selected tile.
+    expect(primary.textContent).toMatch(/Download 1 Selected Tiles/i)
   })
 })

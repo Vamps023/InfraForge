@@ -51,6 +51,7 @@ add_library(infraforge_core STATIC
     src/domain/road/AlignmentPrimitives.cpp
     src/domain/road/ReferenceAlignment.cpp
     src/domain/road/RoadTypes.cpp
+    src/domain/road/VerticalProfiles.cpp
     src/domain/world/ChunkGrid.cpp
     src/domain/world/ChunkResidency.cpp
     src/domain/world/Invalidation.cpp

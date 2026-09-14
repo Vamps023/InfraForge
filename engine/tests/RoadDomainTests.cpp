@@ -3,6 +3,7 @@
 #include "infraforge/domain/road/AlignmentPrimitives.hpp"
 #include "infraforge/domain/road/ReferenceAlignment.hpp"
 #include "infraforge/domain/road/RoadTypes.hpp"
+#include "infraforge/domain/road/VerticalProfiles.hpp"
 
 #include <cmath>
 #include <limits>
@@ -450,6 +451,84 @@ TEST_CASE("invalid segment parameters are reported before continuity") {
     auto built = ReferenceAlignment::build({bad});
     REQUIRE_FALSE(built.has_value());
     CHECK(built.error().front().code == infraforge::domain::road::RoadErrorCode::DegenerateSegment);
+}
+
+} // TEST_SUITE
+
+TEST_SUITE("road vertical profiles") {
+
+using infraforge::domain::road::ElevationProfile;
+using infraforge::domain::road::SuperelevationProfile;
+using infraforge::domain::road::ProfileBreakpoint;
+using infraforge::domain::road::buildElevationProfile;
+using infraforge::domain::road::buildSuperelevationProfile;
+
+TEST_CASE("empty elevation profile evaluates to zero everywhere") {
+    ElevationProfile profile;
+    CHECK(profile.isEmpty());
+    CHECK(profile.evaluate(0.0) == doctest::Approx(0.0));
+    CHECK(profile.evaluate(100.0) == doctest::Approx(0.0));
+}
+
+TEST_CASE("elevation profile interpolates linearly between breakpoints") {
+    auto built = buildElevationProfile({{0.0, 100.0}, {100.0, 110.0}, {200.0, 108.0}});
+    REQUIRE(built.has_value());
+    const auto& profile = *built;
+    CHECK(profile.evaluate(0.0) == doctest::Approx(100.0));
+    CHECK(profile.evaluate(50.0) == doctest::Approx(105.0));
+    CHECK(profile.evaluate(100.0) == doctest::Approx(110.0));
+    CHECK(profile.evaluate(150.0) == doctest::Approx(109.0));
+    CHECK(profile.evaluate(200.0) == doctest::Approx(108.0));
+}
+
+TEST_CASE("elevation profile holds constant value outside breakpoint range") {
+    auto built = buildElevationProfile({{50.0, 200.0}, {150.0, 210.0}});
+    REQUIRE(built.has_value());
+    const auto& profile = *built;
+    CHECK(profile.evaluate(0.0) == doctest::Approx(200.0));   // before first -> first value
+    CHECK(profile.evaluate(250.0) == doctest::Approx(210.0)); // after last -> last value
+}
+
+TEST_CASE("elevation profile with single breakpoint holds constant") {
+    auto built = buildElevationProfile({{0.0, 50.0}});
+    REQUIRE(built.has_value());
+    const auto& profile = *built;
+    CHECK(profile.evaluate(0.0) == doctest::Approx(50.0));
+    CHECK(profile.evaluate(1000.0) == doctest::Approx(50.0));
+}
+
+TEST_CASE("elevation profile rejects non-finite breakpoints") {
+    auto built = buildElevationProfile({{0.0, std::nan("")}, {100.0, 10.0}});
+    REQUIRE_FALSE(built.has_value());
+    CHECK(built.error().code == infraforge::domain::road::RoadErrorCode::NonFiniteParameter);
+}
+
+TEST_CASE("elevation profile rejects non-increasing stations") {
+    auto built = buildElevationProfile({{100.0, 10.0}, {100.0, 20.0}});
+    REQUIRE_FALSE(built.has_value());
+    CHECK(built.error().code == infraforge::domain::road::RoadErrorCode::InvalidProfile);
+
+    auto built2 = buildElevationProfile({{100.0, 10.0}, {50.0, 20.0}});
+    REQUIRE_FALSE(built2.has_value());
+    CHECK(built2.error().code == infraforge::domain::road::RoadErrorCode::InvalidProfile);
+}
+
+TEST_CASE("superelevation profile evaluates by station") {
+    auto built = buildSuperelevationProfile({{0.0, 0.0}, {50.0, 0.05}, {100.0, 0.05}, {150.0, 0.0}});
+    REQUIRE(built.has_value());
+    const auto& profile = *built;
+    CHECK(profile.evaluate(0.0) == doctest::Approx(0.0));
+    CHECK(profile.evaluate(25.0) == doctest::Approx(0.025));
+    CHECK(profile.evaluate(75.0) == doctest::Approx(0.05));
+    CHECK(profile.evaluate(125.0) == doctest::Approx(0.025));
+    CHECK(profile.evaluate(150.0) == doctest::Approx(0.0));
+}
+
+TEST_CASE("superelevation profile is independent of terrain") {
+    // A road can have a superelevation profile with no terrain in the project.
+    auto built = buildSuperelevationProfile({{0.0, 0.0}, {100.0, 0.08}});
+    REQUIRE(built.has_value());
+    CHECK(built->evaluate(50.0) == doctest::Approx(0.04));
 }
 
 } // TEST_SUITE

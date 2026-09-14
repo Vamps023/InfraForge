@@ -1,6 +1,6 @@
 #include "infraforge/viewport/renderer/GridPass.hpp"
 
-#include <GridShaderSource.h>
+#include <ViewportShaderSource.h>
 
 #include <array>
 #include <cmath>
@@ -218,6 +218,14 @@ void GridPass::createPipeline() {
     multisample.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
     multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
 
+    VkPipelineDepthStencilStateCreateInfo depthStencil{};
+    depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    depthStencil.depthTestEnable = VK_TRUE;
+    depthStencil.depthWriteEnable = VK_FALSE;
+    depthStencil.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+    depthStencil.minDepthBounds = 0.0F;
+    depthStencil.maxDepthBounds = 1.0F;
+
     VkPipelineColorBlendAttachmentState blendAttachment{};
     blendAttachment.blendEnable = VK_FALSE;
     blendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT
@@ -244,6 +252,7 @@ void GridPass::createPipeline() {
     pipelineInfo.pViewportState = &viewportState;
     pipelineInfo.pRasterizationState = &rasterization;
     pipelineInfo.pMultisampleState = &multisample;
+    pipelineInfo.pDepthStencilState = &depthStencil;
     pipelineInfo.pColorBlendState = &colorBlend;
     pipelineInfo.pDynamicState = &dynamicState;
     pipelineInfo.layout = pipelineLayout_.get();
@@ -385,26 +394,9 @@ void GridPass::destroy() {
     device_ = VK_NULL_HANDLE;
 }
 
-void GridPass::recordFrame(
+void GridPass::record(
     const VkCommandBuffer commandBuffer,
-    const VkFramebuffer framebuffer,
-    const GridCamera& camera) const {
-    constexpr std::array<float, 4> kClearColor = {0.051F, 0.063F, 0.078F, 1.0F}; // #0d1014
-
-    VkRenderPassBeginInfo passBegin{};
-    passBegin.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-    passBegin.renderPass = renderPass_;
-    passBegin.framebuffer = framebuffer;
-    passBegin.renderArea.offset = VkOffset2D{0, 0};
-    passBegin.renderArea.extent = VkExtent2D{
-        static_cast<std::uint32_t>(camera.viewportWidth()),
-        static_cast<std::uint32_t>(camera.viewportHeight())};
-    passBegin.clearValueCount = 1;
-    VkClearValue clear{};
-    clear.color = VkClearColorValue{{kClearColor[0], kClearColor[1], kClearColor[2], kClearColor[3]}};
-    passBegin.pClearValues = &clear;
-
-    vkCmdBeginRenderPass(commandBuffer, &passBegin, VK_SUBPASS_CONTENTS_INLINE);
+    const EditorCamera& camera) const {
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_.get());
 
     const VkViewport viewport{
@@ -430,7 +422,6 @@ void GridPass::recordFrame(
     const VkBuffer vertexBufferHandle = vertexBuffer_.get();
     vkCmdBindVertexBuffers(commandBuffer, 0, 1, &vertexBufferHandle, &offset);
     vkCmdDraw(commandBuffer, static_cast<std::uint32_t>(vertexCount_), 1, 0, 0);
-    vkCmdEndRenderPass(commandBuffer);
 }
 
 } // namespace infraforge::viewport

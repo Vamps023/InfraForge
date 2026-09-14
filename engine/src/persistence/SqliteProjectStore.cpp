@@ -1,5 +1,7 @@
 #include "infraforge/persistence/SqliteProjectStore.hpp"
 
+#include "infraforge/domain/terrain/TerrainDataset.hpp"
+#include "infraforge/domain/terrain/TerrainTypes.hpp"
 #include "infraforge/persistence/ProjectManifest.hpp"
 #include "infraforge/runtime/FileSystemUtf8.hpp"
 #include "infraforge/runtime/Logging.hpp"
@@ -7,7 +9,10 @@
 #include "infraforge/runtime/Uuid.hpp"
 #include "infraforge/version.hpp"
 
+#include <nlohmann/json.hpp>
+
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <stdexcept>
 #include <string>
@@ -472,6 +477,252 @@ void SqliteProjectStore::closeImpl() {
     connection_.reset();
     record_ = {};
     directory_.clear();
+}
+
+std::vector<domain::terrain::TerrainDataset> SqliteProjectStore::terrainDatasets() const {
+    return withinStoreBoundary([&] { return terrainDatasetsImpl(); });
+}
+
+ports::TerrainDatasetInsertResult SqliteProjectStore::insertTerrainDataset(
+    const domain::terrain::TerrainDataset& dataset) {
+    return withinStoreBoundary([&] { return insertTerrainDatasetImpl(dataset); });
+}
+
+void SqliteProjectStore::removeTerrainDataset(const std::string& datasetId) {
+    withinStoreBoundary([&] { removeTerrainDatasetImpl(datasetId); });
+}
+
+void SqliteProjectStore::removeTerrainDatasetImpl(const std::string& datasetId) {
+    if (!connection_.has_value()) {
+        throw std::logic_error("cannot remove a terrain dataset without an open project session");
+    }
+    const std::string modifiedAt = runtime::utcTimestampNow();
+    {
+        SqliteTransaction transaction{*connection_};
+        SqliteStatement remove{*connection_,
+            "DELETE FROM terrain_datasets WHERE id = ?"};
+        remove.bindText(1, datasetId);
+        (void)remove.step();
+        if (connection_->lastChanges() != 1) {
+            fail(ports::StoreErrorCategory::NotFound,
+                "terrain dataset row not found for rollback: " + datasetId);
+        }
+        SqliteStatement state{*connection_,
+            "UPDATE project_state SET revision = revision + 1, modified_at = ? WHERE id = 1"};
+        state.bindText(1, modifiedAt);
+        (void)state.step();
+        if (connection_->lastChanges() != 1) {
+            fail(ports::StoreErrorCategory::PersistenceFailure,
+                "project_state row went missing during terrain dataset remove (corrupt project database)");
+        }
+        transaction.commit();
+    }
+    record_.revision += 1;
+    record_.modifiedAt = modifiedAt;
+}
+
+std::vector<domain::terrain::TerrainDataset> SqliteProjectStore::terrainDatasetsImpl() const {
+    if (!connection_.has_value()) {
+        throw std::logic_error("cannot read terrain datasets without an open project session");
+    }
+
+    std::vector<domain::terrain::TerrainDataset> datasets;
+    SqliteStatement rows{*connection_,
+        "SELECT id, display_name, storage_path, source_format, source_crs, raster_width, raster_height, "
+        "origin_x, origin_y, cell_size_x, cell_size_y, elevation_unit, elevation_unit_to_metre, "
+        "has_nodata, nodata_value, min_z, max_z, bounds_east, bounds_west, bounds_north, bounds_south, "
+        "source_sha256, source_bytes, revision, diagnostics, created_at, modified_at, source_attribution, "
+        "horizontal_unit_name, horizontal_unit_symbol, horizontal_unit_is_angular, elevation_unit_source, sample_scale, sample_offset "
+        "FROM terrain_datasets ORDER BY created_at, id"};
+    while (rows.step()) {
+        domain::terrain::TerrainDataset dataset;
+        dataset.id = domain::terrain::entityIdFromUuidText(std::string{rows.columnText(0)});
+        dataset.displayName = std::string{rows.columnText(1)};
+        dataset.storagePath = std::string{rows.columnText(2)};
+        dataset.sourceFormat = std::string{rows.columnText(3)};
+        dataset.sourceCrs = std::string{rows.columnText(4)};
+        dataset.rasterWidth = rows.columnInt64(5);
+        dataset.rasterHeight = rows.columnInt64(6);
+        dataset.originX = rows.columnDouble(7);
+        dataset.originY = rows.columnDouble(8);
+        dataset.cellSizeX = rows.columnDouble(9);
+        dataset.cellSizeY = rows.columnDouble(10);
+        dataset.elevationUnit = std::string{rows.columnText(11)};
+        dataset.elevationUnitToMetre = rows.columnDouble(12);
+        dataset.hasNodata = rows.columnInt64(13) != 0;
+        dataset.nodataValue = rows.columnDouble(14);
+        dataset.minZ = rows.columnDouble(15);
+        dataset.maxZ = rows.columnDouble(16);
+        dataset.bounds = domain::world::SpatialBounds::ofEdges(
+            rows.columnDouble(18) /* west */, rows.columnDouble(20) /* south */,
+            rows.columnDouble(17) /* east */, rows.columnDouble(19) /* north */);
+        dataset.sourceSha256 = std::string{rows.columnText(21)};
+        dataset.sourceBytes = static_cast<std::uint64_t>(rows.columnInt64(22));
+        dataset.revision = static_cast<std::uint64_t>(rows.columnInt64(23));
+        dataset.createdAt = std::string{rows.columnText(25)};
+        dataset.modifiedAt = std::string{rows.columnText(26)};
+        dataset.sourceAttribution = std::string{rows.columnText(27)};
+        dataset.horizontalUnitName = std::string{rows.columnText(28)};
+        dataset.horizontalUnitSymbol = std::string{rows.columnText(29)};
+        dataset.horizontalUnitIsAngular = rows.columnInt64(30) != 0;
+        dataset.elevationUnitSource = std::string{rows.columnText(31)};
+        dataset.sampleScale = rows.columnDouble(32);
+        dataset.sampleOffset = rows.columnDouble(33);
+
+        // Stored diagnostics are a JSON array of {code, message}; unknown
+        // code text means a corrupt row, not an ignorable warning.
+        const auto parsed = nlohmann::json::parse(std::string{rows.columnText(24)}, nullptr, false);
+        if (parsed.is_discarded() || !parsed.is_array()) {
+            fail(ports::StoreErrorCategory::PersistenceFailure,
+                "terrain dataset diagnostics are not valid JSON (corrupt project database)");
+        }
+        for (const auto& entry : parsed) {
+            if (!entry.is_object() || !entry.contains("code") || !entry.contains("message")
+                || !entry["code"].is_string() || !entry["message"].is_string()) {
+                fail(ports::StoreErrorCategory::PersistenceFailure,
+                    "terrain dataset diagnostic entry is malformed (corrupt project database)");
+            }
+            const auto code = domain::terrain::terrainErrorCodeFromName(entry["code"].get<std::string>());
+            if (!code.has_value()) {
+                fail(ports::StoreErrorCategory::PersistenceFailure,
+                    "terrain dataset diagnostic code is not recognized (corrupt project database)");
+            }
+            dataset.diagnostics.push_back(
+                {*code, entry["message"].get<std::string>()});
+        }
+
+        if (const auto validationError = domain::terrain::validateTerrainDataset(dataset);
+            validationError.has_value()) {
+            fail(ports::StoreErrorCategory::PersistenceFailure,
+                "persisted terrain dataset failed validation: " + *validationError
+                    + " (corrupt project database)");
+        }
+
+        // BLOCKER 6: Load canonical coverage pieces for sparse/disconnected
+        // terrain. If the table has no rows for this dataset, coveragePieces
+        // stays empty and the enclosing bounds is used (legacy behavior for
+        // projects created before migration 5).
+        {
+            SqliteStatement pieces{*connection_,
+                "SELECT min_easting, min_northing, max_easting, max_northing "
+                "FROM terrain_dataset_coverage WHERE dataset_id = ? "
+                "ORDER BY piece_index"};
+            pieces.bindText(1, domain::terrain::uuidTextFromEntityId(dataset.id));
+            while (pieces.step()) {
+                dataset.coveragePieces.push_back(domain::world::SpatialBounds::ofEdges(
+                    pieces.columnDouble(0), pieces.columnDouble(1),
+                    pieces.columnDouble(2), pieces.columnDouble(3)));
+            }
+        }
+
+        datasets.push_back(std::move(dataset));
+    }
+    return datasets;
+}
+
+ports::TerrainDatasetInsertResult SqliteProjectStore::insertTerrainDatasetImpl(
+    const domain::terrain::TerrainDataset& dataset) {
+    if (!connection_.has_value()) {
+        throw std::logic_error("cannot insert a terrain dataset without an open project session");
+    }
+    if (const auto validationError = domain::terrain::validateTerrainDataset(dataset);
+        validationError.has_value()) {
+        fail(ports::StoreErrorCategory::PersistenceFailure,
+            "terrain dataset failed validation: " + *validationError);
+    }
+
+    // Diagnostics serialize as a JSON array with stable code names.
+    nlohmann::json diagnosticsJson = nlohmann::json::array();
+    for (const domain::terrain::TerrainDiagnostic& diagnostic : dataset.diagnostics) {
+        diagnosticsJson.push_back({
+            {"code", std::string{domain::terrain::terrainErrorCodeName(diagnostic.code)}},
+            {"message", diagnostic.message},
+        });
+    }
+
+    const std::string modifiedAt = runtime::utcTimestampNow();
+    {
+        SqliteTransaction transaction{*connection_};
+
+        SqliteStatement insert{*connection_,
+            "INSERT INTO terrain_datasets "
+            "(id, display_name, storage_path, source_format, source_crs, raster_width, raster_height, "
+            "origin_x, origin_y, cell_size_x, cell_size_y, elevation_unit, elevation_unit_to_metre, "
+            "has_nodata, nodata_value, min_z, max_z, bounds_east, bounds_west, bounds_north, bounds_south, "
+            "source_sha256, source_bytes, revision, diagnostics, created_at, modified_at, source_attribution, "
+            "horizontal_unit_name, horizontal_unit_symbol, horizontal_unit_is_angular, elevation_unit_source, sample_scale, sample_offset) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"};
+        insert.bindText(1, domain::terrain::uuidTextFromEntityId(dataset.id));
+        insert.bindText(2, dataset.displayName);
+        insert.bindText(3, dataset.storagePath);
+        insert.bindText(4, dataset.sourceFormat);
+        insert.bindText(5, dataset.sourceCrs);
+        insert.bindInt64(6, dataset.rasterWidth);
+        insert.bindInt64(7, dataset.rasterHeight);
+        insert.bindDouble(8, dataset.originX);
+        insert.bindDouble(9, dataset.originY);
+        insert.bindDouble(10, dataset.cellSizeX);
+        insert.bindDouble(11, dataset.cellSizeY);
+        insert.bindText(12, dataset.elevationUnit);
+        insert.bindDouble(13, dataset.elevationUnitToMetre);
+        insert.bindInt64(14, dataset.hasNodata ? 1 : 0);
+        insert.bindDouble(15, dataset.nodataValue);
+        insert.bindDouble(16, dataset.minZ);
+        insert.bindDouble(17, dataset.maxZ);
+        insert.bindDouble(18, dataset.bounds.maxEasting);
+        insert.bindDouble(19, dataset.bounds.minEasting);
+        insert.bindDouble(20, dataset.bounds.maxNorthing);
+        insert.bindDouble(21, dataset.bounds.minNorthing);
+        insert.bindText(22, dataset.sourceSha256);
+        insert.bindInt64(23, static_cast<std::int64_t>(dataset.sourceBytes));
+        insert.bindInt64(24, static_cast<std::int64_t>(dataset.revision));
+        insert.bindText(25, diagnosticsJson.dump());
+        insert.bindText(26, dataset.createdAt);
+        insert.bindText(27, dataset.modifiedAt);
+        insert.bindText(28, dataset.sourceAttribution);
+        insert.bindText(29, dataset.horizontalUnitName);
+        insert.bindText(30, dataset.horizontalUnitSymbol);
+        insert.bindInt64(31, dataset.horizontalUnitIsAngular ? 1 : 0);
+        insert.bindText(32, dataset.elevationUnitSource);
+        insert.bindDouble(33, dataset.sampleScale);
+        insert.bindDouble(34, dataset.sampleOffset);
+        (void)insert.step();
+
+        // BLOCKER 6: Persist canonical coverage pieces so sparse/disconnected
+        // terrain coverage survives save/reopen. Each piece is a project-global
+        // rectangle. Local imports have one piece; remote sparse imports have
+        // one piece per selected application tile.
+        if (!dataset.coveragePieces.empty()) {
+            for (std::size_t i = 0; i < dataset.coveragePieces.size(); ++i) {
+                const auto& piece = dataset.coveragePieces[i];
+                SqliteStatement pieceStmt{*connection_,
+                    "INSERT INTO terrain_dataset_coverage "
+                    "(dataset_id, piece_index, min_easting, min_northing, max_easting, max_northing) "
+                    "VALUES (?, ?, ?, ?, ?, ?)"};
+                pieceStmt.bindText(1, domain::terrain::uuidTextFromEntityId(dataset.id));
+                pieceStmt.bindInt64(2, static_cast<std::int64_t>(i));
+                pieceStmt.bindDouble(3, piece.minEasting);
+                pieceStmt.bindDouble(4, piece.minNorthing);
+                pieceStmt.bindDouble(5, piece.maxEasting);
+                pieceStmt.bindDouble(6, piece.maxNorthing);
+                (void)pieceStmt.step();
+            }
+        }
+
+        SqliteStatement state{*connection_,
+            "UPDATE project_state SET revision = revision + 1, modified_at = ? WHERE id = 1"};
+        state.bindText(1, modifiedAt);
+        (void)state.step();
+        if (connection_->lastChanges() != 1) {
+            fail(ports::StoreErrorCategory::PersistenceFailure,
+                "project_state row went missing during terrain dataset insert (corrupt project database)");
+        }
+        transaction.commit();
+    }
+
+    record_.revision += 1;
+    record_.modifiedAt = modifiedAt;
+    return {.record = record_, .dataset = dataset};
 }
 
 ProjectRecord SqliteProjectStore::readRecord(const SqliteConnection& connection) const {

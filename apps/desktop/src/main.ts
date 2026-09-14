@@ -1,9 +1,14 @@
-import { app, BrowserWindow, dialog, ipcMain, screen } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, screen, session, shell } from 'electron'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
+import fs from 'node:fs'
+import os from 'node:os'
 import { EngineSupervisor } from './EngineSupervisor.js'
 import { ViewportSupervisor, type ViewportPlacement } from './ViewportSupervisor.js'
 import { planViewportVisibility } from './ViewportVisibilityPolicy.js'
+import { loadAppRuntimeConfig } from './AppConfig.js'
+import { GeocoderService } from './GeocoderService.js'
+import { resolveNativeExecutable } from './NativeExecutableResolver.js'
 
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url))
 let engineSupervisor: EngineSupervisor | null = null
@@ -45,16 +50,16 @@ function isValidBoundsPayload(payload: unknown): payload is ViewportBoundsPayloa
 function computePlacement(window: BrowserWindow, payload: ViewportBoundsPayload): ViewportPlacement {
   const contentBounds = window.getContentBounds()
   const screenRect = screen.dipToScreenRect(window, {
-    x: contentBounds.x + payload.rect.x,
-    y: contentBounds.y + payload.rect.y,
-    width: payload.rect.width,
-    height: payload.rect.height,
+    x: Math.round(contentBounds.x + payload.rect.x),
+    y: Math.round(contentBounds.y + payload.rect.y),
+    width: Math.max(1, Math.round(payload.rect.width)),
+    height: Math.max(1, Math.round(payload.rect.height)),
   })
   return {
-    screenX: screenRect.x,
-    screenY: screenRect.y,
-    width: screenRect.width,
-    height: screenRect.height,
+    screenX: Math.round(screenRect.x),
+    screenY: Math.round(screenRect.y),
+    width: Math.max(1, Math.round(screenRect.width)),
+    height: Math.max(1, Math.round(screenRect.height)),
     dpiScale: payload.dpiScale,
   }
 }
@@ -158,7 +163,14 @@ function createMainWindow(): BrowserWindow {
       throw new Error('INFRAFORGE_FRONTEND_URL must target localhost during development')
     }
     void window.loadURL(parsed.toString())
+  } else if (app.isPackaged) {
+    // Packaged build: frontend is staged as extraResources at
+    // resources/frontend/dist/index.html (outside app.asar).
+    const frontendPath = path.join(process.resourcesPath, 'frontend', 'dist', 'index.html')
+    void window.loadFile(frontendPath)
   } else {
+    // Source-tree development: frontend dist sits alongside the desktop
+    // workspace under apps/frontend/dist.
     const frontendPath = path.resolve(currentDirectory, '../../frontend/dist/index.html')
     void window.loadFile(frontendPath)
   }
@@ -171,6 +183,96 @@ app.whenReady().then(async () => {
   await engineSupervisor.start()
 
   viewportSupervisor = new ViewportSupervisor()
+
+  const runtimeConfig = loadAppRuntimeConfig()
+  const geocoderService = new GeocoderService(runtimeConfig.geocoder)
+
+  const tileProbeUrl = runtimeConfig.mapTiles.url
+    .replace('{z}', '0').replace('{x}', '0').replace('{y}', '0')
+  const tileOrigin = new URL(tileProbeUrl)
+  const tileRequestFilter = { urls: [`${tileOrigin.protocol}//${tileOrigin.host}/*`] }
+  const publishTileDiagnostic = (payload: Record<string, unknown>) => {
+    console.info('[InfraForge map tile]', JSON.stringify(payload))
+    for (const browserWindow of BrowserWindow.getAllWindows()) {
+      if (!browserWindow.isDestroyed()) browserWindow.webContents.send('map-tile:diagnostic', payload)
+    }
+  }
+
+  // Configure Electron session User-Agent to satisfy OSM/Nominatim policy
+  session.defaultSession.setUserAgent(runtimeConfig.mapTiles.userAgent)
+  session.defaultSession.webRequest.onBeforeSendHeaders(
+    tileRequestFilter,
+    (details, callback) => {
+      details.requestHeaders['User-Agent'] = runtimeConfig.mapTiles.userAgent
+      callback({ requestHeaders: details.requestHeaders })
+    },
+  )
+  session.defaultSession.webRequest.onBeforeRequest(tileRequestFilter, (details, callback) => {
+    publishTileDiagnostic({ state: 'started', url: details.url, method: details.method, resourceType: details.resourceType })
+    callback({})
+  })
+  session.defaultSession.webRequest.onCompleted(tileRequestFilter, (details) => {
+    publishTileDiagnostic({ state: 'completed', url: details.url, statusCode: details.statusCode, resourceType: details.resourceType })
+  })
+  session.defaultSession.webRequest.onErrorOccurred(tileRequestFilter, (details) => {
+    publishTileDiagnostic({ state: 'failed', url: details.url, error: details.error, resourceType: details.resourceType })
+  })
+
+  ipcMain.handle('app:get-runtime-config', () => runtimeConfig)
+
+  // v0.1 diagnostics: collects build identity, resolved native paths, and
+  // runtime versions so support sessions can identify the exact environment
+  // without asking the user to run terminal commands.
+  ipcMain.handle('app:get-diagnostics', async () => {
+    const enginePath = await resolveNativeExecutable('engine').catch(() => null)
+    const viewportPath = await resolveNativeExecutable('viewport').catch(() => null)
+    const resourcesPath = process.resourcesPath ?? null
+    const projDataCandidates = [
+      enginePath ? path.join(path.dirname(enginePath), 'share', 'proj') : null,
+      enginePath ? path.join(path.dirname(enginePath), '..', 'share', 'proj') : null,
+      resourcesPath ? path.join(resourcesPath, 'share', 'proj') : null,
+    ].filter((candidate): candidate is string => candidate !== null)
+    const projDataPath = projDataCandidates.find((candidate) => {
+      try {
+        return fs.existsSync(path.join(candidate, 'proj.db'))
+      } catch {
+        return false
+      }
+    }) ?? null
+    return {
+      appVersion: app.getVersion(),
+      buildSha: process.env.INFRAFORGE_BUILD_SHA || process.env.GITHUB_SHA || 'unknown',
+      electronVersion: process.versions.electron,
+      chromeVersion: process.versions.chrome,
+      nodeVersion: process.versions.node,
+      platform: process.platform,
+      arch: process.arch,
+      isPackaged: app.isPackaged,
+      enginePath,
+      viewportPath,
+      projDataPath,
+      resourcesPath,
+      logPath: app.getPath('logs'),
+      userDataPath: app.getPath('userData'),
+    }
+  })
+
+  ipcMain.handle('app:open-logs', async () => {
+    const logPath = app.getPath('logs')
+    try {
+      if (!fs.existsSync(logPath)) {
+        fs.mkdirSync(logPath, { recursive: true })
+      }
+      await shell.openPath(logPath)
+      return true
+    } catch {
+      return false
+    }
+  })
+
+  ipcMain.handle('geocoder:search', async (_event, query: unknown) => {
+    return geocoderService.search(query)
+  })
 
   ipcMain.handle('engine:get-bootstrap', () => engineSupervisor?.snapshot() ?? {
     state: 'failed',
@@ -186,6 +288,37 @@ app.whenReady().then(async () => {
         title: typeof options?.title === 'string' ? options.title : 'Select a directory',
         buttonLabel: typeof options?.buttonLabel === 'string' ? options.buttonLabel : undefined,
         properties: ['openDirectory', 'createDirectory', 'dontAddToRecent'] as Array<'openDirectory' | 'createDirectory' | 'dontAddToRecent'>,
+      }
+      const ownerWindow = BrowserWindow.fromWebContents(event.sender)
+      const result = ownerWindow
+        ? await dialog.showOpenDialog(ownerWindow, dialogOptions)
+        : await dialog.showOpenDialog(dialogOptions)
+      if (result.canceled || result.filePaths.length !== 1) {
+        return null
+      }
+      return result.filePaths[0] ?? null
+    },
+  )
+
+  // OS file dialog for terrain/DEM sources. The engine validates content;
+  // the shell only narrows the picker to raster extensions.
+  ipcMain.handle(
+    'dialog:pick-file',
+    async (event, options: { title?: unknown; filters?: unknown }) => {
+      const rawFilters = Array.isArray(options?.filters) ? options.filters : []
+      const filters = rawFilters
+        .filter((entry): entry is { name?: unknown; extensions?: unknown } => typeof entry === 'object' && entry !== null)
+        .map((entry) => ({
+          name: typeof entry.name === 'string' ? entry.name : 'Files',
+          extensions: Array.isArray(entry.extensions)
+            ? entry.extensions.filter((value): value is string => typeof value === 'string')
+            : [],
+        }))
+        .filter((entry) => entry.extensions.length > 0)
+      const dialogOptions = {
+        title: typeof options?.title === 'string' ? options.title : 'Select a file',
+        filters: filters.length > 0 ? filters : undefined,
+        properties: ['openFile', 'dontAddToRecent'] as Array<'openFile' | 'dontAddToRecent'>,
       }
       const ownerWindow = BrowserWindow.fromWebContents(event.sender)
       const result = ownerWindow
@@ -240,7 +373,88 @@ app.whenReady().then(async () => {
     applyViewportVisibilityPlan(window)
   })
 
+  // Terrain scene projection forwarding (engine -> frontend -> viewport).
+  // The payload is validated as a bounded plain object and passed through;
+  // the viewport validates the tile files themselves.
+  ipcMain.on('viewport:scene', (_event, scene: unknown) => {
+    if (
+      viewportSupervisor === null ||
+      typeof scene !== 'object' ||
+      scene === null ||
+      Array.isArray(scene)
+    ) {
+      return
+    }
+    const record = scene as Record<string, unknown>
+    if (!Array.isArray(record.tiles)) {
+      return
+    }
+    viewportSupervisor.sendScene(record)
+  })
+
+  ipcMain.on('viewport:camera', (_event, action: unknown, datasetUuid: unknown) => {
+    if (
+      viewportSupervisor === null ||
+      (action !== 'focus-terrain' && action !== 'frame-all' && action !== 'perspective' && action !== 'top')
+    ) {
+      return
+    }
+    if (action === 'focus-terrain') {
+      if (typeof datasetUuid !== 'string' || datasetUuid.length === 0 || datasetUuid.length > 128) return
+      viewportSupervisor.sendCameraAction(action, datasetUuid)
+      return
+    }
+    viewportSupervisor.sendCameraAction(action)
+  })
+
   createMainWindow()
+
+  // v0.1 Help menu: Open Logs and Diagnostics so users can provide debug info
+  // without a terminal. The menu is minimal — only Help — to avoid clashing
+  // with the renderer's own keyboard shortcuts and context menus.
+  const helpMenu = Menu.buildFromTemplate([
+    {
+      label: 'Help',
+      submenu: [
+        {
+          label: 'Open Logs Folder',
+          click: () => {
+            const logPath = app.getPath('logs')
+            try {
+              if (!fs.existsSync(logPath)) {
+                fs.mkdirSync(logPath, { recursive: true })
+              }
+              void shell.openPath(logPath)
+            } catch {
+              // best-effort; ignore if the folder cannot be opened
+            }
+          },
+        },
+        {
+          label: 'Diagnostics',
+          click: () => {
+            for (const browserWindow of BrowserWindow.getAllWindows()) {
+              if (!browserWindow.isDestroyed()) {
+                browserWindow.webContents.send('menu:diagnostics')
+              }
+            }
+          },
+        },
+        { type: 'separator' },
+        {
+          label: `About InfraForge ${app.getVersion()}`,
+          click: () => {
+            for (const browserWindow of BrowserWindow.getAllWindows()) {
+              if (!browserWindow.isDestroyed()) {
+                browserWindow.webContents.send('menu:diagnostics')
+              }
+            }
+          },
+        },
+      ],
+    },
+  ])
+  Menu.setApplicationMenu(helpMenu)
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

@@ -1,8 +1,8 @@
 #version 450
 
 // Grid pass vertex shader: world-XY line vertices to clip space through the
-// orthographic camera push constant. Y grows downward on screen (window
-// space) per the camera convention.
+// shared editor camera push constant. The grid lies on the Z-up reference
+// plane and therefore recedes naturally in perspective mode.
 
 layout(push_constant) uniform PushBlock {
     layout(offset = 0) mat4 viewProj;

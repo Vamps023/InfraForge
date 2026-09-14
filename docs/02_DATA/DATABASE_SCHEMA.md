@@ -15,10 +15,11 @@ SQLite is the canonical structured-data store for a project.
 |---|---|---|---|
 | 1 | `core project foundation` | Active (v1) | `project_state` + `georeference` singleton rows (schema v1). |
 | 2 | `georeference origin height` | Active (v2) | `ALTER TABLE georeference ADD COLUMN origin_height REAL NOT NULL DEFAULT 0` — extends the canonical georeference with the vertical origin component; v1 databases read 0. |
+| 3 | `terrain datasets` | Active (v3) | Creates `terrain_datasets` — canonical imported DEM records (see below); arrives with the Terrain domain (issue #6). |
 
 ## 1. Active schema tables (implemented & verified)
 
-These tables exist in production database files (`project.db`) under schema version 2:
+These tables exist in production database files (`project.db`) under schema version 3:
 
 ### `schema_migrations`
 Tracks ordered schema migration IDs and application timestamps:
@@ -47,6 +48,22 @@ Singleton row (`id = 1`) storing the canonical project geospatial reference:
 - `origin_northing` (REAL NOT NULL)
 - `origin_height` (REAL NOT NULL DEFAULT 0) — added in migration 2
 - `vertical_crs` (TEXT NULL) — optional vertical datum/CRS identifier
+
+### `terrain_datasets`
+Canonical records of imported georeferenced DEMs (docs/05_DOMAINS/TERRAIN.md):
+- `id` (TEXT PRIMARY KEY) — canonical UUID text; also the world-index EntityId
+- `display_name` (TEXT NOT NULL)
+- `storage_path` (TEXT NOT NULL) — project-relative location of the ingested raster copy (`terrain/elevation/<uuid>.tif`)
+- `source_format` (TEXT NOT NULL), `source_crs` (TEXT NOT NULL)
+- `raster_width`/`raster_height` (INTEGER > 0), `origin_x`/`origin_y` (REAL), `cell_size_x`/`cell_size_y` (REAL > 0)
+- `elevation_unit` (TEXT NOT NULL), `elevation_unit_to_metre` (REAL > 0)
+- `has_nodata` (0/1), `nodata_value` (REAL)
+- `min_z`/`max_z` (REAL) — canonical elevation range (project linear unit)
+- `bounds_east`/`bounds_west`/`bounds_north`/`bounds_south` (REAL) — canonical project-global coverage
+- `source_sha256` (TEXT NOT NULL), `source_bytes` (INTEGER > 0) — integrity of the stored copy
+- `revision` (INTEGER >= 1) — per-dataset content revision (derived-tile provenance)
+- `diagnostics` (TEXT NOT NULL, JSON array of `{code,message}`) — import-time detected facts
+- `created_at`/`modified_at` (TEXT NOT NULL)
 
 ---
 
@@ -81,8 +98,10 @@ In accordance with `docs/ADR/0010-no-placeholder-production-paths.md`, database 
 - `signal_controller_phases`
 
 ### Terrain & assets (Phases 6 & 10)
-- `terrain_datasets`
-- `terrain_tiles`
+- `terrain_datasets` — **implemented** (migration 3, above)
+- `terrain_tiles` — not needed as a table: derived tile cache files are
+  self-describing and rebuildable (`cache/terrain/…`, ADR-0005); their
+  provenance lives in the dataset row's `revision`
 - `assets`
 - `asset_instances`
 - `environment_rules`

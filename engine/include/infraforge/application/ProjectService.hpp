@@ -1,5 +1,6 @@
 #pragma once
 
+#include "infraforge/application/CommandFailure.hpp"
 #include "infraforge/domain/geo/ProjectGeoreference.hpp"
 #include "infraforge/domain/project/ProjectModel.hpp"
 #include "infraforge/ports/ProjectStore.hpp"
@@ -16,35 +17,6 @@ class GeoTransformService;
 }
 
 namespace infraforge::application {
-
-// Application-level failure taxonomy; the transport layer maps these to
-// protocol error codes.
-enum class CommandFailureCode : std::uint8_t {
-    InvalidArgument,
-    ProjectNotOpen,
-    ProjectAlreadyOpen,
-    ProjectDirectoryInvalid,
-    ProjectFormatUnsupported,
-    SchemaVersionUnsupported,
-    PersistenceFailure,
-    Internal,
-    // Well-formed georeference/transform request that the canonical
-    // geospatial engine cannot satisfy (unsupported CRS kind, unavailable
-    // vertical transform, unsupported unit).
-    GeoUnsupported,
-};
-
-class CommandFailure : public std::runtime_error {
-public:
-    CommandFailure(CommandFailureCode code, std::string message)
-        : std::runtime_error(std::move(message)),
-          code_(code) {}
-
-    [[nodiscard]] CommandFailureCode code() const noexcept { return code_; }
-
-private:
-    CommandFailureCode code_;
-};
 
 enum class ProjectEventKind : std::uint8_t {
     Opened,

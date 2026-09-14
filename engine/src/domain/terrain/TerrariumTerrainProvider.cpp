@@ -1,0 +1,699 @@
+#include "infraforge/domain/terrain/TerrariumTerrainProvider.hpp"
+
+#include <infraforge/domain/terrain/TerrainDownloadProvider.hpp>
+#include <infraforge/ports/HttpClient.hpp>
+#include <infraforge/runtime/Logging.hpp>
+
+#include <algorithm>
+#include <atomic>
+#include <cmath>
+#include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <iomanip>
+#include <limits>
+#include <mutex>
+#include <sstream>
+#include <stdexcept>
+#include <string>
+#include <thread>
+#include <vector>
+
+#include <gdal.h>
+#include <gdal_priv.h>
+#include <ogr_spatialref.h>
+#include <cpl_string.h>
+#include <png.h>
+
+namespace infraforge::domain::terrain {
+
+namespace {
+
+// Ensure GDAL is registered and PROJ_DATA is set before any GDAL call.
+// Mirrors GdalTerrainSource::ensureGdalRegistered() so the production
+// provider can resolve EPSG codes (e.g. importFromEPSG(3857)) without
+// depending on the persistence layer.
+void ensureGdalRegistered() {
+    static std::once_flag registered;
+    std::call_once(registered, [] {
+#ifdef INFRAFORGE_PROJ_DATA_DIR
+#ifdef _WIN32
+        (void)_putenv_s("PROJ_DATA", INFRAFORGE_PROJ_DATA_DIR);
+#else
+        (void)setenv("PROJ_DATA", INFRAFORGE_PROJ_DATA_DIR, 0);
+#endif
+#endif
+        GDALAllRegister();
+    });
+}
+
+constexpr double kPi = 3.14159265358979323846;
+constexpr double kEarthRadius = 6378137.0;
+constexpr double kOriginShift = kPi * kEarthRadius; // ~20037508.34
+
+// Web Mercator forward: WGS84 lat/lon → EPSG:3857 x/y (meters).
+struct WebMercatorCoord { double x; double y; };
+WebMercatorCoord toWebMercator(double lonDeg, double latDeg) {
+    const double lonRad = lonDeg * kPi / 180.0;
+    const double latRad = latDeg * kPi / 180.0;
+    return {
+        kEarthRadius * lonRad,
+        kEarthRadius * std::asinh(std::tan(latRad))
+    };
+}
+
+// Web Mercator inverse: EPSG:3857 x/y → WGS84 lat/lon.
+struct Wgs84Coord { double lon; double lat; };
+Wgs84Coord fromWebMercator(double x, double y) {
+    const double lon = (x / kEarthRadius) * 180.0 / kPi;
+    const double lat = (2.0 * std::atan(std::exp(y / kEarthRadius)) - kPi / 2.0) * 180.0 / kPi;
+    return {lon, lat};
+}
+
+// Tile bounds in Web Mercator for an XYZ tile at zoom z.
+struct TileBounds { double minX, minY, maxX, maxY; };
+TileBounds tileBoundsWebMercator(int z, int x, int y) {
+    const double tileSize = (2.0 * kOriginShift) / static_cast<double>(1 << z);
+    const double minX = -kOriginShift + static_cast<double>(x) * tileSize;
+    const double maxX = minX + tileSize;
+    // Y is flipped (origin at top-left in XYZ scheme).
+    const double maxY = kOriginShift - static_cast<double>(y) * tileSize;
+    const double minY = maxY - tileSize;
+    return {minX, minY, maxX, maxY};
+}
+
+// Half-open tile-index helpers for XYZ tile coverage (Item 6).
+// Normalized coordinates in [-1, 1] avoid catastrophic cancellation from
+// adding/subtracting large originShift values.
+// Semantics:
+//   west/minX  = inclusive (floor)
+//   east/maxX  = exclusive: always take std::nextafter(coord, -inf) toward interior
+//   north/maxY = inclusive (floor on ne.y gives the tile containing north)
+//   south/minY = exclusive: always take std::nextafter(coord, +inf) toward interior
+//
+// In half-open interval [west, east), any point in the interval satisfies
+// west <= x < east. The interior supremum is nextafter(east, -inf).
+// Evaluating floor on the interior coordinate ensures that exact boundaries
+// do not overfetch, while any point even one representable value inside the
+// tile correctly includes it, with no arbitrary epsilon.
+static int tileIndexInclusive(double coord, double originShift, int numTiles) {
+    const double norm = coord / originShift;
+    return static_cast<int>(std::floor((norm + 1.0) * 0.5 * static_cast<double>(numTiles)));
+}
+
+static int tileIndexExclusiveMax(double coord, double originShift, int numTiles) {
+    const double interiorCoord = std::nextafter(coord, -std::numeric_limits<double>::infinity());
+    const double norm = interiorCoord / originShift;
+    return static_cast<int>(std::floor((norm + 1.0) * 0.5 * static_cast<double>(numTiles)));
+}
+
+static int tileIndexYInclusive(double mercatorY, double originShift, int numTiles) {
+    const double norm = mercatorY / originShift;
+    return static_cast<int>(std::floor((1.0 - norm) * 0.5 * static_cast<double>(numTiles)));
+}
+
+static int tileIndexYExclusiveMax(double mercatorY, double originShift, int numTiles) {
+    const double interiorSouth = std::nextafter(mercatorY, std::numeric_limits<double>::infinity());
+    const double norm = interiorSouth / originShift;
+    return static_cast<int>(std::floor((1.0 - norm) * 0.5 * static_cast<double>(numTiles)));
+}
+
+// Convert WGS84 bounds to the set of XYZ tiles at a given zoom.
+// Uses half-open interval semantics (Item 6):
+//   X: [west, east)  — west inclusive, east exclusive
+//   Y: (south, north] — south exclusive, north inclusive
+// This ensures an area ending exactly on a tile boundary does not
+// request an extra adjacent tile on the east or south edge.
+struct XyzTile { int z, x, y; };
+std::vector<XyzTile> tilesForBounds(
+    const GeoBounds& bounds, int zoom) {
+    if (bounds.isEmpty()) {
+        return {};
+    }
+    const auto sw = toWebMercator(bounds.west, bounds.south);
+    const auto ne = toWebMercator(bounds.east, bounds.north);
+
+    const int numTiles = 1 << zoom;
+
+    int xMin = tileIndexInclusive(sw.x, kOriginShift, numTiles);
+    int xMax = tileIndexExclusiveMax(ne.x, kOriginShift, numTiles);
+    int yMin = tileIndexYInclusive(ne.y, kOriginShift, numTiles);
+    int yMax = tileIndexYExclusiveMax(sw.y, kOriginShift, numTiles);
+
+    const int maxTile = numTiles - 1;
+    xMin = std::clamp(xMin, 0, maxTile);
+    xMax = std::clamp(xMax, xMin, maxTile);
+    yMin = std::clamp(yMin, 0, maxTile);
+    yMax = std::clamp(yMax, yMin, maxTile);
+
+    std::vector<XyzTile> tiles;
+    for (int y = yMin; y <= yMax; ++y) {
+        for (int x = xMin; x <= xMax; ++x) {
+            tiles.push_back({zoom, x, y});
+        }
+    }
+    return tiles;
+}
+
+// Choose an appropriate zoom level for the requested resolution.
+// AWS Terrain Tiles are available at zoom 0-15. At zoom 12, each tile
+// covers ~38 km at the equator with 256 pixels → ~150 m/pixel.
+// We default to zoom 11 (~76 m/pixel at equator) for a good balance.
+constexpr int kDefaultZoom = 11;
+
+// Decode Terrarium PNG bytes to elevation values using GDAL.
+// Returns a vector of Float32 elevation values (row-major, top-to-bottom).
+// The PNG is 256x256 pixels with 3 bands (R, G, B).
+std::vector<float> decodeTerrariumPng(const std::string& pngData, int& width, int& height) {
+    // The provider can be used before the persistence layer initializes GDAL.
+    // Register drivers here so the PNG driver is available in the real
+    // download path as well as in tests that happen to initialize GDAL first.
+    ensureGdalRegistered();
+
+    std::string signature;
+    for (std::size_t i = 0; i < std::min<std::size_t>(pngData.size(), 8); ++i) {
+        if (i != 0) signature += ' ';
+        std::ostringstream byte;
+        byte << std::hex << std::uppercase << std::setw(2) << std::setfill('0')
+             << static_cast<unsigned int>(static_cast<unsigned char>(pngData[i]));
+        signature += byte.str();
+    }
+    runtime::logInfo("terrain", "terrarium.decode.begin", {
+        {"bytes", std::to_string(pngData.size())},
+        {"signature", signature},
+        {"gdalDrivers", std::to_string(GetGDALDriverManager()->GetDriverCount())},
+    });
+
+    /* Use a real temporary file rather than /vsimem. The Windows GDAL PNG
+    // plugin may not resolve correctly through the virtual filesystem even
+    // though it can open the same PNG from disk.
+    static std::atomic<int> tempCounter{0};
+    const auto tempPath = std::filesystem::temp_directory_path() /
+        ("infraforge_terrarium_" + std::to_string(tempCounter.fetch_add(1)) + ".png");
+    {
+        std::ofstream output(tempPath, std::ios::binary | std::ios::trunc);
+        output.write(pngData.data(), static_cast<std::streamsize>(pngData.size()));
+        if (!output.good()) {
+            std::error_code error;
+            std::filesystem::remove(tempPath, error);
+            throw ProviderError(ProviderErrorCode::CorruptTerrainResponse,
+                "cannot write temporary Terrarium PNG");
+        }
+    }
+
+    GDALDatasetH ds = GDALOpen(tempPath.string().c_str(), GA_ReadOnly);
+    if (!ds) {
+        const std::string gdalError = CPLGetLastErrorMsg();
+        runtime::logError("terrain", "terrarium.decode.open_failed", {
+            {"gdalError", gdalError},
+            {"gdalDrivers", std::to_string(GetGDALDriverManager()->GetDriverCount())},
+            {"signature", signature},
+        });
+        std::error_code error;
+        std::filesystem::remove(tempPath, error);
+        throw ProviderError(ProviderErrorCode::CorruptTerrainResponse,
+            "GDAL cannot open Terrarium PNG: " + gdalError);
+    }
+
+    width = GDALGetRasterXSize(ds);
+    height = GDALGetRasterYSize(ds);
+    const int bands = GDALGetRasterCount(ds);
+    if (bands < 3) {
+        GDALClose(ds);
+        std::error_code error;
+        std::filesystem::remove(tempPath, error);
+        throw ProviderError(ProviderErrorCode::CorruptTerrainResponse,
+            "Terrarium PNG must have at least 3 bands, got " + std::to_string(bands));
+    }
+
+    std::vector<uint8_t> r(width * height);
+    std::vector<uint8_t> g(width * height);
+    std::vector<uint8_t> b(width * height);
+
+    CPLErr e1 = GDALRasterIO(GDALGetRasterBand(ds, 1), GF_Read,
+        0, 0, width, height, r.data(), width, height, GDT_Byte, 0, 0);
+    CPLErr e2 = GDALRasterIO(GDALGetRasterBand(ds, 2), GF_Read,
+        0, 0, width, height, g.data(), width, height, GDT_Byte, 0, 0);
+    CPLErr e3 = GDALRasterIO(GDALGetRasterBand(ds, 3), GF_Read,
+        0, 0, width, height, b.data(), width, height, GDT_Byte, 0, 0);
+
+    GDALClose(ds);
+    std::error_code removeError;
+    std::filesystem::remove(tempPath, removeError);
+
+    if (e1 != CE_None || e2 != CE_None || e3 != CE_None) {
+        throw ProviderError(ProviderErrorCode::CorruptTerrainResponse,
+            "failed to read Terrarium PNG bands");
+    }
+
+    // Decode Terrarium: height = (R * 256 + G + B/256) - 32768
+    std::vector<float> elevations(static_cast<size_t>(width) * height);
+    for (size_t i = 0; i < elevations.size(); ++i) {
+        elevations[i] = static_cast<float>(
+            (static_cast<int>(r[i]) * 256 + static_cast<int>(g[i]) +
+             static_cast<double>(b[i]) / 256.0) - 32768.0);
+    }
+    return elevations; */
+
+    png_image image{};
+    image.version = PNG_IMAGE_VERSION;
+    if (!png_image_begin_read_from_memory(&image, pngData.data(), pngData.size())) {
+        throw ProviderError(ProviderErrorCode::CorruptTerrainResponse,
+            "libpng cannot open Terrarium PNG: " + std::string{image.message});
+    }
+    image.format = PNG_FORMAT_RGBA;
+    width = static_cast<int>(image.width);
+    height = static_cast<int>(image.height);
+    std::vector<uint8_t> rgba(PNG_IMAGE_SIZE(image));
+    if (!png_image_finish_read(&image, nullptr, rgba.data(), 0, nullptr)) {
+        const std::string error = image.message;
+        png_image_free(&image);
+        throw ProviderError(ProviderErrorCode::CorruptTerrainResponse,
+            "libpng failed to decode Terrarium PNG: " + error);
+    }
+    png_image_free(&image);
+    std::vector<float> elevations(static_cast<size_t>(width) * height);
+    for (size_t i = 0; i < elevations.size(); ++i) {
+        elevations[i] = static_cast<float>(
+            (static_cast<int>(rgba[i * 4]) * 256 + static_cast<int>(rgba[i * 4 + 1]) +
+             static_cast<double>(rgba[i * 4 + 2]) / 256.0) - 32768.0);
+    }
+    return elevations;
+}
+
+// Write a GeoTIFF with Float32 elevation data and EPSG:3857 CRS.
+void writeTerrariumGeoTiff(
+    const std::filesystem::path& outputPath,
+    const std::vector<float>& elevations,
+    int width, int height,
+    const TileBounds& bounds) {
+
+    ensureGdalRegistered();
+
+    GDALDriverH driver = GDALGetDriverByName("GTiff");
+    if (!driver) {
+        throw ProviderError(ProviderErrorCode::CorruptTerrainResponse,
+            "GTiff driver not available");
+    }
+
+    const char* options[] = { "TILED=YES", "COMPRESS=DEFLATE", nullptr };
+    GDALDatasetH ds = GDALCreate(driver, outputPath.string().c_str(),
+        width, height, 1, GDT_Float32, options);
+    if (!ds) {
+        throw ProviderError(ProviderErrorCode::CorruptTerrainResponse,
+            "cannot create output GeoTIFF");
+    }
+
+    // Geotransform: top-left corner, pixel size (Web Mercator meters).
+    // bounds.minX = west, bounds.maxY = north (top-left in XYZ scheme).
+    const double pixelW = (bounds.maxX - bounds.minX) / static_cast<double>(width);
+    const double pixelH = (bounds.maxY - bounds.minY) / static_cast<double>(height);
+    double geotransform[6] = {
+        bounds.minX,    // top-left X
+        pixelW,         // pixel width (east)
+        0.0,            // rotation
+        bounds.maxY,    // top-left Y
+        0.0,            // rotation
+        -pixelH         // pixel height (south, negative)
+    };
+    GDALSetGeoTransform(ds, geotransform);
+
+    // Set CRS to EPSG:3857 (Web Mercator).
+    OGRSpatialReference srs;
+    srs.importFromEPSG(3857);
+    char* wkt = nullptr;
+    srs.exportToWkt(&wkt);
+    GDALSetProjection(ds, wkt);
+    CPLFree(wkt);
+
+    // Set NoData value.
+    GDALRasterBandH band = GDALGetRasterBand(ds, 1);
+    GDALSetRasterNoDataValue(band, -32768.0);
+
+    // Write elevation data.
+    CPLErr err = GDALRasterIO(band, GF_Write,
+        0, 0, width, height,
+        const_cast<float*>(elevations.data()),
+        width, height, GDT_Float32, 0, 0);
+
+    GDALClose(ds);
+
+    if (err != CE_None) {
+        std::error_code ec;
+        std::filesystem::remove(outputPath, ec);
+        throw ProviderError(ProviderErrorCode::CorruptTerrainResponse,
+            "failed to write elevation data to GeoTIFF");
+    }
+}
+
+// Classify HTTP status code and transport error into a typed provider error.
+// Uses the port-level TransportError to distinguish DNS/connect/timeout/
+// cancellation instead of collapsing all transport failures to "timeout"
+// (Finding 10).
+ProviderErrorCode classifyHttpError(
+    int statusCode, const std::string& errorMsg,
+    infraforge::ports::TransportError transportErr) {
+    using infraforge::ports::TransportError;
+    // Cancellation takes priority — must map to Cancelled, not timeout.
+    if (transportErr == TransportError::Cancelled) {
+        return ProviderErrorCode::Cancelled;
+    }
+    if (statusCode == 401 || statusCode == 403) {
+        return ProviderErrorCode::AuthenticationFailed;
+    }
+    if (statusCode == 429) {
+        return ProviderErrorCode::RateLimited;
+    }
+    if (statusCode == 404 || statusCode == 410) {
+        return ProviderErrorCode::SourceUnavailable;
+    }
+    if (statusCode >= 500) {
+        return ProviderErrorCode::SourceUnavailable;
+    }
+    if (statusCode == 0) {
+        // Transport-level failure: use the typed transport error.
+        switch (transportErr) {
+        case TransportError::Timeout:
+            return ProviderErrorCode::NetworkTimeout;
+        case TransportError::DnsFailure:
+        case TransportError::ConnectionFailure:
+        case TransportError::TlsFailure:
+        case TransportError::ProtocolFailure:
+        case TransportError::UnknownNetworkFailure:
+            return ProviderErrorCode::SourceUnavailable;
+        case TransportError::None:
+        case TransportError::Cancelled:
+        default:
+            return ProviderErrorCode::NetworkTimeout;
+        }
+    }
+    if (!errorMsg.empty()) {
+        return ProviderErrorCode::InvalidProviderResponse;
+    }
+    return ProviderErrorCode::InvalidProviderResponse;
+}
+
+// Determine if an error is retryable.
+bool isRetryable(ProviderErrorCode code) {
+    switch (code) {
+        case ProviderErrorCode::NetworkTimeout:
+        case ProviderErrorCode::RateLimited:
+        case ProviderErrorCode::SourceUnavailable:
+            return true;
+        case ProviderErrorCode::AuthenticationFailed:
+        case ProviderErrorCode::InvalidProviderResponse:
+        case ProviderErrorCode::UnsupportedCoverage:
+        case ProviderErrorCode::CorruptTerrainResponse:
+        case ProviderErrorCode::Cancelled:
+            return false;
+    }
+    return false;
+}
+
+} // namespace
+
+TerrariumTerrainProvider::TerrariumTerrainProvider(
+    std::shared_ptr<ports::HttpClient> httpClient)
+    : httpClient_(std::move(httpClient)) {
+    info_.providerId = "terrarium-aws";
+    info_.displayName = "AWS Terrain Tiles (Terrarium)";
+    // Attribution: The AWS Terrain Tiles / Mapzen Terrarium dataset is a
+    // composite of multiple elevation sources. The authoritative
+    // attribution reference is the joerd project documentation, which
+    // lists all contributing sources and their licenses.
+    // Verified 2026-09-14 against:
+    //   https://github.com/tilezen/joerd/blob/master/docs/attribution.md
+    //
+    // BLOCKER 7: The joerd attribution documentation explicitly contains a
+    // "Required attribution" section with individual source attribution
+    // requirements. A link alone is not equivalent to displaying the
+    // required attribution. Since current Terrarium responses do not
+    // expose which underlying source contributed to each pixel/tile, we
+    // retain the full conservative required attribution set.
+    info_.attribution =
+        "Elevation data from AWS Terrain Tiles (Terrarium). Required "
+        "attribution:\n"
+        "* ArcticDEM terrain data DEM(s) were created from DigitalGlobe, "
+        "Inc., imagery and funded under National Science Foundation awards "
+        "1043681, 1559691, and 1542736;\n"
+        "* Australia terrain data (c) Commonwealth of Australia "
+        "(Geoscience Australia) 2017;\n"
+        "* Austria terrain data (c) offene Daten Osterreichs - Digitales "
+        "Gelandemodell (DGM) Osterreich;\n"
+        "* Canada terrain data contains information licensed under the "
+        "Open Government Licence - Canada;\n"
+        "* Europe terrain data produced using Copernicus data and "
+        "information funded by the European Union - EU-DEM layers;\n"
+        "* Global ETOPO1 terrain data U.S. National Oceanic and "
+        "Atmospheric Administration;\n"
+        "* Mexico terrain data source: INEGI, Continental relief, 2016;\n"
+        "* New Zealand terrain data Copyright 2011 Crown copyright (c) "
+        "Land Information New Zealand and the New Zealand Government (All "
+        "rights reserved);\n"
+        "* Norway terrain data (c) Kartverket;\n"
+        "* United Kingdom terrain data (c) Environment Agency copyright "
+        "and/or database right 2015. All rights reserved;\n"
+        "* United States 3DEP (formerly NED) and global GMTED2010 and SRTM "
+        "terrain data courtesy of the U.S. Geological Survey.\n"
+        "Full attribution details: "
+        "https://github.com/tilezen/joerd/blob/master/docs/attribution.md";
+    info_.requiresAuth = false;
+    // Provider native maximum resolution is not a single fixed value —
+    // the Terrarium dataset is available at zoom 0-15, and the effective
+    // ground resolution varies with latitude (Web Mercator). We set this
+    // to 0 (unknown) rather than a misleading single value (Finding 5).
+    // The effective plan resolution is computed from the selected zoom
+    // and latitude in planDownload.
+    info_.maxResolutionMpp = 0.0;
+    // Global coverage (empty bounds = global).
+    info_.coverage = GeoBounds{};
+}
+
+const ProviderInfo& TerrariumTerrainProvider::info() const noexcept {
+    return info_;
+}
+
+bool TerrariumTerrainProvider::supportsSelectiveRequests() const noexcept {
+    return true; // XYZ tiles are individually addressable.
+}
+
+std::vector<ProviderRequest> TerrariumTerrainProvider::planRequests(
+    const std::vector<SelectionTile>& selectedTiles) const {
+    if (selectedTiles.empty()) {
+        return {};
+    }
+
+    // Collect unique XYZ tiles across all selected application tiles.
+    std::vector<XyzTile> allTiles;
+    for (const auto& tile : selectedTiles) {
+        auto tiles = tilesForBounds(tile.bounds, kDefaultZoom);
+        for (auto& t : tiles) {
+            allTiles.push_back(t);
+        }
+    }
+
+    // Deduplicate by (z, x, y).
+    std::sort(allTiles.begin(), allTiles.end(), [](const XyzTile& a, const XyzTile& b) {
+        if (a.z != b.z) return a.z < b.z;
+        if (a.x != b.x) return a.x < b.x;
+        return a.y < b.y;
+    });
+    allTiles.erase(std::unique(allTiles.begin(), allTiles.end(),
+        [](const XyzTile& a, const XyzTile& b) {
+            return a.z == b.z && a.x == b.x && a.y == b.y;
+        }), allTiles.end());
+
+    // Build provider requests.
+    std::vector<ProviderRequest> requests;
+    requests.reserve(allTiles.size());
+    for (const auto& t : allTiles) {
+        ProviderRequest req;
+        // Request ID encodes the XYZ tile coordinates.
+        req.requestId = std::to_string(t.z) + "/" +
+                        std::to_string(t.x) + "/" +
+                        std::to_string(t.y);
+
+        // Bounds in WGS84 for the plan summary.
+        const auto tb = tileBoundsWebMercator(t.z, t.x, t.y);
+        const auto sw = fromWebMercator(tb.minX, tb.minY);
+        const auto ne = fromWebMercator(tb.maxX, tb.maxY);
+        req.bounds = GeoBounds{sw.lon, sw.lat, ne.lon, ne.lat};
+
+        // Estimated bytes: unknown (Finding 4). The protocol defines 0 =
+        // unknown. We do not fabricate a size estimate; the actual size
+        // depends on PNG compression which varies per tile.
+        req.estimatedBytes = 0;
+        requests.push_back(req);
+    }
+    return requests;
+}
+
+double TerrariumTerrainProvider::effectiveResolutionMpp(
+    const std::vector<SelectionTile>& selectedTiles) const {
+    if (selectedTiles.empty()) {
+        return 0.0;
+    }
+    // Item 7: Provider owns the resolution computation. Terrarium uses
+    // a fixed zoom of 11 with 256px tiles. Ground resolution varies with
+    // latitude in Web Mercator: (tileSizeM * cos(lat)) / pixelsPerTile.
+    // Documented rule: Coarsest effective resolution (maximum metres per pixel)
+    // across all selected tiles, calculated at the center latitude of each tile.
+    // This avoids overpromising quality across non-uniform or disconnected selections.
+    constexpr int kZoom = 11;
+    constexpr int kPixelsPerTile = 256;
+    const double tileSizeM = (2.0 * kOriginShift) /
+        static_cast<double>(std::int64_t{1} << kZoom);
+
+    double coarsestMpp = 0.0;
+    for (const auto& tile : selectedTiles) {
+        const double centerLat = (tile.bounds.south + tile.bounds.north) / 2.0;
+        const double latRad = centerLat * kPi / 180.0;
+        const double tileMpp = (tileSizeM * std::cos(latRad)) / static_cast<double>(kPixelsPerTile);
+        if (tileMpp > coarsestMpp) {
+            coarsestMpp = tileMpp;
+        }
+    }
+    return coarsestMpp;
+}
+
+std::filesystem::path TerrariumTerrainProvider::fetchRequest(
+    const ProviderRequest& request,
+    const std::filesystem::path& tempDir,
+    const std::string& /*credentialHint*/,
+    const CancellationCallback& cancel) const {
+
+    // Cancellation checkpoint before any work (BLOCKER 4).
+    if (cancel && cancel()) {
+        throw ProviderError(ProviderErrorCode::Cancelled, "download cancelled before fetch");
+    }
+
+    // Parse the request ID (z/x/y) with strict validation (BLOCKER: harden
+    // provider request parsing — reject trailing garbage and out-of-range
+    // x/y for the given zoom level, Finding 8).
+    int z, x, y;
+    {
+        char slash1, slash2;
+        std::istringstream iss(request.requestId);
+        iss >> z >> slash1 >> x >> slash2 >> y;
+        if (iss.fail() || slash1 != '/' || slash2 != '/') {
+            throw ProviderError(ProviderErrorCode::InvalidProviderResponse,
+                "malformed Terrarium request ID: " + request.requestId);
+        }
+        // Reject trailing garbage after the y value.
+        char trailing;
+        if (iss.get(trailing) && !iss.eof()) {
+            throw ProviderError(ProviderErrorCode::InvalidProviderResponse,
+                "trailing garbage in Terrarium request ID: " + request.requestId);
+        }
+        // Validate z/x/y ranges. z must be in [0, 20]. x and y must be
+        // in [0, 2^z) — overflow-safe check (Finding 8).
+        if (z < 0 || z > 20 || x < 0 || y < 0) {
+            throw ProviderError(ProviderErrorCode::InvalidProviderResponse,
+                "Terrarium tile coordinates out of range: " + request.requestId);
+        }
+        // 2^z as int64 to avoid overflow for z up to 20 (2^20 = 1M).
+        const std::int64_t maxXY = std::int64_t{1} << z;
+        if (static_cast<std::int64_t>(x) >= maxXY ||
+            static_cast<std::int64_t>(y) >= maxXY) {
+            throw ProviderError(ProviderErrorCode::InvalidProviderResponse,
+                "Terrarium tile x/y exceeds 2^z for zoom " +
+                std::to_string(z) + ": " + request.requestId);
+        }
+    }
+
+    // Construct the URL.
+    const std::string url =
+        "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/" +
+        std::to_string(z) + "/" + std::to_string(x) + "/" + std::to_string(y) + ".png";
+
+    // Fetch with bounded retries (BLOCKER 4: cancellation-aware).
+    // The CancellationCallback returns true if cancellation was requested.
+    // It is used both at checkpoints (we throw) and as the HTTP progress
+    // callback poller so in-flight requests abort promptly (BLOCKER 2).
+    std::string pngData;
+    for (int attempt = 0; attempt <= kMaxRetries; ++attempt) {
+        // Cancellation checkpoint before each HTTP request.
+        if (cancel && cancel()) {
+            throw ProviderError(ProviderErrorCode::Cancelled, "download cancelled before request");
+        }
+
+        // Use the cancellation-aware HTTP overload. The canceller is polled
+        // by the ixwebsocket progress callback during the transfer, so
+        // cancellation from another thread aborts the request promptly.
+        auto response = httpClient_->get(url, cancel);
+
+        if (response.ok()) {
+            pngData = response.body;
+            runtime::logInfo("terrain", "terrarium.http.completed", {
+                {"request", request.requestId},
+                {"status", std::to_string(response.statusCode)},
+                {"bytes", std::to_string(response.body.size())},
+            });
+            break;
+        }
+
+        // Cancellation checkpoint after a failed request.
+        if (cancel && cancel()) {
+            throw ProviderError(ProviderErrorCode::Cancelled, "download cancelled after failed request");
+        }
+
+        const auto errorCode = classifyHttpError(
+            response.statusCode, response.errorMessage, response.transportError);
+
+        // Check if this is the last attempt or non-retryable.
+        if (attempt >= kMaxRetries || !isRetryable(errorCode)) {
+            throw ProviderError(errorCode,
+                "Terrarium request failed (attempt " + std::to_string(attempt + 1) +
+                "): HTTP " + std::to_string(response.statusCode) +
+                " - " + response.errorMessage);
+        }
+
+        // Exponential backoff (BLOCKER 4: interruptible).
+        const int delayMs = kBaseBackoffMs * (1 << attempt);
+        const int checkIntervalMs = 100;
+        int elapsedMs = 0;
+        while (elapsedMs < delayMs) {
+            if (cancel && cancel()) {
+                throw ProviderError(ProviderErrorCode::Cancelled, "download cancelled during backoff");
+            }
+            const int sleepMs = std::min(checkIntervalMs, delayMs - elapsedMs);
+            std::this_thread::sleep_for(std::chrono::milliseconds(sleepMs));
+            elapsedMs += sleepMs;
+        }
+    }
+
+    if (pngData.empty()) {
+        throw ProviderError(ProviderErrorCode::CorruptTerrainResponse,
+            "empty response from Terrarium provider");
+    }
+
+    // Cancellation checkpoint before decode.
+    if (cancel && cancel()) {
+        throw ProviderError(ProviderErrorCode::Cancelled, "download cancelled before decode");
+    }
+
+    // Decode the Terrarium PNG to elevation values.
+    int width = 0, height = 0;
+    std::vector<float> elevations = decodeTerrariumPng(pngData, width, height);
+
+    // Cancellation checkpoint after decode, before raster write.
+    if (cancel && cancel()) {
+        throw ProviderError(ProviderErrorCode::Cancelled, "download cancelled before raster write");
+    }
+
+    // Compute the tile bounds in Web Mercator.
+    const auto tb = tileBoundsWebMercator(z, x, y);
+
+    // Write a GeoTIFF to the temp directory.
+    // Sanitize the request ID for use as a filename.
+    std::string filename = request.requestId;
+    std::replace(filename.begin(), filename.end(), '/', '_');
+    filename += ".tif";
+
+    const std::filesystem::path outputPath = tempDir / filename;
+    writeTerrariumGeoTiff(outputPath, elevations, width, height, tb);
+
+    return outputPath;
+}
+
+} // namespace infraforge::domain::terrain

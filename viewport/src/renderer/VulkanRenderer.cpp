@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <limits>
 #include <vector>
@@ -68,13 +69,16 @@ bool VulkanRenderer::start(const std::uint32_t initialWidth, const std::uint32_t
         surface_.create(instance_.get(), nativeWindowHandle_);
         device_.create(instance_.get(), surface_.get());
 
-        // The swapchain owns the render pass for the single grid subpass; the
-        // pass survives swapchain recreation (identical attachment format).
+        // The swapchain owns the render pass for the terrain + grid subpass;
+        // the pass survives swapchain recreation (stable attachment formats).
         swapchain_.create(
             device_.physical(), device_.get(), surface_.get(), device_.queueFamily(),
             VK_NULL_HANDLE, requestedWidth_, requestedHeight_);
 
         gridPass_.create(
+            device_.physical(), device_.get(), device_.queue(), device_.queueFamily(),
+            swapchain_.renderPass());
+        terrainPass_.create(
             device_.physical(), device_.get(), device_.queue(), device_.queueFamily(),
             swapchain_.renderPass());
 
@@ -130,7 +134,7 @@ bool VulkanRenderer::start(const std::uint32_t initialWidth, const std::uint32_t
         return false;
     }
 
-    camera_.setViewport(requestedWidth_, requestedHeight_);
+    cameraController_.camera().setViewport(requestedWidth_, requestedHeight_);
     initialized_ = true;
     renderThread_.start([this](std::atomic_bool& running) { runLoop(running); });
     return true;
@@ -150,6 +154,25 @@ void VulkanRenderer::setVisible(const bool visible) {
     visible_ = visible;
 }
 
+void VulkanRenderer::setTerrainScene(const TerrainScene& scene) {
+    {
+        std::lock_guard lock{stateMutex_};
+        pendingScene_ = scene;
+    }
+    terrainPass_.setScene(scene);
+}
+
+void VulkanRenderer::postCameraInput(const SurfaceInputEvent& event) {
+    std::lock_guard lock{inputMutex_};
+    // Bounded queue: input arrives at human rates; dropping stale deltas
+    // beats unbounded growth if the render thread stalls.
+    constexpr std::size_t kMaxQueuedInput = 64;
+    if (inputQueue_.size() >= kMaxQueuedInput) {
+        inputQueue_.pop_front();
+    }
+    inputQueue_.push_back(event);
+}
+
 void VulkanRenderer::stop() {
     const bool wasRunning = renderThread_.running();
     // Always stop and join, including after the render thread cleared its own
@@ -158,6 +181,7 @@ void VulkanRenderer::stop() {
     renderThread_.stop();
     if (initialized_) {
         vkDeviceWaitIdle(device_.get());
+        terrainPass_.destroy();
         gridPass_.destroy();
         swapchain_.destroy();
         commandPool_.reset();
@@ -182,7 +206,7 @@ void VulkanRenderer::recreateSwapchain() {
         device_.physical(), device_.get(), surface_.get(), device_.queueFamily(),
         swapchain_.renderPass(), requestedWidth_, requestedHeight_);
     ensureRenderFinishedSemaphores();
-    camera_.setViewport(requestedWidth_, requestedHeight_);
+    cameraController_.camera().setViewport(requestedWidth_, requestedHeight_);
 }
 
 void VulkanRenderer::runLoop(std::atomic_bool& running) {
@@ -209,6 +233,35 @@ void VulkanRenderer::runLoop(std::atomic_bool& running) {
             }
             std::this_thread::sleep_for(kSuspendPollInterval);
             continue;
+        }
+
+        // Adopt scene metadata without resetting an established user camera.
+        // An empty scene marks a project/session boundary. The first terrain
+        // of the next session is framed once only if the user has not moved.
+        {
+            std::optional<TerrainScene> adoptedScene;
+            {
+                std::lock_guard lock{stateMutex_};
+                adoptedScene = std::move(pendingScene_);
+                pendingScene_.reset();
+            }
+            if (adoptedScene.has_value()) {
+                cameraController_.adoptScene(*adoptedScene);
+            }
+        }
+
+        // Drain raw mouse input into camera motion; the render thread owns
+        // the camera, so application happens here (grab-style panning and
+        // exponential wheel zoom).
+        {
+            std::deque<SurfaceInputEvent> events;
+            {
+                std::lock_guard lock{inputMutex_};
+                events.swap(inputQueue_);
+            }
+            for (const SurfaceInputEvent& event : events) {
+                cameraController_.handleInput(event);
+            }
         }
 
         try {
@@ -312,8 +365,29 @@ void VulkanRenderer::renderFrame(std::atomic_bool& running) {
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     VK_CHECK(vkBeginCommandBuffer(command, &beginInfo), "command buffer begin");
 
-    gridPass_.recordFrame(command, swapchain_.framebuffers()[imageIndex], camera_);
+    // Terrain streams and draws inside the same render pass as the grid;
+    // depth testing resolves terrain/terrain and terrain/grid occlusion.
+    constexpr std::array<float, 4> kClearColor = {0.051F, 0.063F, 0.078F, 1.0F}; // #0d1014
+    std::array<VkClearValue, 2> clearValues{};
+    clearValues[0].color = VkClearColorValue{{kClearColor[0], kClearColor[1], kClearColor[2], kClearColor[3]}};
+    clearValues[1].depthStencil = VkClearDepthStencilValue{1.0F, 0};
 
+    VkRenderPassBeginInfo passBegin{};
+    passBegin.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    passBegin.renderPass = swapchain_.renderPass();
+    passBegin.framebuffer = swapchain_.framebuffers()[imageIndex];
+    passBegin.renderArea.offset = VkOffset2D{0, 0};
+    passBegin.renderArea.extent = swapchain_.extent();
+    passBegin.clearValueCount = static_cast<std::uint32_t>(clearValues.size());
+    passBegin.pClearValues = clearValues.data();
+    vkCmdBeginRenderPass(command, &passBegin, VK_SUBPASS_CONTENTS_INLINE);
+
+    const EditorCamera& camera = cameraController_.camera();
+    terrainPass_.update(camera);
+    terrainPass_.record(command, camera);
+    gridPass_.record(command, camera);
+
+    vkCmdEndRenderPass(command);
     VK_CHECK(vkEndCommandBuffer(command), "command buffer end");
 
     VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;

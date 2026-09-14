@@ -1,0 +1,67 @@
+appId: com.infraforge.desktop
+productName: InfraForge
+artifactName: InfraForge-0.1.0-rc1-win-x64-setup.${ext}
+directories:
+  output: dist-release
+  app: .
+files:
+  - dist/**
+  - package.json
+# Native executables, runtime DLLs, and geospatial data are staged as
+# extraResources so they land outside app.asar and resolve at the paths the
+# native engine/viewport probe (exe-relative share/proj, resourcesPath/native).
+extraResources:
+  # Production frontend bundle. main.ts loads this from process.resourcesPath
+  # in packaged mode (app.isPackaged).
+  - from: ../../apps/frontend/dist
+    to: frontend/dist
+    filter:
+      - '**/*'
+  # Engine executable + its complete runtime DLL closure (verified via
+  # dumpbin /dependents transitive walk). The engine resolves PROJ data at
+  # exe-relative share/proj and exe-parent-relative share/proj.
+  - from: ../../build/engine/Release
+    to: native
+    filter:
+      - infraforge-engine.exe
+      - '*.dll'
+  # Viewport executable + vulkan-1.dll. Shaderc/SPIRV-Tools are statically
+  # linked; GLSL sources are embedded in the binary at build time.
+  - from: ../../build/viewport/Release
+    to: native
+    filter:
+      - infraforge-viewport.exe
+      - '*.dll'
+  # PROJ data: staged to resources/share/proj so the engine finds it via
+  # executableDirectory().parent_path() / "share" / "proj" (resources/native
+  # parent = resources). Contains proj.db, proj.ini, nad grids, etc.
+  - from: ../../build/vcpkg_installed/x64-windows/share/proj
+    to: share/proj
+    filter:
+      - proj.db
+      - proj.ini
+      - '*.lst'
+      - nad27
+      - nad83
+      - other.extra
+      - CH
+      - GL27
+      - ITRF2000
+      - ITRF2008
+      - ITRF2014
+      - ITRF2020
+      - world
+      - copyright
+      - usage
+      - '*.schema.json'
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true

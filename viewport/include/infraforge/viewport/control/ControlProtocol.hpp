@@ -1,5 +1,8 @@
 #pragma once
 
+#include "infraforge/viewport/renderer/TerrainScene.hpp"
+#include "infraforge/viewport/platform/SurfaceInput.hpp"
+
 #include <cstdint>
 #include <optional>
 #include <stdexcept>
@@ -31,6 +34,9 @@ struct SurfacePlacement {
 //   {"type":"place","screenX":..,"screenY":..,"width":..,"height":..,"dpiScale":..}
 //   {"type":"visibility","visible":true}
 //   {"type":"shutdown"}
+//   {"type":"scene","originEasting":..,"originNorthing":..,"originHeight":..,
+//    "missingTiles":N,"revision":N,"tiles":[{datasetUuid,datasetRevision,
+//    chunkX,chunkY,path,minE,minN,maxE,maxN},...]}
 // Unknown types and malformed lines are rejected explicitly, never ignored.
 struct PlaceCommand {
     SurfacePlacement placement;
@@ -40,7 +46,14 @@ struct VisibilityCommand {
 };
 struct ShutdownCommand {
 };
-using ControlCommand = std::variant<PlaceCommand, VisibilityCommand, ShutdownCommand>;
+struct SceneCommand {
+    TerrainScene scene;
+};
+struct CameraCommand {
+    ViewportAction action{ViewportAction::None};
+    std::string datasetUuid;
+};
+using ControlCommand = std::variant<PlaceCommand, VisibilityCommand, ShutdownCommand, SceneCommand, CameraCommand>;
 
 struct CommandParseError : std::runtime_error {
     explicit CommandParseError(std::string message)

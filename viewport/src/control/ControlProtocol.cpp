@@ -6,7 +6,6 @@
 
 #include <array>
 #include <cmath>
-
 namespace infraforge::viewport {
 namespace {
 
@@ -55,7 +54,7 @@ ControlCommand parseControlCommand(const std::string_view line) {
     }
 
     const std::string type = json.at("type").get<std::string>();
-    static constexpr std::array<std::string_view, 3> kKnownTypes{"place", "visibility", "shutdown"};
+    static constexpr std::array<std::string_view, 5> kKnownTypes{"place", "visibility", "shutdown", "scene", "camera"};
     bool knownType = false;
     for (const std::string_view candidate : kKnownTypes) {
         knownType = knownType || type == candidate;
@@ -69,6 +68,39 @@ ControlCommand parseControlCommand(const std::string_view line) {
             failParse("shutdown command takes no extra fields");
         }
         return ShutdownCommand{};
+    }
+
+    if (type == "scene") {
+        // The terrain scene body is parsed and validated by the renderer
+        // layer's scene parser (same explicit-rejection rules).
+        try {
+            return SceneCommand{.scene = parseTerrainScene(line)};
+        } catch (const CommandParseError& error) {
+            failParse(std::string("scene command rejected: ") + error.message);
+        }
+    }
+
+    if (type == "camera") {
+        if (!json.contains("action") || !json.at("action").is_string()
+            || (json.size() != 2 && json.size() != 3)) {
+            failParse("camera command requires string 'action' and optional 'datasetUuid'");
+        }
+        const std::string actionName = json.at("action").get<std::string>();
+        ViewportAction action = ViewportAction::None;
+        if (actionName == "focus-terrain") action = ViewportAction::FocusTerrain;
+        else if (actionName == "frame-all") action = ViewportAction::FrameAllTerrain;
+        else if (actionName == "perspective") action = ViewportAction::Perspective;
+        else if (actionName == "top") action = ViewportAction::Top;
+        else failParse("unknown camera action '" + actionName + "'");
+        std::string datasetUuid;
+        if (json.contains("datasetUuid")) {
+            if (!json.at("datasetUuid").is_string()) failParse("camera datasetUuid must be a string");
+            datasetUuid = json.at("datasetUuid").get<std::string>();
+        }
+        if (action == ViewportAction::FocusTerrain && datasetUuid.empty()) {
+            failParse("focus-terrain requires a non-empty datasetUuid");
+        }
+        return CameraCommand{.action = action, .datasetUuid = std::move(datasetUuid)};
     }
 
     if (type == "visibility") {

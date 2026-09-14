@@ -37,11 +37,15 @@ public:
     [[nodiscard]] domain::project::ProjectRecord saveAs(const domain::project::SaveAsSpec& spec) override;
     [[nodiscard]] domain::project::ProjectRecord updateGeoreference(
         const domain::geo::GeoreferenceConfig& georeference) override;
+    [[nodiscard]] std::vector<domain::terrain::TerrainDataset> terrainDatasets() const override;
+    [[nodiscard]] ports::TerrainDatasetInsertResult insertTerrainDataset(
+        const domain::terrain::TerrainDataset& dataset) override;
+    void removeTerrainDataset(const std::string& datasetId) override;
     void close() override;
 
 private:
     template <typename Operation>
-    auto withinStoreBoundary(Operation&& operation) -> decltype(operation()) {
+    auto withinStoreBoundary(Operation&& operation) const -> decltype(operation()) {
         try {
             return operation();
         } catch (const SqliteError& error) {
@@ -55,6 +59,10 @@ private:
     [[nodiscard]] domain::project::ProjectRecord saveAsImpl(const domain::project::SaveAsSpec& spec);
     [[nodiscard]] domain::project::ProjectRecord updateGeoreferenceImpl(
         const domain::geo::GeoreferenceConfig& georeference);
+    [[nodiscard]] std::vector<domain::terrain::TerrainDataset> terrainDatasetsImpl() const;
+    [[nodiscard]] ports::TerrainDatasetInsertResult insertTerrainDatasetImpl(
+        const domain::terrain::TerrainDataset& dataset);
+    void removeTerrainDatasetImpl(const std::string& datasetId);
     void closeImpl();
 
     [[nodiscard]] domain::project::ProjectRecord readRecord(const SqliteConnection& connection) const;

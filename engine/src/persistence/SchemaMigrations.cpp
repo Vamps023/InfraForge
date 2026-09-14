@@ -11,7 +11,7 @@
 namespace infraforge::persistence {
 namespace {
 
-constexpr std::array<MigrationDefinition, 2> kCanonicalMigrations{{
+constexpr std::array<MigrationDefinition, 6> kCanonicalMigrations{{
     {
         .id = 1,
         .name = "core project foundation",
@@ -45,8 +45,80 @@ CREATE TABLE georeference (
 ALTER TABLE georeference
     ADD COLUMN origin_height REAL NOT NULL DEFAULT 0.0;
 )sql",
-    }},
-};
+    },
+    {
+        .id = 3,
+        .name = "terrain datasets",
+        .sql = R"sql(
+CREATE TABLE terrain_datasets (
+    id TEXT PRIMARY KEY,
+    display_name TEXT NOT NULL,
+    storage_path TEXT NOT NULL,
+    source_format TEXT NOT NULL,
+    source_crs TEXT NOT NULL,
+    raster_width INTEGER NOT NULL CHECK (raster_width > 0),
+    raster_height INTEGER NOT NULL CHECK (raster_height > 0),
+    origin_x REAL NOT NULL,
+    origin_y REAL NOT NULL,
+    cell_size_x REAL NOT NULL CHECK (cell_size_x > 0),
+    cell_size_y REAL NOT NULL CHECK (cell_size_y > 0),
+    elevation_unit TEXT NOT NULL,
+    elevation_unit_to_metre REAL NOT NULL CHECK (elevation_unit_to_metre > 0),
+    has_nodata INTEGER NOT NULL CHECK (has_nodata IN (0, 1)),
+    nodata_value REAL NOT NULL DEFAULT 0.0,
+    min_z REAL NOT NULL,
+    max_z REAL NOT NULL,
+    bounds_east REAL NOT NULL,
+    bounds_west REAL NOT NULL,
+    bounds_north REAL NOT NULL,
+    bounds_south REAL NOT NULL,
+    source_sha256 TEXT NOT NULL,
+    source_bytes INTEGER NOT NULL CHECK (source_bytes > 0),
+    revision INTEGER NOT NULL CHECK (revision >= 1),
+    diagnostics TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL,
+    modified_at TEXT NOT NULL
+);
+)sql",
+    },
+    {
+        .id = 4,
+        .name = "terrain source attribution",
+        .sql = R"sql(
+ALTER TABLE terrain_datasets
+    ADD COLUMN source_attribution TEXT NOT NULL DEFAULT '';
+)sql",
+    },
+    {
+        .id = 5,
+        .name = "terrain coverage pieces",
+        .sql = R"sql(
+CREATE TABLE terrain_dataset_coverage (
+    dataset_id TEXT NOT NULL,
+    piece_index INTEGER NOT NULL,
+    min_easting REAL NOT NULL,
+    min_northing REAL NOT NULL,
+    max_easting REAL NOT NULL,
+    max_northing REAL NOT NULL,
+    PRIMARY KEY (dataset_id, piece_index),
+    FOREIGN KEY (dataset_id) REFERENCES terrain_datasets(id) ON DELETE CASCADE
+);
+CREATE INDEX idx_terrain_coverage_dataset ON terrain_dataset_coverage(dataset_id);
+)sql",
+    },
+    {
+        .id = 6,
+        .name = "terrain source unit semantics",
+        .sql = R"sql(
+ALTER TABLE terrain_datasets ADD COLUMN horizontal_unit_name TEXT NOT NULL DEFAULT 'unknown';
+ALTER TABLE terrain_datasets ADD COLUMN horizontal_unit_symbol TEXT NOT NULL DEFAULT 'units';
+ALTER TABLE terrain_datasets ADD COLUMN horizontal_unit_is_angular INTEGER NOT NULL DEFAULT 0 CHECK (horizontal_unit_is_angular IN (0, 1));
+ALTER TABLE terrain_datasets ADD COLUMN elevation_unit_source TEXT NOT NULL DEFAULT 'legacy';
+ALTER TABLE terrain_datasets ADD COLUMN sample_scale REAL NOT NULL DEFAULT 1.0;
+ALTER TABLE terrain_datasets ADD COLUMN sample_offset REAL NOT NULL DEFAULT 0.0;
+)sql",
+    },
+}};
 
 } // namespace
 

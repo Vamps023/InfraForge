@@ -181,7 +181,10 @@ TEST_CASE("schema v1 databases gain origin_height through migration") {
         const auto verify = infraforge::persistence::SqliteConnection::open(
             projectDirectory / "project.db",
             infraforge::persistence::SqliteOpenMode::ReadOnly);
-        CHECK(infraforge::persistence::readAppliedSchemaVersion(verify) == 2);
+        // Migration to the latest supported version (currently 3) applied.
+        CHECK(infraforge::persistence::readAppliedSchemaVersion(verify)
+            == infraforge::persistence::latestSupportedSchemaVersion(
+                infraforge::persistence::canonicalMigrations()));
     }
 }
 

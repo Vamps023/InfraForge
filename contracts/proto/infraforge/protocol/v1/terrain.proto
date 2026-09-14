@@ -1,0 +1,319 @@
+syntax = "proto3";
+
+package infraforge.protocol.v1;
+
+// Terrain domain contract: real DEM/GeoTIFF ingestion as a cancellable
+// background job, canonical dataset projections, canonical sampling, and
+// derived-tile regeneration. The frontend receives projections, events,
+// and diagnostics only — never raster payloads (docs/03_PROTOCOL/COMMANDS.md).
+//
+// Protocol 1.5: truthful terrain source-unit semantics and explicit unknown
+// elevation-unit confirmation. The generic job lifecycle (JobState,
+// JobQueuedEvent, JobStartedEvent, JobProgressEvent, JobCompletedEvent,
+// JobFailedEvent, JobCancelledEvent, JobRecord, JobCancelCommand/Result,
+// JobListCommand/Result, JobStartedResult) is owned by project.proto
+// (introduced in protocol 1.3 by Issue #5). This file contains only
+// terrain-specific concepts and must not redefine any job lifecycle type.
+
+// Snapshot of a terrain-specific diagnostic condition embedded in the
+// dataset projection for the inspector. Runtime diagnostic lifecycle
+// (added/removed/cleared) is emitted through the generic
+// DiagnosticAddedEvent/DiagnosticRemovedEvent/DiagnosticClearedEvent
+// defined in project.proto, sourced from "terrain".
+message TerrainDiagnostic {
+  // Stable diagnostic code name (e.g. "nodata_cells", "source_data_missing").
+  string code = 1;
+  string message = 2;
+}
+
+// Detected facts about a candidate DEM source, probed read-only before any
+// project mutation. CRS metadata is always explicit: a source without CRS
+// fails the probe with a typed error, never a silent assumption.
+message TerrainSourceInfo {
+  string format = 1;
+  string crs_definition = 2;
+  int64 width = 3;
+  int64 height = 4;
+  double origin_x = 5;
+  double origin_y = 6;
+  double pixel_size_x = 7;
+  double pixel_size_y = 8;
+  string elevation_unit = 9;
+  string sample_type = 10;
+  bool has_nodata = 11;
+  double nodata_value = 12;
+  uint64 file_bytes = 13;
+  string horizontal_unit_name = 14;
+  string horizontal_unit_symbol = 15;
+  bool horizontal_unit_is_angular = 16;
+  double sample_scale = 17;
+  double sample_offset = 18;
+  string elevation_unit_source = 19;
+}
+
+message TerrainProbeSourceCommand {
+  // Absolute path of the candidate DEM file.
+  string path = 1;
+}
+
+message TerrainProbeSourceResult {
+  TerrainSourceInfo source = 1;
+  // Geo-resolved CRS description for display.
+  string crs_name = 2;
+  string crs_kind = 3;
+  string crs_authority = 4;
+  string crs_code = 5;
+}
+
+message TerrainImportDatasetCommand {
+  // Absolute path of the DEM file to ingest into project-owned storage.
+  string path = 1;
+  string display_name = 2;
+  // Required when the source does not authoritatively declare a vertical
+  // sample unit. Empty never implies metres.
+  string elevation_unit_override = 3;
+}
+
+// Canonical terrain dataset projection (inspector/outliner). Geometry is
+// source-space raster geometry; bounds and elevation range are canonical
+// project-global values in the project linear unit.
+message TerrainDatasetInfo {
+  string dataset_uuid = 1;
+  string display_name = 2;
+  // Project-relative storage location of the ingested raster copy.
+  string storage_path = 3;
+  string source_format = 4;
+  string source_crs = 5;
+  int64 raster_width = 6;
+  int64 raster_height = 7;
+  double cell_size_x = 8;
+  double cell_size_y = 9;
+  string elevation_unit = 10;
+  bool has_nodata = 11;
+  double nodata_value = 12;
+  double min_z = 13;
+  double max_z = 14;
+  double bounds_east = 15;
+  double bounds_west = 16;
+  double bounds_north = 17;
+  double bounds_south = 18;
+  uint64 revision = 19;
+  repeated TerrainDiagnostic diagnostics = 20;
+  string created_at = 21;
+  // Attribution/provenance for remote-acquired terrain (BLOCKER 3).
+  // Empty for local-file imports without source attribution metadata.
+  string source_attribution = 22;
+  string horizontal_unit_name = 23;
+  string horizontal_unit_symbol = 24;
+  bool horizontal_unit_is_angular = 25;
+  string elevation_unit_source = 26;
+  double sample_scale = 27;
+  double sample_offset = 28;
+}
+
+message TerrainListDatasetsCommand {}
+
+message TerrainListDatasetsResult {
+  repeated TerrainDatasetInfo datasets = 1;
+}
+
+message TerrainGetDatasetCommand {
+  string dataset_uuid = 1;
+}
+
+message TerrainGetDatasetResult {
+  TerrainDatasetInfo dataset = 1;
+  // Derived-tile cache state for this dataset.
+  uint64 expected_tiles = 2;
+  uint64 present_tiles = 3;
+}
+
+message TerrainRegenerateTilesCommand {
+  string dataset_uuid = 1;
+}
+
+// Renderer scene projection: the derived terrain tiles the viewport process
+// may load, with session-context absolute cache paths. Metadata only — the
+// canonical raster never crosses the wire; the viewport reads the derived,
+// versioned tile cache files directly.
+message TerrainSceneTile {
+  string dataset_uuid = 1;
+  uint64 dataset_revision = 2;
+  int64 chunk_x = 3;
+  int64 chunk_y = 4;
+  string absolute_path = 5;
+  double min_easting = 6;
+  double min_northing = 7;
+  double max_easting = 8;
+  double max_northing = 9;
+}
+
+message TerrainGetSceneCommand {}
+
+message TerrainSceneResult {
+  // Render-local frame origin (the project origin) in canonical space.
+  double origin_easting = 1;
+  double origin_northing = 2;
+  double origin_height = 3;
+  repeated TerrainSceneTile tiles = 4;
+  // Expected tiles whose cache file is absent (drive regeneration prompts).
+  uint64 missing_tiles = 5;
+  uint64 revision = 6;
+}
+
+enum TerrainSampleStatus {
+  TERRAIN_SAMPLE_STATUS_UNSPECIFIED = 0;
+  TERRAIN_SAMPLE_STATUS_HEIGHT = 1;
+  TERRAIN_SAMPLE_STATUS_NODATA = 2;
+  TERRAIN_SAMPLE_STATUS_OUTSIDE_COVERAGE = 3;
+}
+
+message TerrainSampleCommand {
+  // Dataset to sample; empty resolves the most recently imported covering
+  // dataset (deterministic overlap rule).
+  string dataset_uuid = 1;
+  // Canonical project-global coordinates.
+  double easting = 2;
+  double northing = 3;
+}
+
+message TerrainSampleResult {
+  string dataset_uuid = 1;
+  TerrainSampleStatus status = 2;
+  // Canonical elevation in the project linear unit; meaningful for HEIGHT.
+  double height = 3;
+}
+
+message TerrainDatasetAddedEvent {
+  TerrainDatasetInfo dataset = 1;
+  uint64 revision = 2;
+}
+
+// ---- Download Area workflow (Issue #6 BLOCKER 7) ----
+//
+// The Download Area path lets the user draw a rectangular working area on a
+// geographic map, generate a deterministic application-level terrain
+// selection grid, select/deselect individual tiles, and download only the
+// selected tiles from a remote DEM provider. The engine owns provider
+// planning, network acquisition, decoding, clipping, canonical raster
+// assembly, and commit. The frontend owns only map/draw/selection UX.
+
+// A terrain DEM provider that can be selected for Download Area acquisition.
+message TerrainProviderInfo {
+  // Stable provider identifier (e.g. "aws-terrarium").
+  string provider_id = 1;
+  // Human-readable name.
+  string display_name = 2;
+  // Attribution text required by the provider's terms.
+  string attribution = 3;
+  // Whether the provider requires authentication credentials.
+  bool requires_auth = 4;
+  // Maximum native resolution in metres per pixel (0 if unknown).
+  double max_resolution_mpp = 5;
+  // Geographic coverage bounds in WGS84 (EPSG:4326) degrees.
+  // Empty means global coverage.
+  double coverage_west = 6;
+  double coverage_south = 7;
+  double coverage_east = 8;
+  double coverage_north = 9;
+}
+
+message TerrainListSourcesCommand {}
+
+message TerrainListSourcesResult {
+  repeated TerrainProviderInfo providers = 1;
+}
+
+// A rectangular geographic area in WGS84 (EPSG:4326) degrees.
+message GeoBounds {
+  double west = 1;
+  double south = 2;
+  double east = 3;
+  double north = 4;
+}
+
+// One application-level terrain selection tile. These are user-facing
+// project/canonical area units (e.g. 4 km x 4 km), NOT provider tiles.
+// The distinction between TerrainSelectionTile and provider request tiles
+// (e.g. XYZ/WebMercator) is explicit in the domain model.
+message TerrainSelectionTile {
+  // Grid index in the selection grid (column, row).
+  int32 col = 1;
+  int32 row = 2;
+  // Geographic bounds of this tile in WGS84 degrees.
+  GeoBounds bounds = 3;
+  // Approximate area in square metres.
+  double area_sqm = 4;
+}
+
+// One provider request needed to cover selected application tiles.
+message TerrainProviderRequest {
+  // Provider-specific request identifier (e.g. "z/x/y" for XYZ tiles).
+  string request_id = 1;
+  // Geographic bounds covered by this request in WGS84 degrees.
+  GeoBounds bounds = 2;
+  // Estimated response size in bytes (0 if unknown).
+  uint64 estimated_bytes = 3;
+}
+
+// A deterministic download plan produced by the engine before any network
+// acquisition. The UI presents this to the user before starting the download.
+message TerrainDownloadPlan {
+  // The provider that will be used.
+  string provider_id = 1;
+  // All application selection tiles in the drawn area (selected + unselected).
+  repeated TerrainSelectionTile selection_tiles = 2;
+  // Indices (into selection_tiles) of the selected tiles.
+  repeated int32 selected_indices = 3;
+  // Unique provider requests needed to cover ONLY the selected tiles.
+  repeated TerrainProviderRequest provider_requests = 4;
+  // Total number of provider requests (after deduplication).
+  uint32 request_count = 5;
+  // Total number of unique provider requests (same as provider_requests size).
+  uint32 deduplicated_request_count = 6;
+  // Effective resolution in metres per pixel.
+  double effective_resolution_mpp = 7;
+  // Total estimated download size in bytes (0 if not deterministically knowable).
+  uint64 estimated_bytes = 8;
+  // Warnings (e.g. partial provider coverage, unavoidable overfetch).
+  repeated string warnings = 9;
+  // Whether the provider fully covers the selected area.
+  bool full_coverage = 10;
+  // Total number of selection tiles.
+  uint32 total_tile_count = 11;
+  // Number of selected tiles.
+  uint32 selected_tile_count = 12;
+  // Approximate total selected area in square metres.
+  double selected_area_sqm = 13;
+}
+
+message TerrainPlanDownloadCommand {
+  // Provider to use for the download.
+  string provider_id = 1;
+  // The drawn working area in WGS84 degrees.
+  GeoBounds area = 2;
+  // Application selection tile size in metres (1000, 2000, 4000, 8000, 16000).
+  uint32 tile_size_metres = 3;
+  // Indices of selected tiles (into the deterministic grid for the area).
+  repeated int32 selected_indices = 4;
+}
+
+message TerrainPlanDownloadResult {
+  TerrainDownloadPlan plan = 1;
+}
+
+message TerrainDownloadSelectedCommand {
+  // Provider to use for the download.
+  string provider_id = 1;
+  // The drawn working area in WGS84 degrees.
+  GeoBounds area = 2;
+  // Application selection tile size in metres.
+  uint32 tile_size_metres = 3;
+  // Indices of selected tiles (into the deterministic grid for the area).
+  repeated int32 selected_indices = 4;
+  // Display name for the resulting terrain dataset.
+  string display_name = 5;
+}
+
+// TerrainDownloadSelectedCommand returns JobStartedResult (the download runs
+// as a background job with real progress and cancellation).

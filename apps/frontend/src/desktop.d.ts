@@ -23,6 +23,8 @@ type ViewportStatusPayload = Readonly<{
 
 type ViewportRect = Readonly<{ x: number; y: number; width: number; height: number }>
 
+type FileFilter = Readonly<{ name: string; extensions: ReadonlyArray<string> }>
+
 declare global {
   interface Window {
     infraforgeDesktop?: Readonly<{
@@ -32,10 +34,66 @@ declare global {
         electron: string
       }>
       getEngineBootstrap: () => Promise<EngineBootstrap>
+      getRuntimeConfig: () => Promise<{
+        geocoder: {
+          endpoint: string
+          minIntervalMs: number
+          maxCacheEntries: number
+          attribution: string
+          userAgent: string
+        }
+        mapTiles: {
+          provider: string
+          url: string
+          attribution: string
+          maxZoom: number
+        }
+        diagnostics: {
+          configSource: 'default' | 'config' | 'env'
+          buildMarker: string
+        }
+      }>
+      searchLocation: (query: string) => Promise<
+        Array<{
+          displayName: string
+          lat: number
+          lon: number
+          boundingBox?: { south: number; north: number; west: number; east: number }
+        }>
+      >
       pickDirectory: (options: Readonly<{ title: string; buttonLabel?: string }>) => Promise<string | null>
+      pickFile: (options: Readonly<{ title: string; filters?: ReadonlyArray<FileFilter> }>) => Promise<string | null>
+      setViewportScene: (scene: Record<string, unknown>) => void
+      setViewportCamera: (action: 'focus-terrain' | 'frame-all' | 'perspective' | 'top', datasetUuid?: string) => void
       setViewportBounds: (rect: ViewportRect, dpiScale: number) => void
       setViewportVisible: (visible: boolean) => void
       onViewportStatus: (listener: (status: ViewportStatusPayload) => void) => () => void
+      onMapTileDiagnostic: (listener: (diagnostic: Readonly<{
+        state: 'started' | 'completed' | 'failed'
+        url: string
+        statusCode?: number
+        error?: string
+        method?: string
+        resourceType?: string
+      }>) => void) => () => void
+      getDiagnostics: () => Promise<Readonly<{
+        appVersion: string
+        buildSha: string
+        electronVersion: string
+        chromeVersion: string
+        nodeVersion: string
+        platform: string
+        arch: string
+        isPackaged: boolean
+        enginePath: string | null
+        viewportPath: string | null
+        projDataPath: string | null
+        resourcesPath: string | null
+        logPath: string
+        userDataPath: string
+      }>>
+      openLogs: () => Promise<boolean>
+      onDiagnosticsRequest: (listener: () => void) => () => void
     }>
   }
 }

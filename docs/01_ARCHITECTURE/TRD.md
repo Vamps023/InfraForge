@@ -89,3 +89,24 @@ The local engine binds only to loopback by default. Desktop launch supplies a cr
 ## 12. Observability
 
 Each process emits structured logs containing timestamp, severity, process/component, request/job ID where applicable, and message. User-facing Problems/Operations views consume normalized diagnostic/job events rather than scraping log text.
+
+## 13. Linear-infrastructure geometry conditioning
+
+External road/rail linework is treated as imported source evidence, not as canonical engineering geometry by default. Import adapters retain source coordinates, source IDs/tags, and provenance separately from canonical entities.
+
+All smoothing, source-deviation checks, radius evaluation, and line/arc/clothoid fitting must occur after transformation through the centralized Geo service into canonical project coordinates. Algorithms must not apply engineering tolerances directly in WGS84 latitude/longitude degrees.
+
+The application/domain pipeline must distinguish:
+
+- retained source geometry/provenance;
+- rebuildable conditioned working geometry;
+- persisted canonical mathematical alignment;
+- rebuildable renderer tessellation.
+
+Topology-defining anchors such as true road junctions, rail switches/turnouts, branch points, user-pinned controls, and semantically fixed attachments cannot be displaced by a smoothing pass. Artificial source-way splits may be joined only when topology and source semantics prove that the join is safe.
+
+Visual smoothing algorithms such as Chaikin corner cutting may be used for preview/inspection, but preview splines/polylines are never the canonical road/rail model. Engineering alignment uses deterministic domain services and line/circular-arc/clothoid primitives where supported. Import/fitting failures that exceed configured deviation or continuity constraints produce typed diagnostics rather than silently forcing a visually smooth result.
+
+Chunk boundaries are not geometry boundaries. Derived tessellation may change density by LOD but must sample the same canonical curve and remain deterministic/seam-safe across adjacent chunks.
+
+See `docs/05_DOMAINS/LINEAR_INFRASTRUCTURE_GEOMETRY.md` for the detailed cross-domain contract and verification fixtures.

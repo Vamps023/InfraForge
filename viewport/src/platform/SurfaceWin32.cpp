@@ -2,10 +2,12 @@
 
 #include <cstdint>
 
+#include "infraforge/viewport/platform/SurfaceInput.hpp"
 #include "infraforge/viewport/platform/Win32Surface.hpp"
 #include "infraforge/runtime/Logging.hpp"
 
 #include <Windows.h>
+#include <windowsx.h>
 
 #include <string>
 #include <string_view>
@@ -21,6 +23,16 @@ constexpr UINT kAppWakeMessage = WM_APP + 0x1F1;
 // Child window class; shared by every surface this process ever creates.
 constexpr wchar_t kClassName[] = L"InfraForgeViewportChild";
 
+PointerGesture g_gesture = PointerGesture::None;
+POINT g_lastDragPosition{0, 0};
+
+void cancelGesture() {
+    g_gesture = PointerGesture::None;
+    if (GetCapture() != nullptr) {
+        (void)ReleaseCapture();
+    }
+}
+
 LRESULT CALLBACK viewportWndProc(const HWND window, const UINT message, const WPARAM wParam, const LPARAM lParam) {
     switch (message) {
     case kAppShutdownMessage:
@@ -28,6 +40,61 @@ LRESULT CALLBACK viewportWndProc(const HWND window, const UINT message, const WP
         return 0;
     case kAppWakeMessage:
         return 0;
+    case WM_MOUSEWHEEL: {
+        // Wheel delta is a fixed 1/120 step multiple; positive rolls up.
+        const double steps = static_cast<double>(GET_WHEEL_DELTA_WPARAM(wParam)) / 120.0;
+        dispatchSurfaceInput(SurfaceInputEvent{.wheelSteps = steps, .datasetUuid = {}});
+        return 0;
+    }
+    case WM_MBUTTONDOWN:
+    case WM_RBUTTONDOWN:
+        g_gesture = message == WM_MBUTTONDOWN ? PointerGesture::Pan : PointerGesture::Orbit;
+        g_lastDragPosition.x = GET_X_LPARAM(lParam);
+        g_lastDragPosition.y = GET_Y_LPARAM(lParam);
+        (void)SetCapture(window);
+        (void)SetFocus(window);
+        return 0;
+    case WM_MBUTTONUP:
+    case WM_RBUTTONUP:
+        cancelGesture();
+        return 0;
+    case WM_CAPTURECHANGED:
+    case WM_KILLFOCUS:
+    case WM_MOUSELEAVE:
+        cancelGesture();
+        return 0;
+    case WM_MOUSEMOVE:
+        if (g_gesture != PointerGesture::None) {
+            const bool buttonHeld = g_gesture == PointerGesture::Pan
+                ? (wParam & MK_MBUTTON) != 0
+                : (wParam & MK_RBUTTON) != 0;
+            if (!buttonHeld) {
+                cancelGesture();
+                return 0;
+            }
+            const int x = GET_X_LPARAM(lParam);
+            const int y = GET_Y_LPARAM(lParam);
+            dispatchSurfaceInput(SurfaceInputEvent{
+                .gesture = g_gesture,
+                .deltaX = static_cast<double>(x - g_lastDragPosition.x),
+                .deltaY = static_cast<double>(y - g_lastDragPosition.y),
+                .datasetUuid = {}});
+            g_lastDragPosition.x = x;
+            g_lastDragPosition.y = y;
+        }
+        return 0;
+    case WM_KEYDOWN: {
+        ViewportAction action = ViewportAction::None;
+        if (wParam == 'F') action = ViewportAction::FocusTerrain;
+        if (wParam == VK_HOME) action = ViewportAction::FrameAllTerrain;
+        if (wParam == 'P') action = ViewportAction::Perspective;
+        if (wParam == 'T') action = ViewportAction::Top;
+        if (action != ViewportAction::None) {
+            dispatchSurfaceInput(SurfaceInputEvent{.action = action, .datasetUuid = {}});
+            return 0;
+        }
+        return DefWindowProcW(window, message, wParam, lParam);
+    }
     default:
         return DefWindowProcW(window, message, wParam, lParam);
     }

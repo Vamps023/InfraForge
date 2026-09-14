@@ -1,8 +1,8 @@
 import { spawn, type ChildProcessByStdio } from 'node:child_process'
-import path from 'node:path'
 import readline from 'node:readline'
 import type { Readable, Writable } from 'node:stream'
-import { stat } from 'node:fs/promises'
+import { adaptTerrainScene, emptyViewportScene } from './ViewportSceneAdapter.js'
+import { resolveNativeExecutable } from './NativeExecutableResolver.js'
 
 export interface ViewportPlacement {
   screenX: number
@@ -11,7 +11,6 @@ export interface ViewportPlacement {
   height: number
   dpiScale: number
 }
-
 export interface ViewportStatus {
   state: 'unavailable' | 'starting' | 'ready' | 'suspended' | 'recreating' | 'device_lost' | 'failed' | 'stopped'
   detail: string
@@ -83,11 +82,11 @@ export class ViewportSupervisor {
     }
     this.starting = true
     try {
-      const viewportPath = await resolveConfiguredViewportPath()
+      const viewportPath = await resolveNativeExecutable('viewport')
       if (!viewportPath) {
         this.publish({
           state: 'unavailable',
-          detail: 'Set INFRAFORGE_VIEWPORT_PATH to the built infraforge-viewport executable for desktop development.',
+          detail: 'Native viewport was not found in packaged resources or the source build directory.',
         })
         return
       }
@@ -119,6 +118,26 @@ export class ViewportSupervisor {
       height: placement.height,
       dpiScale: placement.dpiScale,
     })
+  }
+
+  // Forwards the engine-derived terrain scene projection to the viewport.
+  // BLOCKER 6: Uses an explicit adapter to map protobuf camelCase fields
+  // (absolutePath, minEasting, etc.) to the native viewport's expected
+  // field names (path, minE, etc.). BigInt values are serialized as
+  // decimal strings so 64-bit values survive JSON transport losslessly.
+  sendScene(scene: Record<string, unknown>): void {
+    const adapted = adaptTerrainScene(scene)
+    if (adapted) {
+      this.sendControl(adapted as unknown as Record<string, unknown>)
+    }
+  }
+
+  sendEmptyScene(): void {
+    this.sendControl(emptyViewportScene() as unknown as Record<string, unknown>)
+  }
+
+  sendCameraAction(action: 'focus-terrain' | 'frame-all' | 'perspective' | 'top', datasetUuid?: string): void {
+    this.sendControl({ type: 'camera', action, ...(datasetUuid ? { datasetUuid } : {}) })
   }
 
   setVisible(visible: boolean): void {
@@ -157,11 +176,11 @@ export class ViewportSupervisor {
     // path after the shell applies its visibility policy at readiness.
     const args = [
         '--parent-window', readWindowHandleHex(parentWindowHandle),
-        '--screen-x', String(initialPlacement.screenX),
-        '--screen-y', String(initialPlacement.screenY),
-        '--width', String(initialPlacement.width),
-        '--height', String(initialPlacement.height),
-        '--dpi-scale', String(Math.round(initialPlacement.dpiScale * 100)),
+        '--screen-x', String(Math.round(initialPlacement.screenX)),
+        '--screen-y', String(Math.round(initialPlacement.screenY)),
+        '--width', String(Math.max(1, Math.round(initialPlacement.width))),
+        '--height', String(Math.max(1, Math.round(initialPlacement.height))),
+        '--dpi-scale', String(Math.max(5, Math.round(initialPlacement.dpiScale * 100))),
     ]
     if (process.env.INFRAFORGE_VIEWPORT_VALIDATE === '1') {
       // Development validation mode: KHONOS validation findings are logged
@@ -238,7 +257,10 @@ export class ViewportSupervisor {
       return
     }
     try {
-      child.stdin.write(`${JSON.stringify(command)}\n`)
+      // BigInt-safe JSON serialization: 64-bit integer values (datasetRevision,
+      // chunkX, chunkY, revision) are serialized as decimal strings so they
+      // survive JSON transport losslessly beyond Number.MAX_SAFE_INTEGER.
+      child.stdin.write(`${JSON.stringify(command, (_key, value) => typeof value === 'bigint' ? value.toString() : value)}\n`)
     } catch (error) {
       this.publish({
         state: 'failed',
@@ -286,17 +308,4 @@ export class ViewportSupervisor {
 
 function readWindowHandleHex(handle: Buffer): string {
   return handle.readBigUInt64LE(0).toString(16)
-}
-
-async function resolveConfiguredViewportPath(): Promise<string | null> {
-  const configured = process.env.INFRAFORGE_VIEWPORT_PATH
-  if (!configured) {
-    return null
-  }
-  const resolved = path.resolve(configured)
-  const info = await stat(resolved)
-  if (!info.isFile()) {
-    throw new Error(`INFRAFORGE_VIEWPORT_PATH is not a file: ${resolved}`)
-  }
-  return resolved
 }

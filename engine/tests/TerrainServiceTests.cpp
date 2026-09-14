@@ -382,13 +382,19 @@ TEST_CASE("cancelling a queued import commits nothing; the running import comple
     const auto second = harness.terrain->startImport(
         {.sourcePath = harness.scratch.path() / "small.tif", .displayName = "Small DEM"});
 
-    const bool blockerRunning = harness.waitFor(
+    // Wait for the first job to be Running or already Completed (CI may
+    // process small DEMs faster than the poll interval). The test's
+    // intent is to verify that cancelling the queued second job doesn't
+    // affect the first job and doesn't commit a dataset for the second.
+    const bool blockerProgressed = harness.waitFor(
         [&] {
             const auto snapshot = harness.jobs->job(first.jobId);
-            return snapshot.has_value() && snapshot->state == infraforge::application::JobState::Running;
+            return snapshot.has_value()
+                && (snapshot->state == infraforge::application::JobState::Running
+                    || snapshot->state == infraforge::application::JobState::Completed);
         },
         std::chrono::seconds{30});
-    REQUIRE(blockerRunning);
+    REQUIRE(blockerProgressed);
     REQUIRE(harness.jobs->requestCancel(second.jobId));
 
     const bool bothSettled = harness.waitFor(

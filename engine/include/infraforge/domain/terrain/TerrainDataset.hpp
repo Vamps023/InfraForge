@@ -16,6 +16,12 @@ namespace infraforge::domain::terrain {
 // Maximum characters accepted for a user-supplied terrain display name.
 inline constexpr std::size_t kMaxTerrainDisplayNameLength = 200;
 
+// Maximum number of canonical coverage pieces per dataset (BLOCKER 6).
+// This bounds the persisted coverage representation and the per-sample
+// coverage test. The selection grid limit (kMaxTerrainSelectionTiles)
+// ensures the piece count stays well below this.
+inline constexpr std::size_t kMaxCoveragePieces = 10000;
+
 // One active terrain diagnostic attached to a dataset. Codes come from the
 // typed TerrainErrorCode taxonomy; diagnostics are detected facts — the
 // importer never fabricates warnings (ADR-0010).
@@ -66,7 +72,17 @@ struct TerrainDataset {
 
     // Canonical coverage (project-global space, closed edges) and the
     // canonical elevation range of valid cells, in the project linear unit.
+    // `bounds` is the enclosing bounding box used for coarse spatial index
+    // lookup; it does NOT mean every point inside has terrain.
     world::SpatialBounds bounds{};
+    // Actual canonical terrain coverage pieces (BLOCKER 6). Each piece is a
+    // project-global rectangle corresponding to one selected application
+    // tile's transformed coverage. A point is inside terrain coverage iff
+    // it falls inside at least one piece. For local-file imports this
+    // contains a single piece equal to `bounds`. For remote sparse imports
+    // it contains one piece per selected tile. Unselected gaps between
+    // selected tiles are NOT in any piece → OutsideCoverage.
+    std::vector<world::SpatialBounds> coveragePieces;
     double minZ{0.0};
     double maxZ{0.0};
 

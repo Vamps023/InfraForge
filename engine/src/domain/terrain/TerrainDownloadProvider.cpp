@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <stdexcept>
+#include <string>
 
 namespace infraforge::domain::terrain {
 
@@ -12,7 +14,10 @@ constexpr double kPi = 3.14159265358979323846;
 
 // Earth radius in metres (WGS84).
 constexpr double kEarthRadiusMetres = 6378137.0;
-// WebMercator latitude clamp to avoid singularity.
+// WebMercator latitude clamp to avoid singularity (BLOCKER 3/15).
+// Web Mercator is only valid within ±85.05112878°; accepting ±90° would
+// produce non-finite values. The selection grid uses this clamp for
+// deterministic tile computation; canonical transforms use PROJ.
 constexpr double kMaxLat = 85.05112878;
 
 // Convert latitude in degrees to metres using the WebMercator projection.
@@ -62,6 +67,13 @@ std::vector<SelectionTile> computeSelectionGrid(
         throw std::invalid_argument("tile size must be 1000, 2000, 4000, 8000, or 16000");
     }
 
+    // BLOCKER 15: Reject invalid latitude for Web Mercator. Accepting ±90°
+    // would produce non-finite log(tan(...)) values.
+    if (area.south < -kMaxLat || area.north > kMaxLat) {
+        throw std::invalid_argument(
+            "latitude must be within Web Mercator valid range [-85.05, 85.05]");
+    }
+
     // Project the area to WebMercator metres for deterministic grid computation.
     const double minXM = lonToMeters(area.west);
     const double maxXM = lonToMeters(area.east);
@@ -70,24 +82,58 @@ std::vector<SelectionTile> computeSelectionGrid(
 
     const double widthM = maxXM - minXM;
     const double heightM = maxYM - minYM;
-    if (widthM <= 0.0 || heightM <= 0.0) {
+    if (widthM <= 0.0 || heightM <= 0.0 || !std::isfinite(widthM) || !std::isfinite(heightM)) {
         return {};
     }
 
     const double tileM = static_cast<double>(tileSizeMetres);
-    const std::int32_t cols = static_cast<std::int32_t>(std::ceil(widthM / tileM));
-    const std::int32_t rows = static_cast<std::int32_t>(std::ceil(heightM / tileM));
-    if (cols <= 0 || rows <= 0) {
+    // BLOCKER 2: Use checked arithmetic for rows/cols to prevent overflow.
+    const double colsD = std::ceil(widthM / tileM);
+    const double rowsD = std::ceil(heightM / tileM);
+    if (!std::isfinite(colsD) || !std::isfinite(rowsD) || colsD < 0.0 || rowsD < 0.0) {
+        throw std::invalid_argument("selection grid dimensions are not finite");
+    }
+    if (colsD > static_cast<double>(kMaxTerrainSelectionTiles) ||
+        rowsD > static_cast<double>(kMaxTerrainSelectionTiles)) {
+        throw std::invalid_argument(
+            "selection grid dimensions exceed the maximum of "
+            + std::to_string(kMaxTerrainSelectionTiles) + " tiles per axis");
+    }
+
+    const std::int64_t cols64 = static_cast<std::int64_t>(colsD);
+    const std::int64_t rows64 = static_cast<std::int64_t>(rowsD);
+    if (cols64 <= 0 || rows64 <= 0) {
         return {};
     }
 
+    // BLOCKER 2: Checked multiplication for total tile count.
+    if (cols64 > static_cast<std::int64_t>(kMaxTerrainSelectionTiles) ||
+        rows64 > static_cast<std::int64_t>(kMaxTerrainSelectionTiles)) {
+        throw std::invalid_argument(
+            "selection grid dimensions exceed the maximum of "
+            + std::to_string(kMaxTerrainSelectionTiles) + " tiles per axis");
+    }
+    // Total count: check overflow before computing.
+    if (cols64 > static_cast<std::int64_t>(kMaxTerrainSelectionTiles) / rows64 + 1) {
+        throw std::invalid_argument(
+            "terrain selection contains too many tiles; maximum supported selection is "
+            + std::to_string(kMaxTerrainSelectionTiles) + " tiles");
+    }
+    const std::int64_t totalCount = cols64 * rows64;
+    if (totalCount > static_cast<std::int64_t>(kMaxTerrainSelectionTiles)) {
+        throw std::invalid_argument(
+            "terrain selection contains " + std::to_string(totalCount)
+            + " tiles; maximum supported selection is "
+            + std::to_string(kMaxTerrainSelectionTiles) + " tiles");
+    }
+
     std::vector<SelectionTile> tiles;
-    tiles.reserve(static_cast<std::size_t>(cols) * static_cast<std::size_t>(rows));
-    for (std::int32_t row = 0; row < rows; ++row) {
-        for (std::int32_t col = 0; col < cols; ++col) {
+    tiles.reserve(static_cast<std::size_t>(totalCount));
+    for (std::int64_t row = 0; row < rows64; ++row) {
+        for (std::int64_t col = 0; col < cols64; ++col) {
             SelectionTile tile;
-            tile.col = col;
-            tile.row = row;
+            tile.col = static_cast<std::int32_t>(col);
+            tile.row = static_cast<std::int32_t>(row);
             // Tile bounds in WebMercator metres.
             const double tileMinXM = minXM + static_cast<double>(col) * tileM;
             const double tileMaxXM = std::min(minXM + static_cast<double>(col + 1) * tileM, maxXM);

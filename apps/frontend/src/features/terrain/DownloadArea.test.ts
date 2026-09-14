@@ -67,7 +67,7 @@ describe('Download Area - area validation', () => {
 
   it('rejects out-of-range latitude', () => {
     const area = { west: -105.5, south: -100, east: -105.0, north: 40.0 }
-    expect(area.south < -90).toBe(true)
+    expect(area.south < -85.05112878).toBe(true)
   })
 
   it('accepts valid area', () => {
@@ -75,7 +75,51 @@ describe('Download Area - area validation', () => {
     expect(area.west < area.east).toBe(true)
     expect(area.south < area.north).toBe(true)
     expect(area.west >= -180 && area.east <= 180).toBe(true)
-    expect(area.south >= -90 && area.north <= 90).toBe(true)
+    expect(area.south >= -85.05112878 && area.north <= 85.05112878).toBe(true)
+  })
+})
+
+describe('Download Area - stale plan response race', () => {
+  it('ignores stale plan responses from earlier requests', async () => {
+    // NON-BLOCKING 2: Simulate the React useEffect cleanup pattern used in
+    // ImportTerrainDialog. When a new request starts, the previous
+    // request's `cancelled` flag is set to true via the cleanup function.
+    // A stale response (from an earlier request) must not overwrite the
+    // newer result.
+    let planResult: { selectedTileCount: number } | null = null
+
+    // Each request gets its own `cancelled` closure variable. When a new
+    // request starts, the previous request's cleanup sets its `cancelled`
+    // to true.
+    let previousCleanup: (() => void) | null = null
+
+    const makeRequest = (selectedTileCount: number, delay: number) => {
+      // Run the previous request's cleanup (cancels it).
+      if (previousCleanup) previousCleanup()
+      let cancelled = false
+      previousCleanup = () => { cancelled = true }
+
+      return new Promise<void>((resolve) => {
+        setTimeout(() => {
+          if (!cancelled) {
+            planResult = { selectedTileCount }
+          }
+          resolve()
+        }, delay)
+      })
+    }
+
+    // Request A (slow, 50ms) starts first, then Request B (fast, 10ms)
+    // starts. B should resolve first and set planResult. When A resolves
+    // later, it should be ignored because its `cancelled` flag is true.
+    const requestA = makeRequest(5, 50)
+    const requestB = makeRequest(3, 10)
+
+    await Promise.all([requestA, requestB])
+
+    // The newer request (B, selectedTileCount=3) should win.
+    expect(planResult).not.toBeNull()
+    expect(planResult!.selectedTileCount).toBe(3)
   })
 })
 

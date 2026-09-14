@@ -158,7 +158,7 @@ TEST_SUITE("terrarium terrain provider") {
         req.bounds = GeoBounds{.west = -180, .south = -85.05, .east = -179.99, .north = -85.04};
         req.estimatedBytes = 100 * 1024;
 
-        auto resultPath = provider.fetchRequest(req, tempDir, "");
+        auto resultPath = provider.fetchRequest(req, tempDir, "", {});
 
         // Verify the GeoTIFF was created.
         CHECK(std::filesystem::exists(resultPath));
@@ -218,7 +218,7 @@ TEST_SUITE("terrarium terrain provider") {
 
         bool threw = false;
         try {
-            (void)provider.fetchRequest(req, tempDir, "");
+            (void)provider.fetchRequest(req, tempDir, "", {});
         } catch (const ProviderError& e) {
             threw = true;
             // 404 maps to SourceUnavailable, which is retryable, but after
@@ -247,7 +247,7 @@ TEST_SUITE("terrarium terrain provider") {
 
         bool threw = false;
         try {
-            (void)provider.fetchRequest(req, tempDir, "");
+            (void)provider.fetchRequest(req, tempDir, "", {});
         } catch (const ProviderError& e) {
             threw = true;
             CHECK(e.code() == ProviderErrorCode::AuthenticationFailed);
@@ -274,7 +274,7 @@ TEST_SUITE("terrarium terrain provider") {
 
         bool threw = false;
         try {
-            (void)provider.fetchRequest(req, tempDir, "");
+            (void)provider.fetchRequest(req, tempDir, "", {});
         } catch (const ProviderError& e) {
             threw = true;
             CHECK(e.code() == ProviderErrorCode::RateLimited);
@@ -297,7 +297,7 @@ TEST_SUITE("terrarium terrain provider") {
 
         bool threw = false;
         try {
-            (void)provider.fetchRequest(req, tempDir, "");
+            (void)provider.fetchRequest(req, tempDir, "", {});
         } catch (const ProviderError& e) {
             threw = true;
             CHECK(e.code() == ProviderErrorCode::InvalidProviderResponse);

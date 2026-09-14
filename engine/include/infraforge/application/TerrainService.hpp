@@ -174,6 +174,8 @@ private:
         std::uint64_t skipped{0};
     };
     // Immutable inputs for the download worker (Issue #6 BLOCKER 7).
+    // All executor-owned state is snapshotted here before job submission;
+    // the worker never accesses world_, project_, datasets_, or store_.
     struct DownloadPayload {
         std::string jobId;
         std::string providerId;
@@ -183,6 +185,7 @@ private:
         std::string projectUuid;
         std::filesystem::path projectDirectory;
         domain::geo::ProjectGeoreference project;
+        domain::world::ChunkGrid grid;  // snapshotted before job (BLOCKER 7)
     };
 
     [[nodiscard]] std::filesystem::path projectDirectory_() const;

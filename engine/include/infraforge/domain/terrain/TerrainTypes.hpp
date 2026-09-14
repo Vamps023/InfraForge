@@ -40,6 +40,23 @@ enum class TerrainErrorCode : std::uint8_t {
     TileGenerationFailed,
     // Malformed command argument (empty name, unknown dataset, ...).
     InvalidArgument,
+    // ---- Remote provider failure taxonomy (BLOCKER 5) ----
+    // Provider authentication failed (HTTP 401/403).
+    ProviderAuthenticationFailed,
+    // Provider rate-limited the request (HTTP 429).
+    ProviderRateLimited,
+    // Network timeout while contacting the provider.
+    ProviderNetworkTimeout,
+    // Provider source is unavailable (HTTP 5xx, DNS, connection refused).
+    ProviderUnavailable,
+    // Provider does not cover the requested area.
+    ProviderUnsupportedCoverage,
+    // Provider returned an invalid/malformed response (bad PNG, wrong bands).
+    ProviderInvalidResponse,
+    // Provider response was corrupt (decoded but inconsistent).
+    ProviderCorruptResponse,
+    // Selection grid or provider request count exceeds safety limits.
+    SelectionTooLarge,
 };
 
 [[nodiscard]] std::string_view terrainErrorCodeName(TerrainErrorCode code) noexcept;

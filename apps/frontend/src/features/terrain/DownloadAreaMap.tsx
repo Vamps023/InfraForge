@@ -56,17 +56,23 @@ function fromLeafletBounds(b: L.LatLngBounds): GeoBounds {
   }
 }
 
+type MapMode = 'navigate' | 'draw'
+
 // Component that handles map click-and-drag to draw a rectangle.
+// Only active in 'draw' mode (NON-BLOCKING 1: separate pan and draw modes).
 function DrawHandler({
   onDraw,
+  mode,
 }: {
   onDraw: (bounds: GeoBounds) => void
+  mode: MapMode
 }) {
   const [drawing, setDrawing] = useState(false)
   const [start, setStart] = useState<L.LatLng | null>(null)
   const [current, setCurrent] = useState<L.LatLng | null>(null)
   const map = useMapEvents({
     mousedown: (e) => {
+      if (mode !== 'draw') return
       setDrawing(true)
       setStart(e.latlng)
       setCurrent(e.latlng)
@@ -119,6 +125,7 @@ export function DownloadAreaMap({
 }: DownloadAreaMapProps) {
   const [goToLat, setGoToLat] = useState('')
   const [goToLon, setGoToLon] = useState('')
+  const [mode, setMode] = useState<MapMode>('navigate')
   const fitRef = useRef<L.Map | null>(null)
 
   const handleGoTo = useCallback(() => {
@@ -128,6 +135,12 @@ export function DownloadAreaMap({
       fitRef.current?.panTo([lat, lon])
     }
   }, [goToLat, goToLon])
+
+  const handleDraw = useCallback((bounds: GeoBounds) => {
+    onAreaChange(bounds)
+    // Automatically return to navigate mode after drawing (NON-BLOCKING 1).
+    setMode('navigate')
+  }, [onAreaChange])
 
   return (
     <div className="download-area-map">
@@ -151,8 +164,26 @@ export function DownloadAreaMap({
             Go To
           </button>
         </div>
+        <div className="mode-controls">
+          <button
+            type="button"
+            className={mode === 'navigate' ? 'mode-active' : ''}
+            onClick={() => setMode('navigate')}
+          >
+            Navigate
+          </button>
+          <button
+            type="button"
+            className={mode === 'draw' ? 'mode-active' : ''}
+            onClick={() => setMode('draw')}
+          >
+            Draw Area
+          </button>
+        </div>
         <div className="map-hint">
-          Click and drag on the map to draw a rectangular area.
+          {mode === 'draw'
+            ? 'Click and drag on the map to draw a rectangular area.'
+            : 'Pan and zoom normally. Click "Draw Area" to draw a rectangle.'}
         </div>
       </div>
       <MapContainer
@@ -168,7 +199,7 @@ export function DownloadAreaMap({
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
           maxZoom={19}
         />
-        <DrawHandler onDraw={onAreaChange} />
+        <DrawHandler onDraw={handleDraw} mode={mode} />
         <FitBounds bounds={area} />
         {area && (
           <Rectangle

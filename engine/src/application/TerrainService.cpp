@@ -77,6 +77,32 @@ constexpr double kDlCommitEnd = 0.95;
     throw TerrainError(code, message);
 }
 
+// BLOCKER 5: Map a typed ProviderErrorCode to the corresponding
+// TerrainErrorCode so the typed failure survives through JobRecord →
+// protocol event → frontend diagnostics. Cancellation stays cancellation.
+TerrainErrorCode mapProviderError(domain::terrain::ProviderErrorCode code) {
+    using PE = domain::terrain::ProviderErrorCode;
+    switch (code) {
+    case PE::AuthenticationFailed:
+        return TerrainErrorCode::ProviderAuthenticationFailed;
+    case PE::RateLimited:
+        return TerrainErrorCode::ProviderRateLimited;
+    case PE::NetworkTimeout:
+        return TerrainErrorCode::ProviderNetworkTimeout;
+    case PE::SourceUnavailable:
+        return TerrainErrorCode::ProviderUnavailable;
+    case PE::UnsupportedCoverage:
+        return TerrainErrorCode::ProviderUnsupportedCoverage;
+    case PE::InvalidProviderResponse:
+        return TerrainErrorCode::ProviderInvalidResponse;
+    case PE::CorruptTerrainResponse:
+        return TerrainErrorCode::ProviderCorruptResponse;
+    case PE::Cancelled:
+        return TerrainErrorCode::InvalidArgument; // cancellation handled separately
+    }
+    return TerrainErrorCode::SourceUnreadable;
+}
+
 // Web Mercator forward: WGS84 lat/lon -> EPSG:3857 x/y (meters).
 // Used to transform selected coverage bounds for raster clipping.
 constexpr double kWebMercatorPi = 3.14159265358979323846;
@@ -127,12 +153,16 @@ struct CoverageRect { double minX, minY, maxX, maxY; };
 AssembledRaster assembleCanonicalGeoTiff(
     const std::vector<std::filesystem::path>& inputTiles,
     const std::filesystem::path& outputPath,
-    const std::vector<CoverageRect>& selectedCoverage = {}) {
+    const std::vector<CoverageRect>& selectedCoverage = {},
+    const domain::terrain::CancellationCallback& cancel = {}) {
 
     if (inputTiles.empty()) {
         failImport(TerrainErrorCode::InvalidArgument,
             "no provider tiles to assemble");
     }
+
+    // Cancellation checkpoint before opening tiles.
+    if (cancel) cancel();
 
     // Read all input tiles to compute union bounds and pixel size.
     struct TileInfo {
@@ -209,18 +239,40 @@ AssembledRaster assembleCanonicalGeoTiff(
         tiles.push_back(info);
     }
 
-    if (pixelW <= 0.0 || pixelH <= 0.0) {
+    if (pixelW <= 0.0 || pixelH <= 0.0 || !std::isfinite(pixelW) || !std::isfinite(pixelH)) {
         failImport(TerrainErrorCode::SourceUnreadable,
             "invalid pixel size in provider tiles");
     }
 
-    // Compute output dimensions.
-    const int outWidth = static_cast<int>(std::round((unionMaxX - unionMinX) / pixelW));
-    const int outHeight = static_cast<int>(std::round((unionMaxY - unionMinY) / pixelH));
-
-    if (outWidth <= 0 || outHeight <= 0) {
+    // BLOCKER 3: Validate output dimensions before allocation.
+    // Use int64_t for intermediate calculations to prevent overflow.
+    const double outWidthD = std::round((unionMaxX - unionMinX) / pixelW);
+    const double outHeightD = std::round((unionMaxY - unionMinY) / pixelH);
+    if (!std::isfinite(outWidthD) || !std::isfinite(outHeightD) ||
+        outWidthD <= 0.0 || outHeightD <= 0.0) {
         failImport(TerrainErrorCode::SourceUnreadable,
             "invalid output raster dimensions");
+    }
+    if (outWidthD > static_cast<double>(std::numeric_limits<int>::max()) ||
+        outHeightD > static_cast<double>(std::numeric_limits<int>::max())) {
+        failImport(TerrainErrorCode::SourceUnreadable,
+            "output raster dimensions exceed int32 range");
+    }
+    const int outWidth = static_cast<int>(outWidthD);
+    const int outHeight = static_cast<int>(outHeightD);
+
+    // BLOCKER 3: Check pixel count and estimated byte size against safety limits.
+    const std::int64_t pixelCount = static_cast<std::int64_t>(outWidth) * outHeight;
+    if (pixelCount > domain::terrain::kMaxCanonicalRasterPixels) {
+        failImport(TerrainErrorCode::SourceUnreadable,
+            "output raster pixel count (" + std::to_string(pixelCount)
+            + ") exceeds safety limit (" + std::to_string(domain::terrain::kMaxCanonicalRasterPixels) + ")");
+    }
+    // Estimated bytes: Float32 = 4 bytes/pixel.
+    const std::int64_t estBytes = pixelCount * 4;
+    if (estBytes > static_cast<std::int64_t>(4) * 1024 * 1024 * 1024) { // 4 GB
+        failImport(TerrainErrorCode::SourceUnreadable,
+            "output raster estimated size exceeds 4 GB safety limit");
     }
 
     // Create the output GeoTIFF.
@@ -241,11 +293,17 @@ AssembledRaster assembleCanonicalGeoTiff(
         unionMinX, pixelW, 0.0,
         unionMaxY, 0.0, -pixelH
     };
-    GDALSetGeoTransform(outDs, outGeotransform);
+    if (GDALSetGeoTransform(outDs, outGeotransform) != CE_None) {
+        GDALClose(outDs);
+        failImport(TerrainErrorCode::SourceUnreadable, "cannot set output geotransform");
+    }
 
     // Set CRS.
     if (!crs.empty()) {
-        GDALSetProjection(outDs, crs.c_str());
+        if (GDALSetProjection(outDs, crs.c_str()) != CE_None) {
+            GDALClose(outDs);
+            failImport(TerrainErrorCode::SourceUnreadable, "cannot set output CRS");
+        }
     }
 
     // Set NoData.
@@ -258,18 +316,30 @@ AssembledRaster assembleCanonicalGeoTiff(
         hasNodata = true;
     }
 
-    // Initialize the output with NoData (sparse coverage - BLOCKER 4).
-    std::vector<float> outBuf(static_cast<size_t>(outWidth) * outHeight, static_cast<float>(nodata));
-    CPLErr err = GDALRasterIO(outBand, GF_Write,
-        0, 0, outWidth, outHeight,
-        outBuf.data(), outWidth, outHeight, GDT_Float32, 0, 0);
-    if (err != CE_None) {
-        GDALClose(outDs);
-        failImport(TerrainErrorCode::SourceUnreadable, "cannot initialize output raster");
+    // BLOCKER 3: Initialize the output with NoData using strip-based writes
+    // (bounded memory — no full-raster allocation).
+    {
+        const std::int64_t stripRows = domain::terrain::kAssemblyStripRows;
+        std::vector<float> nodataStrip(static_cast<std::size_t>(outWidth) * stripRows,
+            static_cast<float>(nodata));
+        for (std::int64_t row = 0; row < outHeight; row += stripRows) {
+            if (cancel) cancel();
+            const int stripH = static_cast<int>(
+                std::min(stripRows, static_cast<std::int64_t>(outHeight) - row));
+            CPLErr err = GDALRasterIO(outBand, GF_Write,
+                0, static_cast<int>(row), outWidth, stripH,
+                nodataStrip.data(), outWidth, stripH, GDT_Float32, 0, 0);
+            if (err != CE_None) {
+                GDALClose(outDs);
+                failImport(TerrainErrorCode::SourceUnreadable,
+                    "cannot initialize output raster strip at row " + std::to_string(row));
+            }
+        }
     }
 
-    // Copy each tile's data into the output.
+    // Copy each tile's data into the output (tile-by-tile is already bounded).
     for (const auto& tile : tiles) {
+        if (cancel) cancel();
         GDALDatasetH ds = GDALOpen(tile.path.string().c_str(), GA_ReadOnly);
         if (!ds) continue;
 
@@ -286,30 +356,50 @@ AssembledRaster assembleCanonicalGeoTiff(
         CPLErr re = GDALRasterIO(band, GF_Read,
             0, 0, tile.width, tile.height,
             tileData.data(), tile.width, tile.height, GDT_Float32, 0, 0);
-        if (re == CE_None) {
-            CPLErr we = GDALRasterIO(outBand, GF_Write,
-                offsetX, offsetY, tile.width, tile.height,
-                tileData.data(), tile.width, tile.height, GDT_Float32, 0, 0);
-            (void)we;
+        if (re != CE_None) {
+            GDALClose(ds);
+            GDALClose(outDs);
+            failImport(TerrainErrorCode::SourceUnreadable,
+                "cannot read provider tile: " + tile.path.string());
+        }
+        CPLErr we = GDALRasterIO(outBand, GF_Write,
+            offsetX, offsetY, tile.width, tile.height,
+            tileData.data(), tile.width, tile.height, GDT_Float32, 0, 0);
+        if (we != CE_None) {
+            GDALClose(ds);
+            GDALClose(outDs);
+            failImport(TerrainErrorCode::SourceUnreadable,
+                "cannot write provider tile to output: " + tile.path.string());
         }
 
         GDALClose(ds);
     }
 
-    // Clip to selected coverage (BLOCKER 2: clip ONLY to selected application
-    // coverage). Pixels outside the coverage rectangles are set to NoData so
-    // unselected gaps have no terrain data. This prevents provider overfetch
-    // from filling gaps between disconnected selected tiles (BLOCKER 4).
+    // BLOCKER 3: Clip to selected coverage using strip-based processing
+    // (bounded memory). Pixels outside the coverage rectangles are set to
+    // NoData so unselected gaps have no terrain data (BLOCKER 6).
+    // Pre-compute Y-sorted coverage rects for efficient per-strip filtering.
     if (!selectedCoverage.empty()) {
-        std::vector<float> maskBuf(static_cast<size_t>(outWidth) * outHeight);
-        CPLErr maskErr = GDALRasterIO(outBand, GF_Read,
-            0, 0, outWidth, outHeight,
-            maskBuf.data(), outWidth, outHeight, GDT_Float32, 0, 0);
-        if (maskErr == CE_None) {
-            for (int row = 0; row < outHeight; ++row) {
-                const double py = unionMaxY - (static_cast<double>(row) + 0.5) * pixelH;
+        const std::int64_t stripRows = domain::terrain::kAssemblyStripRows;
+        std::vector<float> stripBuf(static_cast<std::size_t>(outWidth) * stripRows);
+        for (std::int64_t row = 0; row < outHeight; row += stripRows) {
+            if (cancel) cancel();
+            const int stripH = static_cast<int>(
+                std::min(stripRows, static_cast<std::int64_t>(outHeight) - row));
+            CPLErr readErr = GDALRasterIO(outBand, GF_Read,
+                0, static_cast<int>(row), outWidth, stripH,
+                stripBuf.data(), outWidth, stripH, GDT_Float32, 0, 0);
+            if (readErr != CE_None) {
+                GDALClose(outDs);
+                failImport(TerrainErrorCode::SourceUnreadable,
+                    "cannot read strip for coverage clipping at row " + std::to_string(row));
+            }
+            for (int r = 0; r < stripH; ++r) {
+                const double py = unionMaxY -
+                    (static_cast<double>(row + r) + 0.5) * pixelH;
                 for (int col = 0; col < outWidth; ++col) {
-                    const double px = unionMinX + (static_cast<double>(col) + 0.5) * pixelW;
+                    const double px = unionMinX +
+                        (static_cast<double>(col) + 0.5) * pixelW;
                     bool inside = false;
                     for (const auto& rect : selectedCoverage) {
                         if (px >= rect.minX && px <= rect.maxX &&
@@ -319,15 +409,19 @@ AssembledRaster assembleCanonicalGeoTiff(
                         }
                     }
                     if (!inside) {
-                        maskBuf[static_cast<size_t>(row) * outWidth + col] =
+                        stripBuf[static_cast<std::size_t>(r) * outWidth + col] =
                             static_cast<float>(nodata);
                     }
                 }
             }
-            CPLErr maskWriteErr = GDALRasterIO(outBand, GF_Write,
-                0, 0, outWidth, outHeight,
-                maskBuf.data(), outWidth, outHeight, GDT_Float32, 0, 0);
-            (void)maskWriteErr;
+            CPLErr writeErr = GDALRasterIO(outBand, GF_Write,
+                0, static_cast<int>(row), outWidth, stripH,
+                stripBuf.data(), outWidth, stripH, GDT_Float32, 0, 0);
+            if (writeErr != CE_None) {
+                GDALClose(outDs);
+                failImport(TerrainErrorCode::SourceUnreadable,
+                    "cannot write clipped strip at row " + std::to_string(row));
+            }
         }
     }
 
@@ -601,6 +695,10 @@ JobRecord TerrainService::startImport(const TerrainImportSpec& spec) {
             failImport(TerrainErrorCode::InvalidCoverage, "source coverage is empty after transform");
         }
         payload->dataset.bounds = coverage;
+        // BLOCKER 6: Local-file imports have a single full coverage piece
+        // equal to the enclosing bounds. This keeps the canonical coverage
+        // representation consistent between local and remote imports.
+        payload->dataset.coveragePieces = { coverage };
 
         for (std::int64_t row = 0; row < payload->dataset.rasterHeight; row += kElevationScanRows) {
             context.throwIfCancelled();
@@ -894,8 +992,27 @@ TerrainSceneProjection TerrainService::sceneProjection() const {
                 ++projection.missingTiles;
                 continue;
             }
-            const domain::world::SpatialBounds tileRect =
-                world_.grid().chunkBounds(chunk).intersectedWith(dataset.bounds);
+            // BLOCKER 6: The tile rect is the intersection of the chunk
+            // bounds with the dataset's actual coverage (union of pieces),
+            // not just the enclosing bounding box. This ensures the scene
+            // does not claim terrain in unselected gaps.
+            const auto chunkBounds = world_.grid().chunkBounds(chunk);
+            domain::world::SpatialBounds tileRect = domain::world::SpatialBounds::empty();
+            if (dataset.coveragePieces.empty()) {
+                tileRect = chunkBounds.intersectedWith(dataset.bounds);
+            } else {
+                for (const auto& piece : dataset.coveragePieces) {
+                    const auto intersect = chunkBounds.intersectedWith(piece);
+                    if (!intersect.isEmpty()) {
+                        if (tileRect.isEmpty()) {
+                            tileRect = intersect;
+                        } else {
+                            tileRect = tileRect.unitedWith(intersect);
+                        }
+                    }
+                }
+            }
+            if (tileRect.isEmpty()) continue;
             projection.tiles.push_back({
                 .datasetUuid = domain::terrain::uuidTextFromEntityId(dataset.id),
                 .datasetRevision = dataset.revision,
@@ -930,15 +1047,45 @@ TerrainSampleResult TerrainService::sample(
         }
     } else {
         // Deterministic overlap rule: the most recently imported covering
-        // dataset wins (reverse creation order).
+        // dataset wins (reverse creation order). BLOCKER 6: test actual
+        // coverage pieces, not just the enclosing bounding box, so an
+        // unselected gap between selected islands returns OutsideCoverage.
         for (auto iterator = datasets_.rbegin(); iterator != datasets_.rend(); ++iterator) {
-            if (iterator->bounds.contains(easting, northing)) {
-                dataset = *iterator;
-                break;
+            // First check the enclosing bounds for a fast reject.
+            if (!iterator->bounds.contains(easting, northing)) continue;
+            // If coverage pieces exist, the point must be inside at least
+            // one piece to be considered covered.
+            if (!iterator->coveragePieces.empty()) {
+                bool inPiece = false;
+                for (const auto& piece : iterator->coveragePieces) {
+                    if (piece.contains(easting, northing)) {
+                        inPiece = true;
+                        break;
+                    }
+                }
+                if (!inPiece) continue;
             }
+            dataset = *iterator;
+            break;
         }
         if (!dataset.has_value()) {
             return {.datasetUuid = "", .sample = {.status = domain::terrain::TerrainSampleStatus::OutsideCoverage}};
+        }
+    }
+
+    // BLOCKER 6: Even when a specific dataset is requested, verify the point
+    // is inside actual coverage pieces (not just the enclosing bounds).
+    if (!dataset->coveragePieces.empty()) {
+        bool inPiece = false;
+        for (const auto& piece : dataset->coveragePieces) {
+            if (piece.contains(easting, northing)) {
+                inPiece = true;
+                break;
+            }
+        }
+        if (!inPiece) {
+            return {.datasetUuid = domain::terrain::uuidTextFromEntityId(dataset->id),
+                    .sample = {.status = domain::terrain::TerrainSampleStatus::OutsideCoverage}};
         }
     }
 
@@ -975,7 +1122,30 @@ std::optional<domain::terrain::TerrainDataset> TerrainService::findDataset(
 
 std::vector<ChunkCoord> TerrainService::expectedChunks(
     const domain::terrain::TerrainDataset& dataset) const {
-    return world_.chunksIntersecting(dataset.bounds);
+    // BLOCKER 6: Filter chunks by actual coverage pieces, not just the
+    // enclosing bounding box. Chunks that fall entirely in an unselected
+    // gap (no coverage piece) must not generate terrain tiles.
+    const auto allChunks = world_.chunksIntersecting(dataset.bounds);
+    if (dataset.coveragePieces.empty()) {
+        return allChunks;
+    }
+    std::vector<ChunkCoord> filtered;
+    filtered.reserve(allChunks.size());
+    for (const auto& chunk : allChunks) {
+        const auto chunkBounds = world_.grid().chunkBounds(chunk);
+        // A chunk is included if it intersects at least one coverage piece.
+        bool intersects = false;
+        for (const auto& piece : dataset.coveragePieces) {
+            if (chunkBounds.intersects(piece)) {
+                intersects = true;
+                break;
+            }
+        }
+        if (intersects) {
+            filtered.push_back(chunk);
+        }
+    }
+    return filtered;
 }
 
 void TerrainService::emitJobUpdate(const JobRecord& record) {
@@ -1036,14 +1206,16 @@ domain::terrain::DownloadPlan TerrainService::planDownload(
         throw TerrainError(TerrainErrorCode::InvalidArgument,
             "area.south must be less than area.north");
     }
-    // Validate longitude/latitude ranges (WGS84).
+    // Validate longitude/latitude ranges (WGS84). BLOCKER 15: Web Mercator
+    // is only valid within ±85.05112878°; accepting ±90° would produce
+    // non-finite values in the selection grid.
     if (area.west < -180.0 || area.east > 180.0) {
         throw TerrainError(TerrainErrorCode::InvalidArgument,
             "longitude must be in [-180, 180]");
     }
-    if (area.south < -90.0 || area.north > 90.0) {
+    if (area.south < -85.05112878 || area.north > 85.05112878) {
         throw TerrainError(TerrainErrorCode::InvalidArgument,
-            "latitude must be in [-90, 90]");
+            "latitude must be within Web Mercator valid range [-85.05, 85.05]");
     }
     // Validate tile size.
     if (tileSizeMetres != 1000 && tileSizeMetres != 2000 &&
@@ -1052,24 +1224,32 @@ domain::terrain::DownloadPlan TerrainService::planDownload(
         throw TerrainError(TerrainErrorCode::InvalidArgument,
             "tile size must be 1000, 2000, 4000, 8000, or 16000 metres");
     }
-    // Validate selection.
-    if (selectedIndices.empty()) {
-        throw TerrainError(TerrainErrorCode::InvalidArgument,
-            "no tiles selected for download");
-    }
-    // Check for duplicate indices.
-    std::vector<std::int32_t> sortedIndices = selectedIndices;
-    std::sort(sortedIndices.begin(), sortedIndices.end());
-    for (std::size_t i = 1; i < sortedIndices.size(); ++i) {
-        if (sortedIndices[i] == sortedIndices[i - 1]) {
-            throw TerrainError(TerrainErrorCode::InvalidArgument,
-                "duplicate selected tile index: " + std::to_string(sortedIndices[i]));
+    // BLOCKER 1: Empty selection is allowed in planning. The plan returns the
+    // deterministic grid with zero selected tiles and zero provider requests.
+    // Only startDownload() requires at least one selected tile.
+    // Check for duplicate indices (only if non-empty).
+    if (!selectedIndices.empty()) {
+        std::vector<std::int32_t> sortedIndices = selectedIndices;
+        std::sort(sortedIndices.begin(), sortedIndices.end());
+        for (std::size_t i = 1; i < sortedIndices.size(); ++i) {
+            if (sortedIndices[i] == sortedIndices[i - 1]) {
+                throw TerrainError(TerrainErrorCode::InvalidArgument,
+                    "duplicate selected tile index: " + std::to_string(sortedIndices[i]));
+            }
         }
     }
 
     // Compute the deterministic selection grid over the drawn area.
-    std::vector<domain::terrain::SelectionTile> allTiles =
-        domain::terrain::computeSelectionGrid(area, tileSizeMetres);
+    // BLOCKER 2: computeSelectionGrid enforces limits and throws
+    // std::invalid_argument on overflow/oversize; map it to a typed
+    // TerrainError so the application layer and protocol carry the
+    // SelectionTooLarge code.
+    std::vector<domain::terrain::SelectionTile> allTiles;
+    try {
+        allTiles = domain::terrain::computeSelectionGrid(area, tileSizeMetres);
+    } catch (const std::invalid_argument& e) {
+        throw TerrainError(TerrainErrorCode::SelectionTooLarge, e.what());
+    }
 
     // Validate selected indices are in range.
     for (std::int32_t idx : selectedIndices) {
@@ -1097,10 +1277,19 @@ domain::terrain::DownloadPlan TerrainService::planDownload(
         plan.selectedAreaSqm += tile.areaSqm;
     }
 
-    // Plan provider requests (deduplicated).
-    plan.providerRequests = provider->planRequests(selectedTiles);
+    // Plan provider requests (deduplicated). Empty selection → no requests.
+    if (!selectedTiles.empty()) {
+        plan.providerRequests = provider->planRequests(selectedTiles);
+    }
     plan.requestCount = static_cast<std::uint32_t>(plan.providerRequests.size());
     plan.deduplicatedRequestCount = plan.requestCount; // already deduplicated
+
+    // BLOCKER 2: Validate provider request count against safety limit.
+    if (plan.providerRequests.size() > domain::terrain::kMaxTerrainProviderRequests) {
+        throw TerrainError(TerrainErrorCode::SelectionTooLarge,
+            "provider request count (" + std::to_string(plan.providerRequests.size())
+            + ") exceeds maximum (" + std::to_string(domain::terrain::kMaxTerrainProviderRequests) + ")");
+    }
 
     // Estimate total bytes.
     for (const auto& req : plan.providerRequests) {
@@ -1112,8 +1301,8 @@ domain::terrain::DownloadPlan TerrainService::planDownload(
 
     // BLOCKER 14: Coverage checking — distinguish fully covered, partially
     // covered, and outside. Do not report fullCoverage = true merely because
-    // some overlap exists.
-    if (!provider->info().coverage.isEmpty()) {
+    // some overlap exists. Only check when there are selected tiles.
+    if (!selectedTiles.empty() && !provider->info().coverage.isEmpty()) {
         bool anyOutside = false;
         bool anyPartial = false;
         for (const auto& tile : selectedTiles) {
@@ -1184,14 +1373,20 @@ JobRecord TerrainService::startDownload(
 
     // Capture immutable inputs for the worker (BLOCKER 17: single clean
     // payload type, no duplicate declarations).
-    auto payload = std::make_shared<DownloadPayload>();
-    payload->providerId = providerId;
-    payload->selectedTiles = selectedTiles;
-    payload->requests = plan.providerRequests;
-    payload->displayName = displayName;
-    payload->projectUuid = store_.current().uuid;
-    payload->projectDirectory = store_.current().directory;
-    payload->project = *project_;
+    // BLOCKER 7: Snapshot the grid on the executor thread before submitting
+    // the job. The worker never accesses world_, project_, datasets_, or
+    // mutable store session state.
+    auto payload = std::shared_ptr<DownloadPayload>(new DownloadPayload{
+        .jobId = "",
+        .providerId = providerId,
+        .selectedTiles = selectedTiles,
+        .requests = plan.providerRequests,
+        .displayName = displayName,
+        .projectUuid = store_.current().uuid,
+        .projectDirectory = store_.current().directory,
+        .project = *project_,
+        .grid = world_.grid(),
+    });
 
     const std::string label = "terrain.download";
 
@@ -1199,6 +1394,7 @@ JobRecord TerrainService::startDownload(
         const domain::terrain::TerrainDownloadProvider* provider =
             providers_.find(payload->providerId);
         if (!provider) {
+            context.setFailureCode(terrainErrorCodeName(TerrainErrorCode::InvalidArgument));
             failImport(TerrainErrorCode::InvalidArgument,
                 "provider not found: " + payload->providerId);
         }
@@ -1210,6 +1406,13 @@ JobRecord TerrainService::startDownload(
             payload->projectDirectory / "terrain" / "downloads" / runtime::generateUuidV4();
         std::filesystem::create_directories(tempDir);
         TempDirGuard tempGuard(tempDir);
+
+        // BLOCKER 4: Cancellation callback handed to the provider and
+        // assembly. It throws JobCancelled (mapped from the atomic flag)
+        // so cancellation propagates through HTTP, decode, and assembly.
+        auto cancel = [&context]() {
+            context.throwIfCancelled();
+        };
 
         // Phase 1: Planning already done. Report 0-5%.
         context.reportNormalizedProgress(0.0, "Planning download");
@@ -1225,11 +1428,16 @@ JobRecord TerrainService::startDownload(
             context.throwIfCancelled();
             const auto& request = payload->requests[i];
             try {
-                const std::filesystem::path file = provider->fetchRequest(request, tempDir, "");
+                const std::filesystem::path file =
+                    provider->fetchRequest(request, tempDir, "", cancel);
                 downloadedFiles.push_back(file);
             } catch (const domain::terrain::ProviderError& error) {
-                // Temp dir cleaned by RAII guard.
-                throw TerrainError(TerrainErrorCode::SourceUnreadable,
+                // BLOCKER 5: Preserve the typed provider error code through
+                // the job record and protocol event instead of collapsing
+                // everything to SourceUnreadable.
+                const TerrainErrorCode mapped = mapProviderError(error.code());
+                context.setFailureCode(terrainErrorCodeName(mapped));
+                throw TerrainError(mapped,
                     "provider request failed: " + std::string(error.what()));
             }
             // Report progress in the fetch phase (5-55%) with real units.
@@ -1250,6 +1458,7 @@ JobRecord TerrainService::startDownload(
             context.throwIfCancelled();
             ports::TerrainSourceInfo tileInfo = reader_.probe(downloadedFiles[i]);
             if (tileInfo.crsDefinition.empty()) {
+                context.setFailureCode(terrainErrorCodeName(TerrainErrorCode::MissingCrs));
                 failImport(TerrainErrorCode::MissingCrs,
                     "provider tile has no CRS: " + downloadedFiles[i].string());
             }
@@ -1290,9 +1499,17 @@ JobRecord TerrainService::startDownload(
             selectedCoverage.push_back({sw.x, sw.y, ne.x, ne.y});
         }
 
-        // The assembled raster metadata (bounds, CRS) is re-derived from the
-        // probe below; the assembly return value is not used directly.
-        (void)assembleCanonicalGeoTiff(downloadedFiles, tempRaster, selectedCoverage);
+        // BLOCKER 3/4: Strip-based assembly with cancellation checkpoints.
+        try {
+            (void)assembleCanonicalGeoTiff(downloadedFiles, tempRaster,
+                selectedCoverage, cancel);
+        } catch (const TerrainError&) {
+            throw;
+        } catch (const std::exception& e) {
+            context.setFailureCode(terrainErrorCodeName(TerrainErrorCode::SourceUnreadable));
+            throw TerrainError(TerrainErrorCode::SourceUnreadable,
+                std::string("raster assembly failed: ") + e.what());
+        }
 
         // Provider tile temp files are no longer needed after assembly.
         // The RAII guard cleans the temp dir on scope exit.
@@ -1312,17 +1529,18 @@ JobRecord TerrainService::startDownload(
 
         const ports::TerrainSourceInfo sourceInfo = reader_.probe(tempRaster);
         if (sourceInfo.width <= 0 || sourceInfo.height <= 0 || sourceInfo.crsDefinition.empty()) {
+            context.setFailureCode(terrainErrorCodeName(TerrainErrorCode::CorruptSource));
             failImport(TerrainErrorCode::CorruptSource,
                 "assembled terrain raster is not a valid raster");
         }
 
-        // Build the import payload and derive ALL metadata from the probe.
+        // BLOCKER 7: Use the snapshotted grid from the payload, not world_.
         auto result = std::shared_ptr<ImportPayload>(new ImportPayload{
             .dataset = domain::terrain::TerrainDataset{},
             .projectUuid = payload->projectUuid,
             .projectDirectory = payload->projectDirectory,
             .tempFile = tempRaster,  // .importing file; commit renames it
-            .grid = world_.grid(),
+            .grid = payload->grid,
             .project = payload->project,
         });
 
@@ -1354,17 +1572,15 @@ JobRecord TerrainService::startDownload(
         const domain::geo::SourceSpatialReference sourceSrs{
             .horizontalCrs = dataset.sourceCrs, .verticalCrs = ""};
 
-        // Coverage transform: compute bounds from the SELECTED application
-        // coverage, not the full raster extent (BLOCKER 2: clip ONLY to
-        // selected application coverage; BLOCKER 4: unselected gaps must
-        // stay outside canonical coverage). Each selected tile's WGS84
-        // bounds are transformed to EPSG:3857, then to project-global via
-        // GeoTransformService. This ensures:
-        //   - world_.chunksIntersecting only generates chunks for selected area
-        //   - terrain.sample in gaps returns OutsideCoverage
-        //   - tile generation only covers selected area
+        // BLOCKER 6: Build canonical coverage pieces (one per selected tile)
+        // in project-global coordinates. The enclosing bounds is the union
+        // of all pieces. Unselected gaps between selected tiles are NOT in
+        // any piece → OutsideCoverage. This is the canonical sparse coverage
+        // representation that survives save/reopen.
+        dataset.coveragePieces.reserve(payload->selectedTiles.size());
         domain::world::SpatialBounds coverage = domain::world::SpatialBounds::empty();
         for (const auto& tile : payload->selectedTiles) {
+            domain::world::SpatialBounds piece = domain::world::SpatialBounds::empty();
             // Transform all four corners of the selected tile to project-global.
             for (std::int64_t corner = 0; corner < 4; ++corner) {
                 const double lon = (corner % 2 == 1) ? tile.bounds.east : tile.bounds.west;
@@ -1374,13 +1590,17 @@ JobRecord TerrainService::startDownload(
                     project, sourceSrs,
                     domain::geo::GeoCoordinate{.x = wm.x, .y = wm.y, .z = 0.0});
                 if (!domain::geo::isFinite(position)) {
+                    context.setFailureCode(terrainErrorCodeName(TerrainErrorCode::InvalidCoverage));
                     failImport(TerrainErrorCode::InvalidCoverage,
                         "downloaded coverage corner transforms to a non-finite canonical position");
                 }
+                piece.expandTo(position);
                 coverage.expandTo(position);
             }
+            dataset.coveragePieces.push_back(piece);
         }
         if (coverage.isEmpty()) {
+            context.setFailureCode(terrainErrorCodeName(TerrainErrorCode::InvalidCoverage));
             failImport(TerrainErrorCode::InvalidCoverage,
                 "downloaded coverage is empty after transform");
         }
@@ -1419,6 +1639,7 @@ JobRecord TerrainService::startDownload(
                 "/" + std::to_string(totalScanRows) + " rows)");
         }
         if (!anyValid) {
+            context.setFailureCode(terrainErrorCodeName(TerrainErrorCode::UnsupportedRaster));
             failImport(TerrainErrorCode::UnsupportedRaster,
                 "downloaded raster contains no valid elevation cells");
         }

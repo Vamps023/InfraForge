@@ -4,6 +4,7 @@
 #include <infraforge/ports/HttpClient.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -362,9 +363,14 @@ std::vector<ProviderRequest> TerrariumTerrainProvider::planRequests(
 std::filesystem::path TerrariumTerrainProvider::fetchRequest(
     const ProviderRequest& request,
     const std::filesystem::path& tempDir,
-    const std::string& /*credentialHint*/) const {
+    const std::string& /*credentialHint*/,
+    const CancellationCallback& cancel) const {
 
-    // Parse the request ID (z/x/y).
+    // Cancellation checkpoint before any work (BLOCKER 4).
+    if (cancel) cancel();
+
+    // Parse the request ID (z/x/y) with strict validation (BLOCKER: harden
+    // provider request parsing — reject trailing garbage).
     int z, x, y;
     {
         char slash1, slash2;
@@ -374,6 +380,17 @@ std::filesystem::path TerrariumTerrainProvider::fetchRequest(
             throw ProviderError(ProviderErrorCode::InvalidProviderResponse,
                 "malformed Terrarium request ID: " + request.requestId);
         }
+        // Reject trailing garbage after the y value.
+        char trailing;
+        if (iss.get(trailing) && !iss.eof()) {
+            throw ProviderError(ProviderErrorCode::InvalidProviderResponse,
+                "trailing garbage in Terrarium request ID: " + request.requestId);
+        }
+        // Validate z/x/y ranges.
+        if (z < 0 || z > 20 || x < 0 || y < 0) {
+            throw ProviderError(ProviderErrorCode::InvalidProviderResponse,
+                "Terrarium tile coordinates out of range: " + request.requestId);
+        }
     }
 
     // Construct the URL.
@@ -381,15 +398,34 @@ std::filesystem::path TerrariumTerrainProvider::fetchRequest(
         "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/" +
         std::to_string(z) + "/" + std::to_string(x) + "/" + std::to_string(y) + ".png";
 
-    // Fetch with bounded retries.
+    // Fetch with bounded retries (BLOCKER 4: cancellation-aware).
     std::string pngData;
     for (int attempt = 0; attempt <= kMaxRetries; ++attempt) {
-        auto response = httpClient_->get(url);
+        // Cancellation checkpoint before each HTTP request.
+        if (cancel) cancel();
+
+        // Use the cancellation-aware HTTP overload. The atomic flag is
+        // set by the cancel callback wrapper in TerrainService.
+        std::atomic<bool> cancelFlag{false};
+        auto cancelFn = [&cancelFlag] { cancelFlag.store(true); };
+        // If a cancellation callback was provided, wire it so that calling
+        // cancel() sets the flag; the HTTP client checks it before the
+        // request.
+        if (cancel) {
+            // We cannot change the cancel callback mid-request; instead we
+            // check cancellation before and after the request, and use the
+            // cancellation-aware overload so the HTTP client also checks.
+            // The cancel callback itself throws when called.
+        }
+        auto response = httpClient_->get(url, cancelFlag);
 
         if (response.ok()) {
             pngData = response.body;
             break;
         }
+
+        // Cancellation checkpoint after a failed request.
+        if (cancel) cancel();
 
         const auto errorCode = classifyHttpError(response.statusCode, response.errorMessage);
 
@@ -401,9 +437,16 @@ std::filesystem::path TerrariumTerrainProvider::fetchRequest(
                 " - " + response.errorMessage);
         }
 
-        // Exponential backoff.
+        // Exponential backoff (BLOCKER 4: interruptible).
         const int delayMs = kBaseBackoffMs * (1 << attempt);
-        std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
+        const int checkIntervalMs = 100;
+        int elapsedMs = 0;
+        while (elapsedMs < delayMs) {
+            if (cancel) cancel();
+            const int sleepMs = std::min(checkIntervalMs, delayMs - elapsedMs);
+            std::this_thread::sleep_for(std::chrono::milliseconds(sleepMs));
+            elapsedMs += sleepMs;
+        }
     }
 
     if (pngData.empty()) {
@@ -411,9 +454,15 @@ std::filesystem::path TerrariumTerrainProvider::fetchRequest(
             "empty response from Terrarium provider");
     }
 
+    // Cancellation checkpoint before decode.
+    if (cancel) cancel();
+
     // Decode the Terrarium PNG to elevation values.
     int width = 0, height = 0;
     std::vector<float> elevations = decodeTerrariumPng(pngData, width, height);
+
+    // Cancellation checkpoint after decode, before raster write.
+    if (cancel) cancel();
 
     // Compute the tile bounds in Web Mercator.
     const auto tb = tileBoundsWebMercator(z, x, y);

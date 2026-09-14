@@ -129,10 +129,14 @@ std::vector<ProviderRequest> MockTerrainProvider::planRequests(
 std::filesystem::path MockTerrainProvider::fetchRequest(
     const ProviderRequest& request,
     const std::filesystem::path& tempDir,
-    const std::string& /*credentialHint*/) const {
+    const std::string& /*credentialHint*/,
+    const CancellationCallback& cancel) const {
     if (failMode_.has_value()) {
         throw ProviderError(*failMode_, "mock provider configured to fail");
     }
+
+    // Cancellation checkpoint before decode/write (BLOCKER 4).
+    if (cancel) cancel();
 
     ensureGdalRegistered();
 

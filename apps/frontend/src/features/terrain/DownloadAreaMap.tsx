@@ -132,40 +132,51 @@ export function DownloadAreaMap({
   const fitRef = useRef<L.Map | null>(null)
 
   // Location search state (IMPORTANT 6).
+  // Explicit search: user enters a location, presses Search or Enter,
+  // and exactly one request is made. No autocomplete on every keystroke.
+  // Client-side throttling enforces the Nominatim usage policy
+  // (max 1 request per second).
   const [searchQuery, setSearchQuery] = useState('')
   const [searchResults, setSearchResults] = useState<SearchResult[]>([])
   const [searching, setSearching] = useState(false)
   const [searchError, setSearchError] = useState<string | null>(null)
   const searchGenRef = useRef(0)
+  const lastSearchTimeRef = useRef(0)
 
-  // Debounced search with stale-response suppression (IMPORTANT 6).
-  useEffect(() => {
+  // Minimum interval between Nominatim requests (1 req/sec policy).
+  const MIN_SEARCH_INTERVAL_MS = 1000
+
+  const handleSearch = useCallback(() => {
     const query = searchQuery.trim()
-    if (query.length < 2 || !searchClient) {
-      setSearchResults([])
-      setSearchError(null)
+    if (query.length < 2 || !searchClient) return
+
+    // Client-side throttling: enforce minimum interval between requests.
+    const now = Date.now()
+    const elapsed = now - lastSearchTimeRef.current
+    if (elapsed < MIN_SEARCH_INTERVAL_MS) {
+      const waitMs = MIN_SEARCH_INTERVAL_MS - elapsed
+      setTimeout(() => handleSearch(), waitMs)
       return
     }
+    lastSearchTimeRef.current = now
+
     const gen = ++searchGenRef.current
-    const timer = setTimeout(() => {
-      setSearching(true)
-      setSearchError(null)
-      searchClient.search(query)
-        .then((results) => {
-          // Stale response guard: ignore if a newer search started.
-          if (gen !== searchGenRef.current) return
-          setSearchResults(results)
-        })
-        .catch((err) => {
-          if (gen !== searchGenRef.current) return
-          setSearchResults([])
-          setSearchError(err instanceof Error ? err.message : 'Search failed')
-        })
-        .finally(() => {
-          if (gen === searchGenRef.current) setSearching(false)
-        })
-    }, 500) // 500ms debounce (respects Nominatim 1 req/sec policy)
-    return () => clearTimeout(timer)
+    setSearching(true)
+    setSearchError(null)
+    searchClient.search(query)
+      .then((results) => {
+        // Stale response guard: ignore if a newer search started.
+        if (gen !== searchGenRef.current) return
+        setSearchResults(results)
+      })
+      .catch((err) => {
+        if (gen !== searchGenRef.current) return
+        setSearchResults([])
+        setSearchError(err instanceof Error ? err.message : 'Search failed')
+      })
+      .finally(() => {
+        if (gen === searchGenRef.current) setSearching(false)
+      })
   }, [searchQuery, searchClient])
 
   const handleSearchResultClick = useCallback((result: SearchResult) => {
@@ -206,10 +217,23 @@ export function DownloadAreaMap({
           <div className="search-controls">
             <input
               type="text"
-              placeholder="Search for a location..."
+              placeholder="Enter a location name..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  handleSearch()
+                }
+              }}
             />
+            <button
+              type="button"
+              onClick={handleSearch}
+              disabled={searching || searchQuery.trim().length < 2}
+            >
+              Search
+            </button>
             {searching && <span className="search-status">Searching...</span>}
             {searchError && <span className="search-error">{searchError}</span>}
             {searchResults.length > 0 && (

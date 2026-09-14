@@ -61,11 +61,39 @@ struct CircularArcSegment {
     [[nodiscard]] AlignmentSample endSample() const noexcept { return evaluate(length); }
 };
 
+// Clothoid / Euler spiral transition segment. Curvature changes linearly with
+// station from startCurvature to endCurvature, so heading is a quadratic
+// function of station and position is a Fresnel-type integral with no
+// elementary closed form. Canonical parameters: start point, start heading,
+// start curvature, end curvature, and length.
+//
+// The clothoid supports the common transition cases:
+//   0 -> positive, positive -> 0, 0 -> negative, negative -> 0, and
+//   curvature A -> curvature B (general linear transition).
+//
+// Evaluation (sLocal in [0, length], alpha = (endCurvature-startCurvature)/(2*length)):
+//   kappa(s) = startCurvature + (endCurvature - startCurvature) * sLocal / length
+//   theta(s) = startHeading + startCurvature * sLocal + alpha * sLocal^2
+//   position(s) = start + integral_0^sLocal (cos theta, sin theta) dt
+// Heading and curvature are closed form; the position integral is evaluated
+// by a deterministic, allocation-free composite Gauss-Legendre quadrature
+// isolated behind this tested API. Tessellated vertices are NEVER stored as
+// canonical clothoid truth — position is recomputed on demand.
+struct ClothoidSegment {
+    AlignmentPoint start{};
+    Heading startHeading{0.0};
+    Curvature startCurvature{0.0};
+    Curvature endCurvature{0.0};
+    double length{0.0};
+
+    [[nodiscard]] AlignmentSample evaluate(double sLocal) const noexcept;
+    [[nodiscard]] AlignmentSample endSample() const noexcept { return evaluate(length); }
+};
+
 // Variant over the canonical alignment segment primitives. Value semantics:
 // segments are self-contained (each stores its own start point/heading) so
-// they persist and validate independently. Clothoid is added in a later
-// commit; the variant grows to include it then.
-using AlignmentSegment = std::variant<LineSegment, CircularArcSegment>;
+// they persist and validate independently.
+using AlignmentSegment = std::variant<LineSegment, CircularArcSegment, ClothoidSegment>;
 
 // Generic evaluation over the variant.
 [[nodiscard]] AlignmentSample evaluateSegment(const AlignmentSegment& segment, double sLocal) noexcept;

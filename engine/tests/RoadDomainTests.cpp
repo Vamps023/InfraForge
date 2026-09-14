@@ -4,6 +4,7 @@
 #include "infraforge/domain/road/RoadTypes.hpp"
 
 #include <cmath>
+#include <limits>
 #include <optional>
 #include <string>
 
@@ -199,6 +200,112 @@ TEST_CASE("alignment segment kind names round-trip") {
         REQUIRE(parsed.has_value());
         CHECK(*parsed == value);
     }
+}
+
+} // TEST_SUITE
+
+TEST_SUITE("road clothoid primitive") {
+
+using infraforge::domain::road::ClothoidSegment;
+
+TEST_CASE("clothoid with zero curvature throughout is a straight line") {
+    ClothoidSegment spiral{.start = {10.0, 20.0}, .startHeading = 0.3, .startCurvature = 0.0,
+        .endCurvature = 0.0, .length = 40.0};
+    CHECK_FALSE(validateSegment(spiral).has_value());
+
+    const AlignmentSample end = spiral.endSample();
+    CHECK(end.position.easting == doctest::Approx(10.0 + 40.0 * std::cos(0.3)).epsilon(kTol));
+    CHECK(end.position.northing == doctest::Approx(20.0 + 40.0 * std::sin(0.3)).epsilon(kTol));
+    CHECK(end.heading == doctest::Approx(0.3).epsilon(kTol));
+    CHECK(end.curvature == doctest::Approx(0.0));
+}
+
+TEST_CASE("clothoid with constant curvature matches a circular arc") {
+    const double kappa = 0.02;
+    CircularArcSegment arc{.start = {0.0, 0.0}, .startHeading = 0.0, .curvature = kappa, .length = 50.0};
+    ClothoidSegment spiral{.start = {0.0, 0.0}, .startHeading = 0.0, .startCurvature = kappa,
+        .endCurvature = kappa, .length = 50.0};
+
+    const AlignmentSample arcEnd = arc.endSample();
+    const AlignmentSample spEnd = spiral.endSample();
+    CHECK(spEnd.position.easting == doctest::Approx(arcEnd.position.easting).epsilon(1e-9));
+    CHECK(spEnd.position.northing == doctest::Approx(arcEnd.position.northing).epsilon(1e-9));
+    CHECK(spEnd.heading == doctest::Approx(arcEnd.heading).epsilon(kTol));
+    CHECK(spEnd.curvature == doctest::Approx(kappa));
+}
+
+TEST_CASE("clothoid curvature changes linearly with station") {
+    ClothoidSegment spiral{.start = {0.0, 0.0}, .startHeading = 0.0, .startCurvature = 0.0,
+        .endCurvature = 0.01, .length = 100.0};
+    CHECK(spiral.evaluate(0.0).curvature == doctest::Approx(0.0));
+    CHECK(spiral.evaluate(25.0).curvature == doctest::Approx(0.0025));
+    CHECK(spiral.evaluate(50.0).curvature == doctest::Approx(0.005));
+    CHECK(spiral.evaluate(100.0).curvature == doctest::Approx(0.01));
+}
+
+TEST_CASE("clothoid zero to positive curvature transition") {
+    ClothoidSegment spiral{.start = {0.0, 0.0}, .startHeading = 0.0, .startCurvature = 0.0,
+        .endCurvature = 0.01, .length = 100.0};
+    const AlignmentSample end = spiral.endSample();
+    // End heading = startHeading + (startCurvature + endCurvature) * length / 2.
+    CHECK(end.heading == doctest::Approx(0.5).epsilon(kTol));
+    CHECK(end.curvature == doctest::Approx(0.01));
+    CHECK_FALSE(validateSegment(spiral).has_value());
+}
+
+TEST_CASE("clothoid positive to zero curvature transition") {
+    ClothoidSegment spiral{.start = {0.0, 0.0}, .startHeading = 0.0, .startCurvature = 0.01,
+        .endCurvature = 0.0, .length = 100.0};
+    const AlignmentSample end = spiral.endSample();
+    CHECK(end.heading == doctest::Approx(0.5).epsilon(kTol));
+    CHECK(end.curvature == doctest::Approx(0.0));
+}
+
+TEST_CASE("clothoid zero to negative curvature transition") {
+    ClothoidSegment spiral{.start = {0.0, 0.0}, .startHeading = 0.0, .startCurvature = 0.0,
+        .endCurvature = -0.01, .length = 100.0};
+    const AlignmentSample end = spiral.endSample();
+    CHECK(end.heading == doctest::Approx(-0.5).epsilon(kTol));
+    CHECK(end.curvature == doctest::Approx(-0.01));
+}
+
+TEST_CASE("clothoid general curvature A to curvature B transition") {
+    ClothoidSegment spiral{.start = {0.0, 0.0}, .startHeading = 0.1, .startCurvature = 0.004,
+        .endCurvature = -0.002, .length = 60.0};
+    const AlignmentSample end = spiral.endSample();
+    CHECK(end.heading == doctest::Approx(0.1 + (0.004 - 0.002) * 60.0 / 2.0).epsilon(kTol));
+    CHECK(end.curvature == doctest::Approx(-0.002));
+    CHECK(spiral.evaluate(0.0).curvature == doctest::Approx(0.004));
+}
+
+TEST_CASE("clothoid evaluation is deterministic") {
+    ClothoidSegment spiral{.start = {5.0, -3.0}, .startHeading = 0.7, .startCurvature = 0.003,
+        .endCurvature = -0.001, .length = 75.0};
+    const AlignmentSample a = spiral.evaluate(33.0);
+    const AlignmentSample b = spiral.evaluate(33.0);
+    CHECK(a.position.easting == b.position.easting);
+    CHECK(a.position.northing == b.position.northing);
+    CHECK(a.heading == b.heading);
+    CHECK(a.curvature == b.curvature);
+}
+
+TEST_CASE("clothoid validation rejects non-finite and degenerate parameters") {
+    CHECK(validateSegment(ClothoidSegment{.start = {0.0, 0.0}, .startHeading = 0.0,
+        .startCurvature = 0.0, .endCurvature = 0.01, .length = 0.0}).has_value());
+    CHECK(validateSegment(ClothoidSegment{.start = {0.0, 0.0}, .startHeading = 0.0,
+        .startCurvature = std::nan(""), .endCurvature = 0.01, .length = 10.0}).has_value());
+    CHECK(validateSegment(ClothoidSegment{.start = {0.0, 0.0}, .startHeading = 0.0,
+        .startCurvature = 0.0, .endCurvature = std::numeric_limits<double>::infinity(), .length = 10.0}).has_value());
+}
+
+TEST_CASE("clothoid start sample matches start point and heading") {
+    ClothoidSegment spiral{.start = {12.0, 34.0}, .startHeading = 0.9, .startCurvature = 0.005,
+        .endCurvature = -0.005, .length = 20.0};
+    const AlignmentSample start = spiral.evaluate(0.0);
+    CHECK(start.position.easting == doctest::Approx(12.0));
+    CHECK(start.position.northing == doctest::Approx(34.0));
+    CHECK(start.heading == doctest::Approx(0.9));
+    CHECK(start.curvature == doctest::Approx(0.005));
 }
 
 } // TEST_SUITE

@@ -48,8 +48,7 @@ button { color: inherit; }
 .panel-title-row { height: 34px; display: flex; align-items: center; justify-content: space-between; padding: 0 10px; border-bottom: 1px solid var(--border); text-transform: uppercase; letter-spacing: .08em; font-size: 10px; color: var(--muted); }
 .search-box { display: flex; gap: 7px; margin: 8px; padding: 6px 7px; align-items: center; border: 1px solid var(--border); border-radius: 3px; color: var(--disabled); background: var(--bg-1); }
 .search-box input { width: 100%; border: 0; outline: 0; background: transparent; color: var(--text); font-size: 12px; }
-.panel-empty { padding: 16px 12px; color: var(--disabled); font-size: 12px; line-height: 1.5; }
-.viewport-area { position: relative; min-width: 0; background: #11151a; }
+.viewport-area { position: absolute; inset: 0; min-width: 0; background: #11151a; }
 .viewport-host { position: absolute; inset: 0; }
 .viewport-overlay { position: absolute; inset: 0; overflow: hidden; display: grid; place-items: center; }
 .viewport-grid { position: absolute; inset: 0; opacity: .22; background-image: linear-gradient(#2a323c 1px, transparent 1px), linear-gradient(90deg, #2a323c 1px, transparent 1px); background-size: 32px 32px; mask-image: radial-gradient(circle at center, black, transparent 78%); }

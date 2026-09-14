@@ -759,6 +759,81 @@ TEST_CASE("cancelled download ends in Cancelled state with no canonical dataset"
     CHECK_FALSE(tempLeft);
 }
 
+TEST_CASE("cancelled download leaves no provider temp dir or canonical raster") {
+    // VERIFY: Job lifecycle — cancellation must clean up provider temp
+    // directories and must not leave a canonical raster file.
+    TerrainHarness harness{};
+
+    const GeoBounds area{
+        .west = 15.0, .south = 42.0, .east = 15.2, .north = 42.2};
+    const std::uint32_t tileSize = 4000;
+
+    const auto gridTiles = computeSelectionGrid(area, tileSize);
+    REQUIRE(gridTiles.size() >= 3);
+
+    std::vector<std::int32_t> allIndices;
+    for (std::int32_t i = 0; i < static_cast<std::int32_t>(gridTiles.size()); ++i) {
+        allIndices.push_back(i);
+    }
+
+    const auto record = harness.terrain->startDownload(
+        "mock-terrain", area, tileSize, allIndices, "Cancel Cleanup");
+
+    REQUIRE(harness.waitFor(
+        [&] {
+            const auto job = harness.jobs->job(record.jobId);
+            return job.has_value() && job->state == infraforge::application::JobState::Running;
+        },
+        std::chrono::seconds{10}));
+
+    REQUIRE(harness.jobs->requestCancel(record.jobId));
+
+    REQUIRE(harness.waitFor(
+        [&] { return isTerminal(harness.jobs->job(record.jobId)); },
+        std::chrono::seconds{60}));
+
+    CHECK(harness.jobs->job(record.jobId)->state == infraforge::application::JobState::Cancelled);
+
+    // No canonical dataset row.
+    CHECK(harness.store.terrainDatasets().empty());
+    CHECK(harness.datasetAddedIds.empty());
+
+    // No .importing temp files.
+    bool importingLeft = false;
+    const auto elevDir = harness.projectDirectory / "terrain" / "elevation";
+    if (std::filesystem::exists(elevDir)) {
+        for (const auto& entry : std::filesystem::directory_iterator(elevDir)) {
+            if (entry.path().extension() == ".importing") {
+                importingLeft = true;
+            }
+        }
+    }
+    CHECK_FALSE(importingLeft);
+
+    // No canonical raster file (.tif) in the elevation directory.
+    bool rasterLeft = false;
+    if (std::filesystem::exists(elevDir)) {
+        for (const auto& entry : std::filesystem::directory_iterator(elevDir)) {
+            if (entry.path().extension() == ".tif") {
+                rasterLeft = true;
+            }
+        }
+    }
+    CHECK_FALSE(rasterLeft);
+
+    // No provider temp directory remains under terrain/downloads/.
+    const auto downloadsDir = harness.projectDirectory / "terrain" / "downloads";
+    bool tempDirLeft = false;
+    if (std::filesystem::exists(downloadsDir)) {
+        for (const auto& entry : std::filesystem::directory_iterator(downloadsDir)) {
+            if (entry.is_directory()) {
+                tempDirLeft = true;
+            }
+        }
+    }
+    CHECK_FALSE(tempDirLeft);
+}
+
 // ---- BLOCKER 1: Empty selection planning (regression test) ----
 
 TEST_CASE("planDownload with empty selection returns grid with zero requests") {

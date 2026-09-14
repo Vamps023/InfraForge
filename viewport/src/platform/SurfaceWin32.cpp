@@ -43,7 +43,7 @@ LRESULT CALLBACK viewportWndProc(const HWND window, const UINT message, const WP
     case WM_MOUSEWHEEL: {
         // Wheel delta is a fixed 1/120 step multiple; positive rolls up.
         const double steps = static_cast<double>(GET_WHEEL_DELTA_WPARAM(wParam)) / 120.0;
-        dispatchSurfaceInput(SurfaceInputEvent{.wheelSteps = steps});
+        dispatchSurfaceInput(SurfaceInputEvent{.wheelSteps = steps, .datasetUuid = {}});
         return 0;
     }
     case WM_MBUTTONDOWN:
@@ -77,7 +77,8 @@ LRESULT CALLBACK viewportWndProc(const HWND window, const UINT message, const WP
             dispatchSurfaceInput(SurfaceInputEvent{
                 .gesture = g_gesture,
                 .deltaX = static_cast<double>(x - g_lastDragPosition.x),
-                .deltaY = static_cast<double>(y - g_lastDragPosition.y)});
+                .deltaY = static_cast<double>(y - g_lastDragPosition.y),
+                .datasetUuid = {}});
             g_lastDragPosition.x = x;
             g_lastDragPosition.y = y;
         }
@@ -89,7 +90,7 @@ LRESULT CALLBACK viewportWndProc(const HWND window, const UINT message, const WP
         if (wParam == 'P') action = ViewportAction::Perspective;
         if (wParam == 'T') action = ViewportAction::Top;
         if (action != ViewportAction::None) {
-            dispatchSurfaceInput(SurfaceInputEvent{.action = action});
+            dispatchSurfaceInput(SurfaceInputEvent{.action = action, .datasetUuid = {}});
             return 0;
         }
         return DefWindowProcW(window, message, wParam, lParam);

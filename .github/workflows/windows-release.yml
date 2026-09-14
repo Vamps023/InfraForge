@@ -1,0 +1,116 @@
+name: Windows release
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref (SHA or branch) to build"
+        required: false
+        default: ""
+
+env:
+  VCPKG_DISABLE_METRICS: 1
+  VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/.vcpkg_archives
+  VCPKG_BINARY_SOURCES: "clear;files,${{ github.workspace }}/.vcpkg_archives,readwrite"
+
+jobs:
+  build-and-package:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+
+      - name: Create vcpkg cache directory
+        shell: bash
+        run: mkdir -p "${{ github.workspace }}/.vcpkg_archives"
+
+      - name: Cache vcpkg binary artifacts
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.vcpkg_archives
+          key: vcpkg-bin-windows-release-${{ hashFiles('vcpkg.json') }}
+          restore-keys: |
+            vcpkg-bin-windows-release-
+            vcpkg-bin-windows-latest-
+
+      - name: Checkout pinned vcpkg registry
+        uses: actions/checkout@v7
+        with:
+          repository: microsoft/vcpkg
+          ref: 9e593bb18ea69cc5095e012465dcd675a822ed0d
+          path: .vcpkg
+
+      - name: Bootstrap vcpkg
+        run: .\.vcpkg\bootstrap-vcpkg.bat -disableMetrics
+
+      - name: Configure native build
+        run: cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/.vcpkg/scripts/buildsystems/vcpkg.cmake -DINFRAFORGE_WARNINGS_AS_ERRORS=ON
+
+      - name: Build native (Release)
+        run: cmake --build build --config Release --parallel
+
+      - name: Native tests
+        run: ctest --test-dir build --build-config Release --output-on-failure --parallel 4
+
+      - name: Engine self-check
+        run: .\build\engine\Release\infraforge-engine.exe --self-check
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Generate TypeScript protocol bindings
+        run: npm run proto:generate:ts
+
+      - name: Engine protocol smoke
+        shell: bash
+        env:
+          INFRAFORGE_ENGINE_PATH: ${{ github.workspace }}/build/engine/Release/infraforge-engine.exe
+        run: npm run verify:engine
+
+      - name: Typecheck
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run typecheck 2>&1 | tee typecheck.log
+
+      - name: Desktop supervisor lifecycle tests
+        run: npm --workspace @infraforge/desktop run test
+
+      - name: Frontend component tests
+        run: npm --workspace @infraforge/frontend run test
+
+      - name: Build frontend and desktop
+        run: npm run build:web
+
+      - name: Package Windows installer
+        run: npm run package:win
+        env:
+          INFRAFORGE_BUILD_SHA: ${{ github.sha }}
+          GITHUB_SHA: ${{ github.sha }}
+
+      - name: Validate staged resources
+        run: node scripts/validate-package.js apps/desktop/dist-release/win-unpacked
+
+      - name: Upload RC installer artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: InfraForge-0.1.0-rc1-win-x64-setup
+          path: apps/desktop/dist-release/InfraForge-0.1.0-rc1-win-x64-setup.exe
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload unpacked directory artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: InfraForge-0.1.0-rc1-win-x64-unpacked
+          path: apps/desktop/dist-release/win-unpacked
+          if-no-files-found: error
+          retention-days: 7

@@ -33,6 +33,7 @@ std::string providerName(SourceProvider provider) {
     case SourceProvider::Authored: return "authored";
     case SourceProvider::Osm: return "osm";
     case SourceProvider::OpenDrive: return "opendrive";
+    case SourceProvider::Other: return "other";
     }
     return "unknown";
 }

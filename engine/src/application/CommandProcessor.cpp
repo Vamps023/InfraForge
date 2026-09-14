@@ -177,6 +177,34 @@ std::string_view commandName(const ProtocolFrame& frame) {
         return "job.cancel";
     case protocol::v1::CommandEnvelope::kJobList:
         return "job.list";
+    case protocol::v1::CommandEnvelope::kCreateRoad:
+        return "road.create";
+    case protocol::v1::CommandEnvelope::kDeleteRoad:
+        return "road.delete";
+    case protocol::v1::CommandEnvelope::kRenameRoad:
+        return "road.rename";
+    case protocol::v1::CommandEnvelope::kInsertRoadControl:
+        return "road.insert_control";
+    case protocol::v1::CommandEnvelope::kMoveRoadControl:
+        return "road.move_control";
+    case protocol::v1::CommandEnvelope::kDeleteRoadControl:
+        return "road.delete_control";
+    case protocol::v1::CommandEnvelope::kFitRoadSource:
+        return "road.fit_source";
+    case protocol::v1::CommandEnvelope::kUpdateRoadElevation:
+        return "road.update_elevation";
+    case protocol::v1::CommandEnvelope::kUpdateRoadSuperelevation:
+        return "road.update_superelevation";
+    case protocol::v1::CommandEnvelope::kUndoRoad:
+        return "road.undo";
+    case protocol::v1::CommandEnvelope::kRedoRoad:
+        return "road.redo";
+    case protocol::v1::CommandEnvelope::kListRoads:
+        return "road.list";
+    case protocol::v1::CommandEnvelope::kGetRoad:
+        return "road.get";
+    case protocol::v1::CommandEnvelope::kGetRoadScene:
+        return "road.get_scene";
     case protocol::v1::CommandEnvelope::COMMAND_NOT_SET:
         break;
     }

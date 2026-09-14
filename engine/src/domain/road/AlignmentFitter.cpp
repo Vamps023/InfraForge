@@ -282,33 +282,6 @@ struct PolylineSection {
     return arc;
 }
 
-// ---- Clothoid transition computation ----
-
-// Computes the clothoid length for a curvature transition. The length is
-// chosen to be short enough to not significantly change the heading (which
-// would cause the alignment to drift from the source polyline), while
-// still providing curvature continuity at the segment boundaries.
-//
-// The clothoid heading change is (k1 + k2) * L / 2. To keep this small,
-// we limit L to a fraction of the available space. The lateral deviation
-// |dk| * L^2 / 6 is kept within the position tolerance as a secondary
-// constraint.
-[[nodiscard]] double computeClothoidLength(
-    double curvatureChange, double tolerance,
-    double maxAvailable) noexcept {
-    if (std::abs(curvatureChange) < 1e-15) return 0.0;
-    // Use a small fraction of the available space to minimize heading drift.
-    // 5% of the shorter adjacent segment keeps the heading change small
-    // while providing curvature continuity.
-    double L = maxAvailable;
-    // Also bound by the tolerance: L <= sqrt(6 * tolerance / |dk|)
-    double toleranceL = std::sqrt(6.0 * tolerance / std::abs(curvatureChange));
-    L = std::min(L, toleranceL);
-    // Ensure positive and finite.
-    if (!std::isfinite(L) || L <= 0.0) return 0.0;
-    return L;
-}
-
 // ---- Segment builder: walks sections and produces alignment segments ----
 
 struct FitterState {

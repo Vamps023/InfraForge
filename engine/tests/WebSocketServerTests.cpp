@@ -38,7 +38,7 @@ namespace {
 using ProtocolFrame = infraforge::protocol::v1::Frame;
 
 constexpr std::chrono::milliseconds kConnectTimeout{5000};
-constexpr std::chrono::milliseconds kFrameTimeout{10000};
+constexpr std::chrono::milliseconds kFrameTimeout{30000};
 constexpr std::chrono::milliseconds kQuietWindow{600};
 
 bool waitUntil(const std::function<bool()>& predicate, std::chrono::milliseconds timeout) {

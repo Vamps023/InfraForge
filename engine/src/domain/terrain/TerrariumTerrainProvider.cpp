@@ -163,6 +163,11 @@ constexpr int kDefaultZoom = 11;
 // Returns a vector of Float32 elevation values (row-major, top-to-bottom).
 // The PNG is 256x256 pixels with 3 bands (R, G, B).
 std::vector<float> decodeTerrariumPng(const std::string& pngData, int& width, int& height) {
+    // The provider can be used before the persistence layer initializes GDAL.
+    // Register drivers here so the PNG driver is available in the real
+    // download path as well as in tests that happen to initialize GDAL first.
+    ensureGdalRegistered();
+
     // Write PNG to a temporary in-memory file via GDAL's vsimem.
     static std::atomic<int> vsiCounter{0};
     const std::string vsiPath = "/vsimem/terrarium_" +

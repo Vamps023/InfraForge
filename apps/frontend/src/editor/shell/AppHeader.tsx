@@ -1,5 +1,4 @@
 import { Search } from 'lucide-react'
-import type { EngineSessionStatus } from '../../lib/engineSession'
 import { useProjectStore } from '../../features/project/projectStore'
 import { useViewportStore } from '../../features/viewport/viewportStore'
 import { useWorkspaceStore, getWorkspace } from './workspaceStore'

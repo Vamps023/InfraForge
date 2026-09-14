@@ -184,9 +184,15 @@ The `ProjectHomeScreen` is rendered as a CSS overlay over the viewport area when
 
 The blocking signal is `showHomeScreen = !projectOpen || activeWorkspace === 'home'` (not `surfaceActive && !projectOpen`) so that `blockedByOverlay` is `true` from initial mount — before the viewport process starts — rather than transitioning to `true` only when the renderer reports ready. This avoids a race where the desktop shell's post-readiness `applyViewportVisibilityPlan` runs before the renderer's `setViewportVisible(false)` IPC round-trip lands, which would briefly show the native surface over the home screen.
 
+**Home screen rendering is independent of native renderer state.** The `ProjectHomeScreen` is shown whenever `showHomeScreen` is true, regardless of whether the renderer reports `ready`, `suspended`, `starting`, `failed`, or any other state. This is critical because hiding the native viewport causes the renderer to report `suspended` (which is NOT `viewportSurfaceActive`). If Home were gated on `surfaceActive`, hiding the native viewport would make the renderer suspend, which would make Home disappear — a circular dependency. The UI precedence in `ViewportArea` is:
+
+1. `viewport-host` div (always mounted — native viewport process lifecycle)
+2. `ProjectHomeScreen` (when `showHomeScreen` — independent of renderer state)
+3. Renderer status overlay (when `!showHomeScreen && !surfaceActive` — only for authoring workspaces when the renderer is not yet ready or has failed)
+
 ### Renderer not yet active
 
-While the renderer is starting or has failed, the viewport area shows a CSS empty-state overlay (starting message or error). The native viewport is hidden (`blockedByOverlay = true` because no project is open), so the CSS overlay is visible to the user.
+When an authoring workspace (e.g. Terrain) is active and the renderer surface is not yet active, the viewport area shows a CSS empty-state overlay (starting message or error). This overlay is only shown when `!showHomeScreen` — the Home screen takes precedence when active.
 
 ### Viewport HUD (deferred)
 

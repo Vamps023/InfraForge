@@ -44,8 +44,20 @@ import { fetchTerrainScene } from './features/terrain/terrainApi'
 // The native viewport is a child HWND reparented onto the BrowserWindow.
 // CSS overlays in the webview cannot render above it, so when an overlay
 // that must be visible to the user is shown (the project home screen when
-// no project is open), the parent reports a blocking overlay so the
-// desktop shell hides the native viewport (ViewportVisibilityPolicy).
+// no project is open or the Home workspace is active), the parent reports
+// a blocking overlay so the desktop shell hides the native viewport
+// (ViewportVisibilityPolicy).
+//
+// UI precedence inside the viewport area:
+//   1. viewport-host div (always mounted — native viewport lifecycle)
+//   2. ProjectHomeScreen (when showHomeScreen — independent of renderer
+//      state, because hiding the native viewport causes the renderer to
+//      report 'suspended', which is NOT surfaceActive; gating Home on
+//      surfaceActive would create a circular dependency that makes Home
+//      disappear)
+//   3. Renderer status overlay (when !showHomeScreen && !surfaceActive —
+//      only shown for authoring workspaces when the renderer is not yet
+//      ready or has failed)
 function ViewportArea({
   hostRef,
   showHomeScreen,
@@ -61,7 +73,9 @@ function ViewportArea({
   return (
     <main className="viewport-area" aria-label="Viewport">
       <div className="viewport-host" ref={hostRef} />
-      {!surfaceActive ? (
+      {showHomeScreen ? (
+        <ProjectHomeScreen context={commandContext} />
+      ) : !surfaceActive ? (
         <div className="viewport-overlay">
           <div className="viewport-grid" aria-hidden="true" />
           <div className="empty-state">
@@ -81,9 +95,6 @@ function ViewportArea({
             )}
           </div>
         </div>
-      ) : null}
-      {surfaceActive && showHomeScreen ? (
-        <ProjectHomeScreen context={commandContext} />
       ) : null}
     </main>
   )

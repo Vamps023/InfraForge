@@ -154,4 +154,41 @@ describe('ContextToolbar', () => {
     await userEvent.click(screen.getByText('Import'))
     expect(useShellUiStore.getState().openDialog).toBeNull()
   })
+
+  it('generic terrain.import opens local-file mode after Download Area was used and closed', async () => {
+    useProjectStore.getState().setSummary(makeSummary())
+
+    // Use the dedicated Download Area command (sets mode to download-area)
+    useShellUiStore.getState().openTerrainImport('download-area')
+    expect(useShellUiStore.getState().terrainImportMode).toBe('download-area')
+
+    // Close the dialog
+    useShellUiStore.getState().closeDialog()
+    expect(useShellUiStore.getState().openDialog).toBeNull()
+    // Mode is still download-area (stale) — the generic command must
+    // override it, not inherit it.
+
+    // Execute the generic terrain.import command
+    const command = commandRegistry.get('terrain.import')
+    expect(command).toBeDefined()
+    await command!.execute(ctx(readyContext()))
+
+    expect(useShellUiStore.getState().openDialog).toBe('import-terrain')
+    expect(useShellUiStore.getState().terrainImportMode).toBe('local-file')
+  })
+
+  it('dedicated Download Area toolbar command still opens download-area mode', async () => {
+    useProjectStore.getState().setSummary(makeSummary())
+    render(<ContextToolbar context={ctx(readyContext())} />)
+
+    // First use Import (local-file)
+    await userEvent.click(screen.getByText('Import'))
+    expect(useShellUiStore.getState().terrainImportMode).toBe('local-file')
+    useShellUiStore.getState().closeDialog()
+
+    // Then use Download Area — must open in download-area mode
+    await userEvent.click(screen.getByText('Download Area'))
+    expect(useShellUiStore.getState().openDialog).toBe('import-terrain')
+    expect(useShellUiStore.getState().terrainImportMode).toBe('download-area')
+  })
 })

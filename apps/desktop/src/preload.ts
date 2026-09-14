@@ -66,6 +66,13 @@ const desktopApi = Object.freeze({
     ipcRenderer.on('map-tile:diagnostic', channelListener)
     return () => ipcRenderer.removeListener('map-tile:diagnostic', channelListener)
   },
+  getDiagnostics: () => ipcRenderer.invoke('app:get-diagnostics') as Promise<unknown>,
+  openLogs: () => ipcRenderer.invoke('app:open-logs') as Promise<boolean>,
+  onDiagnosticsRequest: (listener: () => void) => {
+    const channelListener = () => listener()
+    ipcRenderer.on('menu:diagnostics', channelListener)
+    return () => ipcRenderer.removeListener('menu:diagnostics', channelListener)
+  },
 })
 
 contextBridge.exposeInMainWorld('infraforgeDesktop', desktopApi)

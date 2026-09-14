@@ -11,7 +11,7 @@ describe('GeocoderService', () => {
     minIntervalMs: 50, // Small interval for fast tests
     maxCacheEntries: 4,
     attribution: '© OpenStreetMap contributors',
-    userAgent: 'InfraForge/0.3.0 (https://infraforge.app; contact@infraforge.app)',
+    userAgent: 'InfraForge/0.1.0 (https://infraforge.app; contact@infraforge.app)',
   }
 
   it('rejects short or non-string queries without issuing network requests', async () => {
@@ -67,7 +67,7 @@ describe('GeocoderService', () => {
 
     // Authentic User-Agent must be present
     expect(capturedHeaders['User-Agent']).toBe(
-      'InfraForge/0.3.0 (https://infraforge.app; contact@infraforge.app)',
+      'InfraForge/0.1.0 (https://infraforge.app; contact@infraforge.app)',
     )
     // No fake Referer header
     expect(capturedHeaders['Referer']).toBeUndefined()

@@ -76,6 +76,24 @@ declare global {
         method?: string
         resourceType?: string
       }>) => void) => () => void
+      getDiagnostics: () => Promise<Readonly<{
+        appVersion: string
+        buildSha: string
+        electronVersion: string
+        chromeVersion: string
+        nodeVersion: string
+        platform: string
+        arch: string
+        isPackaged: boolean
+        enginePath: string | null
+        viewportPath: string | null
+        projDataPath: string | null
+        resourcesPath: string | null
+        logPath: string
+        userDataPath: string
+      }>>
+      openLogs: () => Promise<boolean>
+      onDiagnosticsRequest: (listener: () => void) => () => void
     }>
   }
 }

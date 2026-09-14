@@ -25,6 +25,7 @@ import { useShellUiStore } from './editor/shell/shellUiStore'
 import { useProblemDiagnostics } from './editor/problems/useProblemDiagnostics'
 
 import { ImportTerrainDialog } from './features/terrain/ImportTerrainDialog'
+import { DiagnosticsDialog } from './editor/shell/DiagnosticsDialog'
 import { registerTerrainCommands, unregisterTerrainCommands } from './features/terrain/terrainCommands'
 import { registerTerrainOutlinerProjection, unregisterTerrainOutlinerProjection } from './features/terrain/terrainOutlinerProjection'
 import { registerTerrainInspectorSection, unregisterTerrainInspectorSection } from './features/terrain/terrainInspectorSection'
@@ -76,7 +77,7 @@ function AppHeader() {
         {summary ? summary.displayName : 'No project open'}
       </div>
       <div className="header-spacer" />
-      <div className="build-label">Foundation 0.3.0</div>
+      <div className="build-label">Foundation 0.1.0</div>
     </header>
   )
 }
@@ -166,6 +167,19 @@ export function App() {
   const commandContext = useCommandContext(engineStatus, engineSession)
   useCommandShortcuts(commandContext)
   useProblemDiagnostics()
+
+  // Help menu → Diagnostics: the desktop shell sends menu:diagnostics when
+  // the user clicks Help → Diagnostics or Help → About. Open the same dialog
+  // the command palette uses.
+  useEffect(() => {
+    const desktop = window.infraforgeDesktop
+    if (!desktop?.onDiagnosticsRequest) {
+      return
+    }
+    return desktop.onDiagnosticsRequest(() => {
+      useShellUiStore.getState().openDialogCommand('diagnostics')
+    })
+  }, [])
 
   // Blocking application overlays that render over the editor surface. The
   // native child-HWND viewport cannot be occluded by CSS z-index, so the
@@ -285,6 +299,9 @@ export function App() {
           busy={busy}
           onClose={() => closeDialog()}
         />
+      ) : null}
+      {openDialog === 'diagnostics' ? (
+        <DiagnosticsDialog onClose={() => closeDialog()} />
       ) : null}
     </div>
   )

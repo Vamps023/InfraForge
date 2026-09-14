@@ -45,14 +45,14 @@ export const defaultAppRuntimeConfig: AppRuntimeConfig = Object.freeze({
     minIntervalMs: 1000,
     maxCacheEntries: 32,
     attribution: '© OpenStreetMap contributors',
-    userAgent: 'InfraForge/0.3.0 (https://infraforge.app; contact@infraforge.app)',
+    userAgent: 'InfraForge/0.1.0 (https://infraforge.app; contact@infraforge.app)',
   }),
   mapTiles: Object.freeze({
     provider: 'osm-public',
     url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
     maxZoom: 19,
-    userAgent: 'InfraForge/0.3.0 (https://infraforge.app; contact@infraforge.app)',
+    userAgent: 'InfraForge/0.1.0 (https://infraforge.app; contact@infraforge.app)',
   }),
   diagnostics: Object.freeze({
     configSource: 'default',

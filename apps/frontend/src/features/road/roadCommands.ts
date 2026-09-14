@@ -116,6 +116,30 @@ export function registerRoadCommands(deps: RoadCommandDeps): void {
         await listRoads(client)
       },
     },
+    {
+      id: 'road.fit-source',
+      label: 'Refit Road Geometry',
+      description: 'Refit the selected road from its source polyline with current parameters.',
+      category: 'Road',
+      group: 'road',
+      surfaces: ['palette'],
+      requiresEngine: true,
+      requiresProject: true,
+      enabled: () => {
+        const id = useSelectionStore.getState().primaryId
+        return id !== null && id.startsWith('road:')
+      },
+      execute: async () => {
+        const client = deps.getEngineClient()
+        if (!client) return
+        const id = useSelectionStore.getState().primaryId
+        if (!id || !id.startsWith('road:')) return
+        const roadId = id.slice('road:'.length)
+        const { fitRoadSource } = await import('./roadApi')
+        await fitRoadSource(client, roadId, 1.0)
+        await listRoads(client)
+      },
+    },
   ]
 
   for (const def of defs) {
@@ -129,4 +153,5 @@ export function unregisterRoadCommands(): void {
   commandRegistry.unregister('road.rename')
   commandRegistry.unregister('road.undo')
   commandRegistry.unregister('road.redo')
+  commandRegistry.unregister('road.fit-source')
 }

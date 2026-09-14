@@ -727,8 +727,37 @@ RoadDetails RoadService::toDetails(const RoadRecord& road) const {
         auto roadObj = rebuildRoad(road);
         d.isValid = true;
         (void)roadObj;
-    } catch (const std::exception&) {
+
+        // Check for geometry issues.
+        if (road.segments.empty()) {
+            d.diagnostics.push_back({
+                RoadErrorCode::EmptyAlignment,
+                "Road has no alignment segments"});
+        }
+        if (totalLength < 1e-6) {
+            d.diagnostics.push_back({
+                RoadErrorCode::DegenerateSegment,
+                "Road has zero length"});
+        }
+        // Check for curvature discontinuities at segment boundaries.
+        for (std::size_t i = 1; i < road.segments.size(); ++i) {
+            const auto& prev = road.segments[i - 1];
+            const auto& curr = road.segments[i];
+            const double prevEndCurv = (prev.kind == AlignmentSegmentKind::CircularArc)
+                ? prev.curvature : prev.endCurvature;
+            const double currStartCurv = (curr.kind == AlignmentSegmentKind::CircularArc)
+                ? curr.curvature : curr.startCurvature;
+            if (std::abs(prevEndCurv - currStartCurv) > 1e-3) {
+                d.diagnostics.push_back({
+                    RoadErrorCode::CurvatureDiscontinuity,
+                    "Curvature discontinuity at station " + std::to_string(d.alignmentSegments[i].startStation)});
+            }
+        }
+    } catch (const std::exception& e) {
         d.isValid = false;
+        d.diagnostics.push_back({
+            RoadErrorCode::PositionDiscontinuity,
+            std::string("Road rebuild failed: ") + e.what()});
     }
 
     return d;

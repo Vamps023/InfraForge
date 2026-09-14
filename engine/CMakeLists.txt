@@ -146,6 +146,7 @@ add_executable(infraforge-engine-tests
     tests/ProjectModelTests.cpp
     tests/ProjectServiceTests.cpp
     tests/RoadDomainTests.cpp
+    tests/RoadAlignmentFixturesTests.cpp
     tests/RoadPersistenceTests.cpp
     tests/SpatialBoundsTests.cpp
     tests/SpatialIndexTests.cpp

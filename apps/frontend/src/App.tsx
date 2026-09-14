@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Box, ChevronDown, CircleDot } from 'lucide-react'
+import { Box } from 'lucide-react'
 import { connectEngineSession, type EngineSession, type EngineSessionStatus } from './lib/engineSession'
 import { GeoreferencePanel } from './features/geo/GeoreferencePanel'
 import { NewProjectDialog } from './features/project/NewProjectDialog'
@@ -10,8 +10,12 @@ import { useViewportHost } from './features/viewport/useViewportHost'
 import { useViewportStore, viewportSurfaceActive } from './features/viewport/viewportStore'
 import { useUiStore } from './state/uiStore'
 
-import { AppMenu } from './editor/shell/AppMenu'
-import { Toolbar } from './editor/shell/Toolbar'
+import { AppHeader } from './editor/shell/AppHeader'
+import { WorkspaceRail } from './editor/shell/WorkspaceRail'
+import { ContextToolbar } from './editor/shell/ContextToolbar'
+import { StatusBar } from './editor/shell/StatusBar'
+import { ViewportOverlay } from './editor/shell/ViewportOverlay'
+import { ProjectHomeScreen } from './editor/shell/ProjectHomeScreen'
 import { BottomPanel } from './editor/shell/BottomPanel'
 import { EditorLayout } from './editor/layout/EditorLayout'
 import { Outliner } from './editor/outliner/Outliner'
@@ -31,9 +35,20 @@ import { registerTerrainOutlinerProjection, unregisterTerrainOutlinerProjection 
 import { registerTerrainInspectorSection, unregisterTerrainInspectorSection } from './features/terrain/terrainInspectorSection'
 import { subscribeTerrainEvents, setTerrainScenePublisher } from './features/terrain/terrainEvents'
 import { fetchTerrainScene } from './features/terrain/terrainApi'
-import { useTerrainStore } from './features/terrain/terrainStore'
 
-function ViewportArea({ hostRef }: { hostRef: React.RefObject<HTMLDivElement | null> }) {
+// ViewportArea — hosts the native Vulkan child HWND and shows overlay
+// states (starting/error) when the renderer surface is not active. The
+// viewport host div must always be in the DOM for the native viewport
+// process lifecycle; overlays are CSS-only and do not occlude the HWND.
+function ViewportArea({
+  hostRef,
+  projectOpen,
+  commandContext,
+}: {
+  hostRef: React.RefObject<HTMLDivElement | null>
+  projectOpen: boolean
+  commandContext: ReturnType<typeof useCommandContext>
+}) {
   const rendererStatus = useViewportStore((state) => state.status)
   const surfaceActive = viewportSurfaceActive(rendererStatus.state)
 
@@ -61,69 +76,13 @@ function ViewportArea({ hostRef }: { hostRef: React.RefObject<HTMLDivElement | n
           </div>
         </div>
       ) : null}
+      {surfaceActive && !projectOpen ? (
+        <ProjectHomeScreen context={commandContext} />
+      ) : null}
+      {surfaceActive && projectOpen ? (
+        <ViewportOverlay />
+      ) : null}
     </main>
-  )
-}
-
-function AppHeader() {
-  const summary = useProjectStore((state) => state.summary)
-  return (
-    <header className="app-header">
-      <div className="brand">
-        <span className="brand-mark">IF</span>
-        <span>InfraForge</span>
-      </div>
-      <div className="project-chip" title={summary?.directory}>
-        {summary ? summary.displayName : 'No project open'}
-      </div>
-      <div className="header-spacer" />
-      <div className="build-label">Foundation 0.1.0</div>
-    </header>
-  )
-}
-
-function StatusBar({ engineStatus }: { engineStatus: EngineSessionStatus }) {
-  const summary = useProjectStore((state) => state.summary)
-  const rendererStatus = useViewportStore((state) => state.status)
-  const rendererTitle = [
-    rendererStatus.detail,
-    rendererStatus.gpu ? `GPU: ${rendererStatus.gpu}` : null,
-    rendererStatus.vulkan ? `Vulkan ${rendererStatus.vulkan}` : null,
-    rendererStatus.validation ? 'Validation enabled' : null,
-  ]
-    .filter(Boolean)
-    .join(' — ')
-  return (
-    <footer className="status-bar">
-      <span className={`status-item engine-${engineStatus.state}`} title={engineStatus.message}>
-        <CircleDot size={12} /> {engineStatus.message}
-      </span>
-      <span className="status-divider" />
-      {summary ? (
-        <>
-          <span className="status-item">Project revision {summary.revision}</span>
-          {summary.dirty ? <span className="status-item status-dirty">● unsaved</span> : null}
-          <span className="status-divider" />
-          <span className="status-item" title={summary.georeference?.horizontalCrs ?? undefined}>
-            CRS {summary.georeference?.horizontalCrs || '—'}
-          </span>
-        </>
-      ) : (
-        <>
-          <span className="status-item">Project revision —</span>
-          <span className="status-item">CRS —</span>
-        </>
-      )}
-      <div className="status-spacer" />
-      <span className={`status-item renderer-${rendererStatus.state}`} title={rendererTitle}>
-        Renderer {rendererStatus.state}
-        {rendererStatus.gpu ? ` · ${rendererStatus.gpu}` : ''}
-      </span>
-      <span className="status-item" title="Native viewport camera controls">
-        MMB Pan · RMB Orbit · Wheel Zoom · F Focus · Home Frame All · T Top · P Perspective
-      </span>
-      <ChevronDown size={12} />
-    </footer>
   )
 }
 
@@ -263,16 +222,26 @@ export function App() {
 
   return (
     <div className="app-shell">
-      <AppHeader />
-      <AppMenu context={commandContext} />
-      <Toolbar context={commandContext} />
-      <EditorLayout
-        viewportHostRef={viewportHostRef}
-        viewport={<ViewportArea hostRef={viewportHostRef} />}
-        leftPanel={<Outliner />}
-        rightPanel={<Inspector />}
-        bottomPanel={<BottomPanel />}
-      />
+      <AppHeader context={commandContext} />
+      <div className="app-main">
+        <WorkspaceRail />
+        <div className="app-editor-area">
+          {projectOpen ? <ContextToolbar /> : null}
+          <EditorLayout
+            viewportHostRef={viewportHostRef}
+            viewport={
+              <ViewportArea
+                hostRef={viewportHostRef}
+                projectOpen={projectOpen}
+                commandContext={commandContext}
+              />
+            }
+            leftPanel={<Outliner />}
+            rightPanel={<Inspector />}
+            bottomPanel={<BottomPanel />}
+          />
+        </div>
+      </div>
       <StatusBar engineStatus={engineStatus} />
       {openDialog === 'new-project' && engineSession ? (
         <NewProjectDialog

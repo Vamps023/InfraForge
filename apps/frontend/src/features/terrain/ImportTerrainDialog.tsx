@@ -11,6 +11,7 @@ import {
   probeTerrainSource,
 } from './terrainApi'
 import { useTerrainStore } from './terrainStore'
+import { useShellUiStore } from '../../editor/shell/shellUiStore'
 import { DownloadAreaMap, type GeoBounds, type SelectionTileInfo } from './DownloadAreaMap'
 import { createLocationSearchClient } from './locationSearch'
 import { initTerrainConfig, getTerrainMapTileConfig } from './terrainConfig'
@@ -56,7 +57,8 @@ const TILE_SIZES = [
 // owns provider planning, network acquisition, decoding, clipping, and
 // canonical raster assembly.
 export function ImportTerrainDialog({ client, onClose }: ImportTerrainDialogProps) {
-  const [sourceMode, setSourceMode] = useState<SourceMode>('local-file')
+  const initialMode = useShellUiStore((state) => state.terrainImportMode)
+  const [sourceMode, setSourceMode] = useState<SourceMode>(initialMode)
 
   return (
     <div className="dialog-overlay" role="presentation">

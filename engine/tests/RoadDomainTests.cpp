@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 
 #include "infraforge/domain/road/AlignmentPrimitives.hpp"
+#include "infraforge/domain/road/ReferenceAlignment.hpp"
 #include "infraforge/domain/road/RoadTypes.hpp"
 
 #include <cmath>
@@ -306,6 +307,149 @@ TEST_CASE("clothoid start sample matches start point and heading") {
     CHECK(start.position.northing == doctest::Approx(34.0));
     CHECK(start.heading == doctest::Approx(0.9));
     CHECK(start.curvature == doctest::Approx(0.005));
+}
+
+} // TEST_SUITE
+
+TEST_SUITE("road reference alignment stationing") {
+
+using infraforge::domain::road::ReferenceAlignment;
+using infraforge::domain::road::StationedSegment;
+using infraforge::domain::road::LineSegment;
+using infraforge::domain::road::CircularArcSegment;
+
+ReferenceAlignment buildLineArc() {
+    // Line 100m, then arc radius 50m for 45 degrees.
+    LineSegment line{.start = {0.0, 0.0}, .heading = 0.0, .length = 100.0};
+    const AlignmentSample lineEnd = line.endSample();
+    const double radius = 50.0;
+    const double kappa = 1.0 / radius;
+    const double arcLen = radius * kPi / 4.0;
+    CircularArcSegment arc{.start = lineEnd.position, .startHeading = lineEnd.heading,
+        .curvature = kappa, .length = arcLen};
+    auto built = ReferenceAlignment::build({line, arc});
+    REQUIRE(built.has_value());
+    return *built;
+}
+
+TEST_CASE("alignment stationing is continuous with no gaps") {
+    const auto alignment = buildLineArc();
+    CHECK(alignment.segmentCount() == 2);
+    CHECK(alignment.totalLength() == doctest::Approx(100.0 + 50.0 * kPi / 4.0));
+
+    const auto& segs = alignment.segments();
+    CHECK(segs[0].startStation == doctest::Approx(0.0));
+    CHECK(segs[1].startStation == doctest::Approx(100.0));
+    CHECK(segs[1].startStation + infraforge::domain::road::segmentLength(segs[1].segment)
+        == doctest::Approx(alignment.totalLength()));
+}
+
+TEST_CASE("segment lookup by station returns the correct segment") {
+    const auto alignment = buildLineArc();
+    CHECK(*alignment.segmentIndexAt(0.0) == 0);
+    CHECK(*alignment.segmentIndexAt(50.0) == 0);
+    CHECK(*alignment.segmentIndexAt(100.0) == 0); // boundary -> earlier segment
+    CHECK(*alignment.segmentIndexAt(100.001) == 1);
+    CHECK(*alignment.segmentIndexAt(alignment.totalLength()) == 1);
+    CHECK_FALSE(alignment.segmentIndexAt(-0.001).has_value());
+    CHECK_FALSE(alignment.segmentIndexAt(alignment.totalLength() + 0.001).has_value());
+}
+
+TEST_CASE("boundary evaluation is deterministic") {
+    const auto alignment = buildLineArc();
+    const AlignmentSample atBoundaryFromLine = alignment.evaluate(100.0);
+    const AlignmentSample atBoundaryFromArc = alignment.evaluate(100.0001);
+    CHECK(atBoundaryFromLine.position.easting == doctest::Approx(100.0));
+    CHECK(atBoundaryFromLine.position.northing == doctest::Approx(0.0));
+    CHECK(atBoundaryFromArc.position.easting == doctest::Approx(100.0).epsilon(1e-4));
+    CHECK(atBoundaryFromArc.position.northing == doctest::Approx(0.0).epsilon(1e-4));
+}
+
+TEST_CASE("alignment station range reports [0, totalLength]") {
+    const auto alignment = buildLineArc();
+    const auto range = alignment.stationRange();
+    CHECK(range.start == doctest::Approx(0.0));
+    CHECK(range.end == doctest::Approx(alignment.totalLength()));
+}
+
+TEST_CASE("empty alignment is rejected") {
+    auto built = ReferenceAlignment::build({});
+    REQUIRE_FALSE(built.has_value());
+    CHECK(built.error().size() == 1);
+    CHECK(built.error().front().code == infraforge::domain::road::RoadErrorCode::EmptyAlignment);
+}
+
+} // TEST_SUITE
+
+TEST_SUITE("road alignment continuity validation") {
+
+using infraforge::domain::road::ReferenceAlignment;
+using infraforge::domain::road::LineSegment;
+using infraforge::domain::road::CircularArcSegment;
+using infraforge::domain::road::ClothoidSegment;
+
+TEST_CASE("G0 position discontinuity is detected") {
+    LineSegment line{.start = {0.0, 0.0}, .heading = 0.0, .length = 100.0};
+    // Second line starts 5m off the first line's end.
+    LineSegment bad{.start = {105.0, 0.0}, .heading = 0.0, .length = 50.0};
+    auto built = ReferenceAlignment::build({line, bad});
+    REQUIRE_FALSE(built.has_value());
+    bool found = false;
+    for (const auto& d : built.error()) {
+        if (d.code == infraforge::domain::road::RoadErrorCode::PositionDiscontinuity) { found = true; }
+    }
+    CHECK(found);
+}
+
+TEST_CASE("G1 heading discontinuity is detected") {
+    LineSegment line{.start = {0.0, 0.0}, .heading = 0.0, .length = 100.0};
+    const AlignmentSample lineEnd = line.endSample();
+    // Second line starts at the right position but with a different heading.
+    LineSegment bad{.start = lineEnd.position, .heading = 0.5, .length = 50.0};
+    auto built = ReferenceAlignment::build({line, bad});
+    REQUIRE_FALSE(built.has_value());
+    bool found = false;
+    for (const auto& d : built.error()) {
+        if (d.code == infraforge::domain::road::RoadErrorCode::HeadingDiscontinuity) { found = true; }
+    }
+    CHECK(found);
+}
+
+TEST_CASE("curvature discontinuity between line and arc is detected") {
+    LineSegment line{.start = {0.0, 0.0}, .heading = 0.0, .length = 100.0};
+    const AlignmentSample lineEnd = line.endSample();
+    // Arc with non-zero curvature directly after a line: curvature jumps.
+    CircularArcSegment arc{.start = lineEnd.position, .startHeading = lineEnd.heading,
+        .curvature = 0.01, .length = 50.0};
+    auto built = ReferenceAlignment::build({line, arc});
+    REQUIRE_FALSE(built.has_value());
+    bool found = false;
+    for (const auto& d : built.error()) {
+        if (d.code == infraforge::domain::road::RoadErrorCode::CurvatureDiscontinuity) { found = true; }
+    }
+    CHECK(found);
+}
+
+TEST_CASE("line to clothoid to arc is continuous when curvatures match") {
+    LineSegment line{.start = {0.0, 0.0}, .heading = 0.0, .length = 100.0};
+    const AlignmentSample lineEnd = line.endSample();
+    // Clothoid transitions 0 -> arc curvature, so curvature is continuous.
+    const double kappa = 0.01;
+    ClothoidSegment spiral{.start = lineEnd.position, .startHeading = lineEnd.heading,
+        .startCurvature = 0.0, .endCurvature = kappa, .length = 50.0};
+    const AlignmentSample spiralEnd = spiral.endSample();
+    CircularArcSegment arc{.start = spiralEnd.position, .startHeading = spiralEnd.heading,
+        .curvature = kappa, .length = 50.0};
+    auto built = ReferenceAlignment::build({line, spiral, arc});
+    REQUIRE(built.has_value());
+    CHECK(built->segmentCount() == 3);
+}
+
+TEST_CASE("invalid segment parameters are reported before continuity") {
+    LineSegment bad{.start = {0.0, 0.0}, .heading = 0.0, .length = -10.0};
+    auto built = ReferenceAlignment::build({bad});
+    REQUIRE_FALSE(built.has_value());
+    CHECK(built.error().front().code == infraforge::domain::road::RoadErrorCode::DegenerateSegment);
 }
 
 } // TEST_SUITE

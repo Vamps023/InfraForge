@@ -1,0 +1,129 @@
+#include "infraforge/domain/road/ReferenceAlignment.hpp"
+
+#include <algorithm>
+#include <cmath>
+#include <utility>
+
+namespace infraforge::domain::road {
+namespace {
+
+constexpr double kTwoPi = 2.0 * 3.14159265358979323846;
+
+// Smallest signed angular difference in (-pi, pi].
+double angleDelta(double a, double b) noexcept {
+    double d = a - b;
+    while (d > 3.14159265358979323846) { d -= kTwoPi; }
+    while (d <= -3.14159265358979323846) { d += kTwoPi; }
+    return d;
+}
+
+} // namespace
+
+std::expected<ReferenceAlignment, std::vector<RoadDiagnostic>> ReferenceAlignment::build(
+    std::vector<AlignmentSegment> segments,
+    const double positionTolerance,
+    const double headingTolerance,
+    const double curvatureTolerance) {
+    std::vector<RoadDiagnostic> diagnostics;
+
+    if (segments.empty()) {
+        diagnostics.push_back({RoadErrorCode::EmptyAlignment, "alignment must contain at least one segment"});
+        return std::unexpected(std::move(diagnostics));
+    }
+
+    // Per-segment structural validation.
+    for (std::size_t i = 0; i < segments.size(); ++i) {
+        if (auto d = validateSegment(segments[i])) {
+            diagnostics.push_back(*d);
+        }
+    }
+    if (!diagnostics.empty()) {
+        return std::unexpected(std::move(diagnostics));
+    }
+
+    // Continuous stationing: segment i starts where segment i-1 ends.
+    std::vector<StationedSegment> stationed;
+    stationed.reserve(segments.size());
+    Station cursor = 0.0;
+    for (std::size_t i = 0; i < segments.size(); ++i) {
+        stationed.push_back({cursor, std::move(segments[i])});
+        cursor += segmentLength(stationed.back().segment);
+    }
+    const double totalLength = cursor;
+
+    // Continuity between adjacent segments. Each segment is self-contained
+    // (stores its own start point/heading), so the chain is validated against
+    // the previous segment's computed end.
+    for (std::size_t i = 1; i < stationed.size(); ++i) {
+        const AlignmentSample prevEnd = segmentEndSample(stationed[i - 1].segment);
+        const AlignmentPoint nextStart = segmentStartPoint(stationed[i].segment);
+        const Heading nextHeading = segmentStartHeading(stationed[i].segment);
+        const Curvature nextCurvature = segmentStartCurvature(stationed[i].segment);
+        const Curvature prevEndCurvature = segmentEndCurvature(stationed[i - 1].segment);
+
+        // G0: positional continuity.
+        const double dx = nextStart.easting - prevEnd.position.easting;
+        const double dy = nextStart.northing - prevEnd.position.northing;
+        if (std::sqrt(dx * dx + dy * dy) > positionTolerance) {
+            diagnostics.push_back({RoadErrorCode::PositionDiscontinuity,
+                "segment " + std::to_string(i) + " start does not match segment "
+                    + std::to_string(i - 1) + " end (G0 failure)"});
+        }
+        // G1: tangent/heading continuity (modulo 2*pi).
+        if (std::abs(angleDelta(nextHeading, prevEnd.heading)) > headingTolerance) {
+            diagnostics.push_back({RoadErrorCode::HeadingDiscontinuity,
+                "segment " + std::to_string(i) + " start heading does not match segment "
+                    + std::to_string(i - 1) + " end heading (G1 failure)"});
+        }
+        // Curvature continuity.
+        if (std::abs(nextCurvature - prevEndCurvature) > curvatureTolerance) {
+            diagnostics.push_back({RoadErrorCode::CurvatureDiscontinuity,
+                "segment " + std::to_string(i) + " start curvature does not match segment "
+                    + std::to_string(i - 1) + " end curvature"});
+        }
+    }
+
+    if (!diagnostics.empty()) {
+        return std::unexpected(std::move(diagnostics));
+    }
+    return ReferenceAlignment{std::move(stationed), totalLength};
+}
+
+AlignmentSample ReferenceAlignment::evaluate(const Station s) const noexcept {
+    if (segments_.empty()) {
+        return AlignmentSample{};
+    }
+    Station clamped = s;
+    if (clamped <= 0.0) {
+        return evaluateSegment(segments_.front().segment, 0.0);
+    }
+    if (clamped >= totalLength_) {
+        return segmentEndSample(segments_.back().segment);
+    }
+    for (const StationedSegment& stood : segments_) {
+        const double len = segmentLength(stood.segment);
+        if (clamped <= stood.startStation + len) {
+            return evaluateSegment(stood.segment, clamped - stood.startStation);
+        }
+    }
+    return segmentEndSample(segments_.back().segment);
+}
+
+std::optional<std::size_t> ReferenceAlignment::segmentIndexAt(const Station s) const noexcept {
+    if (segments_.empty() || s < 0.0 || s > totalLength_) {
+        return std::nullopt;
+    }
+    for (std::size_t i = 0; i < segments_.size(); ++i) {
+        const double len = segmentLength(segments_[i].segment);
+        if (s <= segments_[i].startStation + len) {
+            return i;
+        }
+    }
+    return segments_.size() - 1;
+}
+
+StationRange ReferenceAlignment::stationRange() const noexcept {
+    return StationRange{0.0, totalLength_};
+}
+
+} // namespace infraforge::domain::road

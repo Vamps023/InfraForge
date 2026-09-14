@@ -57,6 +57,10 @@ Curvature startCurvatureOf(const LineSegment&) noexcept { return 0.0; }
 Curvature startCurvatureOf(const CircularArcSegment& s) noexcept { return s.curvature; }
 Curvature startCurvatureOf(const ClothoidSegment& s) noexcept { return s.startCurvature; }
 
+Curvature endCurvatureOf(const LineSegment&) noexcept { return 0.0; }
+Curvature endCurvatureOf(const CircularArcSegment& s) noexcept { return s.curvature; }
+Curvature endCurvatureOf(const ClothoidSegment& s) noexcept { return s.endCurvature; }
+
 std::optional<RoadDiagnostic> validateOne(const LineSegment& s) noexcept {
     return validateCommon(s.start, s.heading, s.length);
 }
@@ -222,6 +226,10 @@ Heading segmentStartHeading(const AlignmentSegment& segment) noexcept {
 
 Curvature segmentStartCurvature(const AlignmentSegment& segment) noexcept {
     return std::visit([](const auto& s) { return startCurvatureOf(s); }, segment);
+}
+
+Curvature segmentEndCurvature(const AlignmentSegment& segment) noexcept {
+    return std::visit([](const auto& s) { return endCurvatureOf(s); }, segment);
 }
 
 AlignmentSample segmentEndSample(const AlignmentSegment& segment) noexcept {

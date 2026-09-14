@@ -102,6 +102,7 @@ using AlignmentSegment = std::variant<LineSegment, CircularArcSegment, ClothoidS
 [[nodiscard]] AlignmentPoint segmentStartPoint(const AlignmentSegment& segment) noexcept;
 [[nodiscard]] Heading segmentStartHeading(const AlignmentSegment& segment) noexcept;
 [[nodiscard]] Curvature segmentStartCurvature(const AlignmentSegment& segment) noexcept;
+[[nodiscard]] Curvature segmentEndCurvature(const AlignmentSegment& segment) noexcept;
 [[nodiscard]] AlignmentSample segmentEndSample(const AlignmentSegment& segment) noexcept;
 
 // Structural validation of one segment's canonical parameters. Returns

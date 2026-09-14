@@ -988,6 +988,7 @@ JobRecord TerrainService::regenerateTiles(const std::string& datasetUuid) {
         .tempFile = {},
         .grid = world_.grid(),
         .project = *project_,
+        .elevationUnitOverride = {},
     });
 
     const auto body = [this, payload, missing](JobContext& context) -> JobSystem::Payload {
@@ -1620,6 +1621,7 @@ JobRecord TerrainService::startDownload(
             .tempFile = tempRaster,  // .importing file; commit renames it
             .grid = payload->grid,
             .project = payload->project,
+            .elevationUnitOverride = {},
         });
 
         domain::terrain::TerrainDataset& dataset = result->dataset;

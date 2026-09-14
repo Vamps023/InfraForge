@@ -4,6 +4,10 @@ apps/*/dist/
 packages/*/dist/
 packages/protocol-ts/src/gen/
 
+# Electron Builder release output
+apps/*/dist-release/
+apps/*/dist-release-*/
+
 # Native builds
 build/
 out/

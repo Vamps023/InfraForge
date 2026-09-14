@@ -178,6 +178,17 @@ export function registerBuiltinCommands(deps: BuiltinCommandDeps): void {
         store.setPanelVisible('bottom', !store.panels.bottom.visible)
       },
     },
+    {
+      id: 'help.diagnostics',
+      label: 'Diagnostics…',
+      description: 'Show build version, resolved native paths, and runtime info.',
+      category: 'Help',
+      group: 'help',
+      surfaces: ['menu', 'palette'],
+      execute: () => {
+        useShellUiStore.getState().openDialogCommand('diagnostics')
+      },
+    },
   ]
 
   for (const def of defs) {
@@ -196,6 +207,7 @@ export function unregisterBuiltinCommands(): void {
     'panel.toggle-outliner',
     'panel.toggle-inspector',
     'panel.toggle-bottom',
+    'help.diagnostics',
   ]
   for (const id of ids) {
     commandRegistry.unregister(id)

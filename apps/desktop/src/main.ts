@@ -1,11 +1,14 @@
-import { app, BrowserWindow, dialog, ipcMain, screen, session } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, screen, session, shell } from 'electron'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
+import fs from 'node:fs'
+import os from 'node:os'
 import { EngineSupervisor } from './EngineSupervisor.js'
 import { ViewportSupervisor, type ViewportPlacement } from './ViewportSupervisor.js'
 import { planViewportVisibility } from './ViewportVisibilityPolicy.js'
 import { loadAppRuntimeConfig } from './AppConfig.js'
 import { GeocoderService } from './GeocoderService.js'
+import { resolveNativeExecutable } from './NativeExecutableResolver.js'
 
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url))
 let engineSupervisor: EngineSupervisor | null = null
@@ -160,7 +163,14 @@ function createMainWindow(): BrowserWindow {
       throw new Error('INFRAFORGE_FRONTEND_URL must target localhost during development')
     }
     void window.loadURL(parsed.toString())
+  } else if (app.isPackaged) {
+    // Packaged build: frontend is staged as extraResources at
+    // resources/frontend/dist/index.html (outside app.asar).
+    const frontendPath = path.join(process.resourcesPath, 'frontend', 'dist', 'index.html')
+    void window.loadFile(frontendPath)
   } else {
+    // Source-tree development: frontend dist sits alongside the desktop
+    // workspace under apps/frontend/dist.
     const frontendPath = path.resolve(currentDirectory, '../../frontend/dist/index.html')
     void window.loadFile(frontendPath)
   }
@@ -209,6 +219,57 @@ app.whenReady().then(async () => {
   })
 
   ipcMain.handle('app:get-runtime-config', () => runtimeConfig)
+
+  // v0.1 diagnostics: collects build identity, resolved native paths, and
+  // runtime versions so support sessions can identify the exact environment
+  // without asking the user to run terminal commands.
+  ipcMain.handle('app:get-diagnostics', async () => {
+    const enginePath = await resolveNativeExecutable('engine').catch(() => null)
+    const viewportPath = await resolveNativeExecutable('viewport').catch(() => null)
+    const resourcesPath = process.resourcesPath ?? null
+    const projDataCandidates = [
+      enginePath ? path.join(path.dirname(enginePath), 'share', 'proj') : null,
+      enginePath ? path.join(path.dirname(enginePath), '..', 'share', 'proj') : null,
+      resourcesPath ? path.join(resourcesPath, 'share', 'proj') : null,
+    ].filter((candidate): candidate is string => candidate !== null)
+    const projDataPath = projDataCandidates.find((candidate) => {
+      try {
+        return fs.existsSync(path.join(candidate, 'proj.db'))
+      } catch {
+        return false
+      }
+    }) ?? null
+    return {
+      appVersion: app.getVersion(),
+      buildSha: process.env.INFRAFORGE_BUILD_SHA || process.env.GITHUB_SHA || 'unknown',
+      electronVersion: process.versions.electron,
+      chromeVersion: process.versions.chrome,
+      nodeVersion: process.versions.node,
+      platform: process.platform,
+      arch: process.arch,
+      isPackaged: app.isPackaged,
+      enginePath,
+      viewportPath,
+      projDataPath,
+      resourcesPath,
+      logPath: app.getPath('logs'),
+      userDataPath: app.getPath('userData'),
+    }
+  })
+
+  ipcMain.handle('app:open-logs', async () => {
+    const logPath = app.getPath('logs')
+    try {
+      if (!fs.existsSync(logPath)) {
+        fs.mkdirSync(logPath, { recursive: true })
+      }
+      await shell.openPath(logPath)
+      return true
+    } catch {
+      return false
+    }
+  })
+
   ipcMain.handle('geocoder:search', async (_event, query: unknown) => {
     return geocoderService.search(query)
   })
@@ -347,6 +408,53 @@ app.whenReady().then(async () => {
   })
 
   createMainWindow()
+
+  // v0.1 Help menu: Open Logs and Diagnostics so users can provide debug info
+  // without a terminal. The menu is minimal — only Help — to avoid clashing
+  // with the renderer's own keyboard shortcuts and context menus.
+  const helpMenu = Menu.buildFromTemplate([
+    {
+      label: 'Help',
+      submenu: [
+        {
+          label: 'Open Logs Folder',
+          click: () => {
+            const logPath = app.getPath('logs')
+            try {
+              if (!fs.existsSync(logPath)) {
+                fs.mkdirSync(logPath, { recursive: true })
+              }
+              void shell.openPath(logPath)
+            } catch {
+              // best-effort; ignore if the folder cannot be opened
+            }
+          },
+        },
+        {
+          label: 'Diagnostics',
+          click: () => {
+            for (const browserWindow of BrowserWindow.getAllWindows()) {
+              if (!browserWindow.isDestroyed()) {
+                browserWindow.webContents.send('menu:diagnostics')
+              }
+            }
+          },
+        },
+        { type: 'separator' },
+        {
+          label: `About InfraForge ${app.getVersion()}`,
+          click: () => {
+            for (const browserWindow of BrowserWindow.getAllWindows()) {
+              if (!browserWindow.isDestroyed()) {
+                browserWindow.webContents.send('menu:diagnostics')
+              }
+            }
+          },
+        },
+      ],
+    },
+  ])
+  Menu.setApplicationMenu(helpMenu)
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

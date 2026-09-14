@@ -48,6 +48,7 @@ add_library(infraforge_core STATIC
     src/domain/terrain/TerrainSampler.cpp
     src/domain/terrain/MockTerrainProvider.cpp
     src/domain/terrain/TerrariumTerrainProvider.cpp
+    src/domain/road/AlignmentFitter.cpp
     src/domain/road/AlignmentPrimitives.cpp
     src/domain/road/ReferenceAlignment.cpp
     src/domain/road/Road.cpp
@@ -147,6 +148,7 @@ add_executable(infraforge-engine-tests
     tests/ProjectServiceTests.cpp
     tests/RoadDomainTests.cpp
     tests/RoadAlignmentFixturesTests.cpp
+    tests/RoadFitterTests.cpp
     tests/RoadPersistenceTests.cpp
     tests/SpatialBoundsTests.cpp
     tests/SpatialIndexTests.cpp

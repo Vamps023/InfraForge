@@ -76,7 +76,7 @@ function AppHeader() {
         {summary ? summary.displayName : 'No project open'}
       </div>
       <div className="header-spacer" />
-      <div className="build-label">Foundation 0.3.0</div>
+      <div className="build-label">Foundation 0.1.0</div>
     </header>
   )
 }

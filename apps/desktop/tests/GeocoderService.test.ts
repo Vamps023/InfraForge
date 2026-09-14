@@ -67,7 +67,7 @@ describe('GeocoderService', () => {
 
     // Authentic User-Agent must be present
     expect(capturedHeaders['User-Agent']).toBe(
-      'InfraForge/0.3.0 (https://infraforge.app; contact@infraforge.app)',
+      'InfraForge/0.1.0 (https://infraforge.app; contact@infraforge.app)',
     )
     // No fake Referer header
     expect(capturedHeaders['Referer']).toBeUndefined()

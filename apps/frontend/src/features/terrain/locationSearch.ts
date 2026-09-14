@@ -7,7 +7,7 @@
 // - Must send an identifiable HTTP User-Agent.
 // - In Electron desktop execution, search requests route through the main process
 //   via IPC (GeocoderService) which sends the official application User-Agent:
-//   InfraForge/0.3.0 (https://infraforge.app; contact@infraforge.app).
+//   InfraForge/0.1.0 (https://infraforge.app; contact@infraforge.app).
 // - In browser fallback (non-desktop execution), standard fetch is used. Fake Referer
 //   headers are not used to bypass User-Agent requirements.
 // - Max 1 request per second (enforced centrally in desktop and per-client in web).

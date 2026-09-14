@@ -728,7 +728,7 @@ describe('Runtime Configuration Layer (terrainConfig)', () => {
         minIntervalMs: 500,
         maxCacheEntries: 64,
         attribution: 'Internal Geocoder Service',
-        userAgent: 'InfraForge/0.3.0',
+        userAgent: 'InfraForge/0.1.0',
       },
       mapTiles: {
         url: 'https://tiles.corp.net/{z}/{x}/{y}.png',

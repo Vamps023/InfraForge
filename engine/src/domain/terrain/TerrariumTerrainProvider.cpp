@@ -23,6 +23,7 @@
 #include <gdal_priv.h>
 #include <ogr_spatialref.h>
 #include <cpl_string.h>
+#include <png.h>
 
 namespace infraforge::domain::terrain {
 
@@ -183,7 +184,7 @@ std::vector<float> decodeTerrariumPng(const std::string& pngData, int& width, in
         {"gdalDrivers", std::to_string(GetGDALDriverManager()->GetDriverCount())},
     });
 
-    // Use a real temporary file rather than /vsimem. The Windows GDAL PNG
+    /* Use a real temporary file rather than /vsimem. The Windows GDAL PNG
     // plugin may not resolve correctly through the virtual filesystem even
     // though it can open the same PNG from disk.
     static std::atomic<int> tempCounter{0};
@@ -251,6 +252,31 @@ std::vector<float> decodeTerrariumPng(const std::string& pngData, int& width, in
         elevations[i] = static_cast<float>(
             (static_cast<int>(r[i]) * 256 + static_cast<int>(g[i]) +
              static_cast<double>(b[i]) / 256.0) - 32768.0);
+    }
+    return elevations; */
+
+    png_image image{};
+    image.version = PNG_IMAGE_VERSION;
+    if (!png_image_begin_read_from_memory(&image, pngData.data(), pngData.size())) {
+        throw ProviderError(ProviderErrorCode::CorruptTerrainResponse,
+            "libpng cannot open Terrarium PNG: " + std::string{image.message});
+    }
+    image.format = PNG_FORMAT_RGBA;
+    width = static_cast<int>(image.width);
+    height = static_cast<int>(image.height);
+    std::vector<uint8_t> rgba(PNG_IMAGE_SIZE(image));
+    if (!png_image_finish_read(&image, nullptr, rgba.data(), 0, nullptr)) {
+        const std::string error = image.message;
+        png_image_free(&image);
+        throw ProviderError(ProviderErrorCode::CorruptTerrainResponse,
+            "libpng failed to decode Terrarium PNG: " + error);
+    }
+    png_image_free(&image);
+    std::vector<float> elevations(static_cast<size_t>(width) * height);
+    for (size_t i = 0; i < elevations.size(); ++i) {
+        elevations[i] = static_cast<float>(
+            (static_cast<int>(rgba[i * 4]) * 256 + static_cast<int>(rgba[i * 4 + 1]) +
+             static_cast<double>(rgba[i * 4 + 2]) / 256.0) - 32768.0);
     }
     return elevations;
 }

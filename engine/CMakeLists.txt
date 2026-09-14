@@ -55,6 +55,7 @@ add_library(infraforge_core STATIC
     src/domain/road/ReferenceAlignment.cpp
     src/domain/road/Road.cpp
     src/domain/road/RoadRecord.cpp
+    src/domain/road/RoadTessellation.cpp
     src/domain/road/RoadTypes.cpp
     src/domain/road/VerticalProfiles.cpp
     src/domain/world/ChunkGrid.cpp
@@ -153,6 +154,7 @@ add_executable(infraforge-engine-tests
     tests/RoadFitterTests.cpp
     tests/RoadPersistenceTests.cpp
     tests/RoadServiceTests.cpp
+    tests/RoadTessellationTests.cpp
     tests/SpatialBoundsTests.cpp
     tests/SpatialIndexTests.cpp
     tests/SqliteProjectStoreTests.cpp

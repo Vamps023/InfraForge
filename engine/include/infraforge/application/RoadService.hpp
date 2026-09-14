@@ -5,6 +5,7 @@
 #include "infraforge/domain/road/Road.hpp"
 #include "infraforge/domain/road/RoadRecord.hpp"
 #include "infraforge/domain/road/RoadSource.hpp"
+#include "infraforge/domain/road/RoadTessellation.hpp"
 #include "infraforge/domain/world/Invalidation.hpp"
 #include "infraforge/domain/world/SpatialBounds.hpp"
 #include "infraforge/ports/ProjectStore.hpp"
@@ -160,6 +161,14 @@ public:
     [[nodiscard]] std::vector<RoadSummary> listRoads() const;
     [[nodiscard]] std::optional<RoadDetails> getRoad(const std::string& roadId) const;
     [[nodiscard]] std::optional<RoadSummary> getRoadSummary(const std::string& roadId) const;
+
+    // Produces the derived tessellation for a road. Returns nullopt when
+    // the road does not exist. The tessellation is derived data, not
+    // canonical state; it is recomputed on demand from the alignment and
+    // vertical profiles.
+    [[nodiscard]] std::optional<domain::road::RoadTessellation> getRoadTessellation(
+        const std::string& roadId,
+        const domain::road::RoadTessellationParams& params = {}) const;
 
 private:
     // Undo/redo history entry: stores the full road record before/after.

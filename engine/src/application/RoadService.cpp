@@ -578,6 +578,19 @@ std::optional<RoadSummary> RoadService::getRoadSummary(const std::string& roadId
     return toSummary(*it);
 }
 
+std::optional<domain::road::RoadTessellation> RoadService::getRoadTessellation(
+    const std::string& roadId,
+    const domain::road::RoadTessellationParams& params) const {
+    auto roads = store_.roads();
+    auto it = std::find_if(roads.begin(), roads.end(),
+        [&](const RoadRecord& r) { return uuidTextFromRoadId(r.id) == roadId; });
+    if (it == roads.end()) return std::nullopt;
+
+    auto road = rebuildRoad(*it);
+    return domain::road::tessellateRoad(
+        road.alignment(), road.elevation(), road.superelevation(), params);
+}
+
 void RoadService::recordHistory(HistoryEntry entry) {
     const auto roadId = entry.roadId;
     undoStacks_[roadId].push_back(std::move(entry));

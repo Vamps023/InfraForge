@@ -662,8 +662,20 @@ SpatialBounds RoadService::computeRoadBounds(const RoadRecord& road) const {
         minN = std::min(minN, seg.start.northing);
         maxE = std::max(maxE, seg.start.easting);
         maxN = std::max(maxN, seg.start.northing);
+        // Also include the segment end point for the last segment.
+        if (&seg == &road.segments.back()) {
+            // Compute the end point from the segment start + length * heading.
+            // For accurate bounds, we use the segment's end point if available.
+            // The segment start is the beginning; the end is start + length
+            // along the segment direction. For bounds, we add the length as a
+            // margin to ensure the end is covered.
+            maxE = std::max(maxE, seg.start.easting + seg.length);
+            maxN = std::max(maxN, seg.start.northing + seg.length);
+            minE = std::min(minE, seg.start.easting - seg.length);
+            minN = std::min(minN, seg.start.northing - seg.length);
+        }
     }
-    // Add a small margin for the road width.
+    // Add a margin for the road width.
     const double margin = 10.0;
     return SpatialBounds{minE - margin, minN - margin, maxE + margin, maxN + margin};
 }

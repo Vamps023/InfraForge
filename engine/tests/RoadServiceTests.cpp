@@ -13,6 +13,7 @@
 #include <cmath>
 #include <filesystem>
 #include <memory>
+#include <set>
 #include <vector>
 
 namespace infraforge::application {
@@ -433,6 +434,61 @@ TEST_CASE_FIXTURE(RoadServiceTestFixture, "tessellation is deterministic across 
     REQUIRE(tess2.has_value());
     CHECK(tess1->crossSections.size() == tess2->crossSections.size());
     CHECK(tess1->indices.size() == tess2->indices.size());
+}
+
+TEST_CASE_FIXTURE(RoadServiceTestFixture, "multiple roads coexist") {
+    // Create several roads and verify they all coexist.
+    for (int i = 0; i < 5; ++i) {
+        CreateRoadInput input;
+        input.name = "Road " + std::to_string(i);
+        input.sourcePoints = makeStraightPolyline(
+            static_cast<double>(i) * 100.0, 0.0, 0.0, 100.0, 10);
+        input.positionTolerance = 1.0;
+        (void)roadService->createRoad(input);
+    }
+
+    auto roads = roadService->listRoads();
+    CHECK(roads.size() == 5);
+
+    // Verify each road has a unique ID.
+    std::set<std::string> ids;
+    for (const auto& r : roads) {
+        ids.insert(r.roadId);
+    }
+    CHECK(ids.size() == 5);
+
+    // Verify the scene projection includes all roads.
+    auto projection = roadService->roadSceneProjection();
+    CHECK(projection.meshes.size() == 5);
+}
+
+TEST_CASE_FIXTURE(RoadServiceTestFixture, "long road spans multiple chunks") {
+    // Create a road that is long enough to potentially span multiple chunks.
+    CreateRoadInput input;
+    input.name = "Long Road";
+    input.sourcePoints = makeStraightPolyline(0.0, 0.0, 0.0, 5000.0, 50);
+    input.positionTolerance = 1.0;
+    auto summary = roadService->createRoad(input);
+
+    // Verify the road was created and has a reasonable length.
+    CHECK(summary.length > 4000.0);
+
+    // Verify the scene projection produces valid mesh data for the long road.
+    auto projection = roadService->roadSceneProjection();
+    CHECK(projection.meshes.size() == 1);
+    CHECK_FALSE(projection.meshes[0].vertices.empty());
+    CHECK_FALSE(projection.meshes[0].indices.empty());
+
+    // Verify tessellation produces a reasonable number of samples.
+    auto tess = roadService->getRoadTessellation(summary.roadId);
+    REQUIRE(tess.has_value());
+    CHECK(tess->crossSections.size() > 10);
+}
+
+TEST_CASE_FIXTURE(RoadServiceTestFixture, "road scene projection is empty with no roads") {
+    auto projection = roadService->roadSceneProjection();
+    CHECK(projection.meshes.empty());
+    CHECK(projection.revision > 0);
 }
 
 } // namespace infraforge::application

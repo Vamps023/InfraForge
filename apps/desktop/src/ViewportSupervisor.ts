@@ -174,11 +174,11 @@ export class ViewportSupervisor {
     // path after the shell applies its visibility policy at readiness.
     const args = [
         '--parent-window', readWindowHandleHex(parentWindowHandle),
-        '--screen-x', String(initialPlacement.screenX),
-        '--screen-y', String(initialPlacement.screenY),
-        '--width', String(initialPlacement.width),
-        '--height', String(initialPlacement.height),
-        '--dpi-scale', String(Math.round(initialPlacement.dpiScale * 100)),
+        '--screen-x', String(Math.round(initialPlacement.screenX)),
+        '--screen-y', String(Math.round(initialPlacement.screenY)),
+        '--width', String(Math.max(1, Math.round(initialPlacement.width))),
+        '--height', String(Math.max(1, Math.round(initialPlacement.height))),
+        '--dpi-scale', String(Math.max(5, Math.round(initialPlacement.dpiScale * 100))),
     ]
     if (process.env.INFRAFORGE_VIEWPORT_VALIDATE === '1') {
       // Development validation mode: KHONOS validation findings are logged

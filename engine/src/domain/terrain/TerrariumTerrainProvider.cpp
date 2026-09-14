@@ -2,6 +2,7 @@
 
 #include <infraforge/domain/terrain/TerrainDownloadProvider.hpp>
 #include <infraforge/ports/HttpClient.hpp>
+#include <infraforge/runtime/Logging.hpp>
 
 #include <algorithm>
 #include <atomic>
@@ -168,6 +169,20 @@ std::vector<float> decodeTerrariumPng(const std::string& pngData, int& width, in
     // download path as well as in tests that happen to initialize GDAL first.
     ensureGdalRegistered();
 
+    std::string signature;
+    for (std::size_t i = 0; i < std::min<std::size_t>(pngData.size(), 8); ++i) {
+        if (i != 0) signature += ' ';
+        std::ostringstream byte;
+        byte << std::hex << std::uppercase << std::setw(2) << std::setfill('0')
+             << static_cast<unsigned int>(static_cast<unsigned char>(pngData[i]));
+        signature += byte.str();
+    }
+    runtime::logInfo("terrain", "terrarium.decode.begin", {
+        {"bytes", std::to_string(pngData.size())},
+        {"signature", signature},
+        {"gdalDrivers", std::to_string(GetGDALDriverManager()->GetDriverCount())},
+    });
+
     // Write PNG to a temporary in-memory file via GDAL's vsimem.
     static std::atomic<int> vsiCounter{0};
     const std::string vsiPath = "/vsimem/terrarium_" +
@@ -182,8 +197,14 @@ std::vector<float> decodeTerrariumPng(const std::string& pngData, int& width, in
     }
     VSIFCloseL(vsiFile);
 
+    CPLErrorReset();
     GDALDatasetH ds = GDALOpen(vsiPath.c_str(), GA_ReadOnly);
     if (!ds) {
+        runtime::logError("terrain", "terrarium.decode.open_failed", {
+            {"gdalError", CPLGetLastErrorMsg()},
+            {"gdalDrivers", std::to_string(GetGDALDriverManager()->GetDriverCount())},
+            {"signature", signature},
+        });
         VSIUnlink(vsiPath.c_str());
         throw ProviderError(ProviderErrorCode::CorruptTerrainResponse,
             "GDAL cannot open Terrarium PNG");
@@ -571,6 +592,11 @@ std::filesystem::path TerrariumTerrainProvider::fetchRequest(
 
         if (response.ok()) {
             pngData = response.body;
+            runtime::logInfo("terrain", "terrarium.http.completed", {
+                {"request", request.requestId},
+                {"status", std::to_string(response.statusCode)},
+                {"bytes", std::to_string(response.body.size())},
+            });
             break;
         }
 

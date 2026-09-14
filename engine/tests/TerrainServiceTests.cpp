@@ -38,6 +38,16 @@ infraforge::domain::terrain::TerrainProviderRegistry makeTestProviderRegistry() 
     return registry;
 }
 
+// Build a test provider registry with a configurable mock provider,
+// returning the provider pointer so tests can set fail mode (Finding 7).
+infraforge::domain::terrain::MockTerrainProvider* makeTestProviderRegistryWithMock(
+    infraforge::domain::terrain::TerrainProviderRegistry& registry) {
+    auto mock = std::make_unique<infraforge::domain::terrain::MockTerrainProvider>();
+    auto* ptr = mock.get();
+    registry.registerProvider(std::move(mock));
+    return ptr;
+}
+
 // Deterministic executor stand-in for the real CommandProcessor executor.
 class QueuedExecutor {
 public:
@@ -79,6 +89,12 @@ struct TerrainHarness {
     std::filesystem::path demPath;
     std::filesystem::path projectDirectory;
     std::vector<std::string> datasetAddedIds;
+    // Pointer to the mock provider (for configuring fail mode in tests).
+    // Null when using the default registry without a configurable mock.
+    infraforge::domain::terrain::MockTerrainProvider* mockProvider{nullptr};
+
+    // Tag for creating a harness with a configurable mock provider.
+    struct ConfigurableMock {};
 
     explicit TerrainHarness(const infraforge::testhelpers::TerrainDemSpec& spec = {})
         : jobs([this](std::function<void()> task) { executor.poster()(std::move(task)); }),
@@ -90,6 +106,26 @@ struct TerrainHarness {
                           infraforge::domain::terrain::uuidTextFromEntityId(event.datasetAdded->id));
                   }
               }) {
+        init(spec);
+    }
+
+    // Constructor with configurable mock provider (Finding 7).
+    explicit TerrainHarness(ConfigurableMock, const infraforge::testhelpers::TerrainDemSpec& spec = {})
+        : jobs([this](std::function<void()> task) { executor.poster()(std::move(task)); }) {
+        infraforge::domain::terrain::TerrainProviderRegistry registry;
+        mockProvider = makeTestProviderRegistryWithMock(registry);
+        terrain.emplace(store, transforms, reader, world, *jobs, std::move(registry),
+            [this](const infraforge::application::TerrainServiceEvent& event) {
+                if (event.datasetAdded.has_value()) {
+                    datasetAddedIds.push_back(
+                        infraforge::domain::terrain::uuidTextFromEntityId(event.datasetAdded->id));
+                }
+            });
+        init(spec);
+    }
+
+private:
+    void init(const infraforge::testhelpers::TerrainDemSpec& spec) {
         demPath = scratch.path() / "source-dem.tif";
         infraforge::testhelpers::writeDemGeoTiff(demPath, spec);
 
@@ -106,6 +142,8 @@ struct TerrainHarness {
         projectDirectory = std::filesystem::path(store.current().directory);
         terrain->onProjectOpened();
     }
+
+public:
 
     template <typename Pred>
     bool waitFor(const Pred& predicate, std::chrono::milliseconds budget) {
@@ -925,10 +963,183 @@ TEST_CASE("planDownload rejects huge area exceeding selection tile limit") {
     CHECK(threw);
 }
 
+// ---- Finding 14: Backend validation audit tests ----
+
+TEST_CASE("planDownload rejects NaN coordinates") {
+    TerrainHarness harness{};
+    const GeoBounds area{
+        .west = std::numeric_limits<double>::quiet_NaN(),
+        .south = 42.0, .east = 15.05, .north = 42.05};
+    bool threw = false;
+    try {
+        (void)harness.terrain->planDownload("mock-terrain", area, 4000, {});
+    } catch (const TerrainError& e) {
+        threw = true;
+        CHECK(e.code() == TerrainErrorCode::InvalidArgument);
+    }
+    CHECK(threw);
+}
+
+TEST_CASE("planDownload rejects Infinity coordinates") {
+    TerrainHarness harness{};
+    const GeoBounds area{
+        .west = 15.0, .south = 42.0,
+        .east = std::numeric_limits<double>::infinity(),
+        .north = 42.05};
+    bool threw = false;
+    try {
+        (void)harness.terrain->planDownload("mock-terrain", area, 4000, {});
+    } catch (const TerrainError& e) {
+        threw = true;
+        CHECK(e.code() == TerrainErrorCode::InvalidArgument);
+    }
+    CHECK(threw);
+}
+
+TEST_CASE("planDownload rejects west >= east") {
+    TerrainHarness harness{};
+    const GeoBounds area{
+        .west = 15.1, .south = 42.0, .east = 15.0, .north = 42.05};
+    bool threw = false;
+    try {
+        (void)harness.terrain->planDownload("mock-terrain", area, 4000, {});
+    } catch (const TerrainError& e) {
+        threw = true;
+        CHECK(e.code() == TerrainErrorCode::InvalidArgument);
+    }
+    CHECK(threw);
+}
+
+TEST_CASE("planDownload rejects south >= north") {
+    TerrainHarness harness{};
+    const GeoBounds area{
+        .west = 15.0, .south = 42.1, .east = 15.05, .north = 42.0};
+    bool threw = false;
+    try {
+        (void)harness.terrain->planDownload("mock-terrain", area, 4000, {});
+    } catch (const TerrainError& e) {
+        threw = true;
+        CHECK(e.code() == TerrainErrorCode::InvalidArgument);
+    }
+    CHECK(threw);
+}
+
+TEST_CASE("planDownload rejects longitude out of range") {
+    TerrainHarness harness{};
+    const GeoBounds area{
+        .west = -200.0, .south = 42.0, .east = 15.05, .north = 42.05};
+    bool threw = false;
+    try {
+        (void)harness.terrain->planDownload("mock-terrain", area, 4000, {});
+    } catch (const TerrainError& e) {
+        threw = true;
+        CHECK(e.code() == TerrainErrorCode::InvalidArgument);
+    }
+    CHECK(threw);
+}
+
+TEST_CASE("planDownload rejects latitude outside Web Mercator range") {
+    TerrainHarness harness{};
+    const GeoBounds area{
+        .west = 15.0, .south = -90.0, .east = 15.05, .north = 42.05};
+    bool threw = false;
+    try {
+        (void)harness.terrain->planDownload("mock-terrain", area, 4000, {});
+    } catch (const TerrainError& e) {
+        threw = true;
+        CHECK(e.code() == TerrainErrorCode::InvalidArgument);
+    }
+    CHECK(threw);
+}
+
+TEST_CASE("planDownload rejects invalid tile size") {
+    TerrainHarness harness{};
+    const GeoBounds area{
+        .west = 15.0, .south = 42.0, .east = 15.05, .north = 42.05};
+    bool threw = false;
+    try {
+        (void)harness.terrain->planDownload("mock-terrain", area, 3000, {});
+    } catch (const TerrainError& e) {
+        threw = true;
+        CHECK(e.code() == TerrainErrorCode::InvalidArgument);
+    }
+    CHECK(threw);
+}
+
+TEST_CASE("planDownload rejects negative selected index") {
+    TerrainHarness harness{};
+    const GeoBounds area{
+        .west = 15.0, .south = 42.0, .east = 15.05, .north = 42.05};
+    bool threw = false;
+    try {
+        (void)harness.terrain->planDownload("mock-terrain", area, 4000, {-1});
+    } catch (const TerrainError& e) {
+        threw = true;
+        CHECK(e.code() == TerrainErrorCode::InvalidArgument);
+    }
+    CHECK(threw);
+}
+
+TEST_CASE("planDownload rejects selected index >= grid size") {
+    TerrainHarness harness{};
+    const GeoBounds area{
+        .west = 15.0, .south = 42.0, .east = 15.05, .north = 42.05};
+    const auto gridTiles = computeSelectionGrid(area, 4000);
+    REQUIRE(!gridTiles.empty());
+    const auto outOfRange = static_cast<std::int32_t>(gridTiles.size());
+    bool threw = false;
+    try {
+        (void)harness.terrain->planDownload(
+            "mock-terrain", area, 4000, {outOfRange});
+    } catch (const TerrainError& e) {
+        threw = true;
+        CHECK(e.code() == TerrainErrorCode::InvalidArgument);
+    }
+    CHECK(threw);
+}
+
+TEST_CASE("planDownload rejects duplicate selected index") {
+    TerrainHarness harness{};
+    const GeoBounds area{
+        .west = 15.0, .south = 42.0, .east = 15.05, .north = 42.05};
+    bool threw = false;
+    try {
+        (void)harness.terrain->planDownload(
+            "mock-terrain", area, 4000, {0, 0});
+    } catch (const TerrainError& e) {
+        threw = true;
+        CHECK(e.code() == TerrainErrorCode::InvalidArgument);
+    }
+    CHECK(threw);
+}
+
+TEST_CASE("startDownload rejects overlong display name") {
+    TerrainHarness harness{};
+    const GeoBounds area{
+        .west = 15.0, .south = 42.0, .east = 15.05, .north = 42.05};
+    const std::string longName(300, 'x');
+    bool threw = false;
+    try {
+        (void)harness.terrain->startDownload(
+            "mock-terrain", area, 4000, {0}, longName);
+    } catch (const TerrainError& e) {
+        threw = true;
+        CHECK(e.code() == TerrainErrorCode::InvalidArgument);
+    }
+    CHECK(threw);
+}
+
 // ---- BLOCKER 5: Typed provider failures (regression test) ----
 
-TEST_CASE("download with authentication failure preserves typed error code") {
-    TerrainHarness harness{};
+// Helper: run a download with a configurable failing mock provider and
+// verify the job ends in the expected terminal state with no committed
+// dataset (Finding 7).
+void runFailingDownloadTest(ProviderErrorCode failCode,
+    infraforge::application::JobState expectedState) {
+    TerrainHarness harness{TerrainHarness::ConfigurableMock{}};
+    REQUIRE(harness.mockProvider != nullptr);
+    harness.mockProvider->setFailMode(failCode);
+
     const GeoBounds area{
         .west = 15.0, .south = 42.0, .east = 15.05, .north = 42.05};
     const std::uint32_t tileSize = 4000;
@@ -941,11 +1152,8 @@ TEST_CASE("download with authentication failure preserves typed error code") {
         allIndices.push_back(i);
     }
 
-    // Configure the mock provider to fail with AuthenticationFailed.
-    // We need to access the provider through the registry; the test
-    // verifies the error code propagates through the job record.
     const auto record = harness.terrain->startDownload(
-        "mock-terrain", area, tileSize, allIndices, "Auth Fail");
+        "mock-terrain", area, tileSize, allIndices, "Fail Test");
 
     const bool finished = harness.waitFor(
         [&] { return isTerminal(harness.jobs->job(record.jobId)); },
@@ -954,12 +1162,54 @@ TEST_CASE("download with authentication failure preserves typed error code") {
 
     const auto jobOpt = harness.jobs->job(record.jobId);
     REQUIRE(jobOpt.has_value());
-    // The job should be Failed (not Completed) since the mock provider
-    // succeeds by default. To test the error path, we'd need to configure
-    // the mock provider's fail mode, but the registry owns it. This test
-    // verifies the happy path completes; the typed-error mapping is
-    // verified via the mapProviderError unit test in the provider tests.
-    CHECK(jobOpt->state == infraforge::application::JobState::Completed);
+    CHECK(jobOpt->state == expectedState);
+
+    // No canonical dataset must be committed on failure/cancellation.
+    CHECK(harness.store.terrainDatasets().empty());
+    CHECK(harness.datasetAddedIds.empty());
+}
+
+TEST_CASE("download with authentication failure ends in Failed state") {
+    runFailingDownloadTest(
+        ProviderErrorCode::AuthenticationFailed,
+        infraforge::application::JobState::Failed);
+}
+
+TEST_CASE("download with rate limit failure ends in Failed state") {
+    runFailingDownloadTest(
+        ProviderErrorCode::RateLimited,
+        infraforge::application::JobState::Failed);
+}
+
+TEST_CASE("download with network timeout ends in Failed state") {
+    runFailingDownloadTest(
+        ProviderErrorCode::NetworkTimeout,
+        infraforge::application::JobState::Failed);
+}
+
+TEST_CASE("download with source unavailable ends in Failed state") {
+    runFailingDownloadTest(
+        ProviderErrorCode::SourceUnavailable,
+        infraforge::application::JobState::Failed);
+}
+
+TEST_CASE("download with invalid provider response ends in Failed state") {
+    runFailingDownloadTest(
+        ProviderErrorCode::InvalidProviderResponse,
+        infraforge::application::JobState::Failed);
+}
+
+TEST_CASE("download with corrupt terrain response ends in Failed state") {
+    runFailingDownloadTest(
+        ProviderErrorCode::CorruptTerrainResponse,
+        infraforge::application::JobState::Failed);
+}
+
+TEST_CASE("download with provider cancellation ends in Cancelled state") {
+    // Cancellation from the provider must map to Cancelled, not Failed.
+    runFailingDownloadTest(
+        ProviderErrorCode::Cancelled,
+        infraforge::application::JobState::Cancelled);
 }
 
 // ---- BLOCKER 6: Sparse canonical coverage (regression test) ----

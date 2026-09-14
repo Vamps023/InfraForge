@@ -158,13 +158,120 @@ The production terrain DEM provider is **AWS Terrain Tiles (Terrarium)**:
 - **CRS:** Web Mercator (EPSG:3857)
 - **Tile size:** 256×256 pixels
 - **Coverage:** Global
-- **Resolution:** ~76 m/pixel at zoom 11 (default)
+- **Resolution:** Effective plan resolution is computed from the selected zoom (z11) and the area's center latitude: `groundResolution = (tileSizeMeters * cos(lat)) / 256`. This varies from ~76 m/px at the equator to ~38 m/px at 60° latitude. The provider's `maxResolutionMpp` is 0 (unknown) because the Terrarium dataset is a composite of multiple sources with varying native resolutions.
 - **Authentication:** None required (AWS Open Data, S3 public bucket)
-- **Attribution:** Mapzen + USGS + NASA + other open data sources (see https://github.com/tilezen/joerd/blob/master/docs/attribution.md)
+- **Attribution:** `Elevation data © Mapzen, USGS, NASA, and other open data sources. Full attribution: https://github.com/tilezen/joerd/blob/master/docs/attribution.md` — The AWS Terrain Tiles / Mapzen Terrarium dataset is a composite of multiple elevation sources (SRTM, USGS 3DEP, GMTED2010, NED, etc.). The authoritative attribution reference is the joerd project documentation. Verified 2026-09-14.
 - **License:** Various open data licenses (USGS public domain, NASA, etc.)
 - **Rate limits:** No published limits; bounded retry with exponential backoff handles transient failures
+- **Download size:** Unknown (0) — PNG compression varies per tile, so size cannot be deterministically known before fetch. The protocol defines 0 = unknown; the UI displays `—`.
+- **XYZ validation:** z in [0, 20], x in [0, 2^z), y in [0, 2^z) with overflow-safe arithmetic.
+- **Tile boundary:** Half-open interval [min, max) for east/north edges to avoid overfetch on exact boundaries.
 
 The provider fetches PNG tiles via HTTP (ixwebsocket HttpClient), decodes Terrarium-encoded elevation values using GDAL, and writes temporary GeoTIFFs with proper CRS and geotransform for the canonical ingestion pipeline. The `MockTerrainProvider` is retained for deterministic unit tests only and is not exposed as a production user option.
+
+### HTTP cancellation
+
+HTTP cancellation is interruptible during all phases of the request:
+
+- **DNS/connect:** A RAII watcher thread polls the application cancellation callback every 50ms and sets `args->cancel` (the `std::atomic<bool>` that ixwebsocket checks internally at every I/O boundary).
+- **TLS/connect:** Same watcher thread mechanism.
+- **Request write:** Same watcher thread mechanism.
+- **Status/header waiting:** Same watcher thread mechanism.
+- **Response transfer:** The `onProgressCallback` returns false when cancellation is requested, aborting the transfer.
+- **Retries:** Cancellation is checked before each retry attempt.
+- **Retry backoff:** The backoff loop checks cancellation at bounded intervals (100ms).
+
+The watcher thread is exception-safe (RAII `WatcherJoinGuard`): it is always signalled and joined before `get()` returns, even if the HTTP call throws. No detached threads, no unsafe captures, no thread leaks.
+
+### HTTP error classification
+
+Transport-level errors are classified into a port-level `TransportError` enum:
+
+- `None` — HTTP exchange completed.
+- `Cancelled` — Request was cancelled by the caller.
+- `Timeout` — Connect or transfer timeout.
+- `DnsFailure` — DNS resolution failure.
+- `ConnectionFailure` — TCP connect / connection reset.
+- `TlsFailure` — TLS handshake / certificate failure.
+- `ProtocolFailure` — HTTP protocol error (malformed response).
+- `UnknownNetworkFailure` — Network failure that doesn't fit above.
+
+These map to terrain provider error semantics:
+
+- HTTP 401/403 → `AuthenticationFailed`
+- HTTP 429 → `RateLimited`
+- HTTP 404/410 → `SourceUnavailable`
+- HTTP 5xx → `SourceUnavailable` (retryable)
+- `Timeout` → `NetworkTimeout`
+- `DnsFailure`/`ConnectionFailure`/`TlsFailure`/`ProtocolFailure` → `SourceUnavailable`
+- `Cancelled` → `Cancelled`
+
+### Location search
+
+Location search uses a configurable provider abstraction:
+
+- **`LocationSearchClient`** — interface for search providers.
+- **`LocationSearchConfig`** — endpoint, throttling, cache, attribution configuration.
+- **`NominatimLocationSearchClient`** — production implementation using the Nominatim public API.
+
+Search behavior:
+
+- **Explicit search:** User enters a location, presses Search or Enter, and exactly one request is made. No autocomplete on every keystroke.
+- **Client-owned throttling:** Max 1 request per second (Nominatim usage policy), enforced by the search client, not the UI.
+- **Bounded LRU cache:** Normalized queries (whitespace/case) are cached with a bounded maximum (32 entries).
+- **Explicit UX states:** Searching, no-results, error, results — no-results is visible, not silently an empty list.
+- **Attribution:** `© OpenStreetMap contributors` is shown in the search UI.
+- **Stale response suppression:** A generation counter ensures stale responses are ignored.
+
+Search results are frontend UX only — they reposition the map and are NOT terrain truth.
+
+### OSM tile endpoint
+
+The Leaflet tile layer uses the canonical OSM endpoint:
+
+- `https://tile.openstreetmap.org/{z}/{x}/{y}.png` (no subdomain)
+- Attribution: `© OpenStreetMap contributors` is visible.
+
+### Selection tile size semantics
+
+The 1/2/4/8/16 km application selection tiles are **Web Mercator grid dimensions**, not physical ground-distance squares. At higher latitudes (>60°), the physical scale differs significantly — a "4 km tile" at 70° latitude is approximately 2 km in the east-west direction. This is acceptable because:
+
+1. The grid is a project-area unit, not canonical terrain geometry.
+2. The canonical terrain data uses real CRS via GDAL/PROJ.
+3. The provider requests use the tile bounds in WGS84, not the WebMercator approximation.
+4. The canonical transformation always uses GeoTransformService (PROJ).
+
+The `areaSqm` shown in the plan is approximate (Web Mercator metres), not exact physical ground area.
+
+### Plan identity
+
+The Download Area UI uses an explicit plan identity to prevent stale plan races:
+
+- The identity includes `providerId`, `tileSize`, `west`, `south`, `east`, `north`.
+- When a new area is drawn, the previous plan is immediately invalidated (`setPlan(null)`) — no reliance on React effect cleanup timing.
+- A delayed/stale response from an earlier request is ignored because its identity no longer matches the current inputs.
+- The Download Selected button is only enabled if a plan exists, its identity matches the current provider/area/tileSize, and the selected indices are valid for that exact plan.
+
+### Backend validation
+
+The native engine rejects all invalid inputs with stable typed error codes:
+
+- Project not open
+- Unknown provider
+- NaN/Infinity coordinates
+- west >= east
+- south >= north
+- Longitude out of range [-180, 180]
+- Latitude outside Web Mercator valid range [-85.05, 85.05]
+- Invalid tile size (must be 1000, 2000, 4000, 8000, or 16000)
+- Negative selected index
+- Selected index >= grid size
+- Duplicate selected index
+- Empty selection for `startDownload`
+- Oversized selection grid
+- Too many provider requests
+- Empty terrain name
+- Overlong terrain name (> 256 characters)
 
 ## CRS flow
 

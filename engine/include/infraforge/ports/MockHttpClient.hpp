@@ -31,7 +31,22 @@ public:
 
     // Set an error response for a specific URL.
     void setErrorResponse(const std::string& url, int statusCode, const std::string& errorMsg) {
-        responses_[url] = {statusCode, "", errorMsg};
+        HttpResponse r;
+        r.statusCode = statusCode;
+        r.errorMessage = errorMsg;
+        if (statusCode == 0) {
+            r.transportError = TransportError::UnknownNetworkFailure;
+        }
+        responses_[url] = r;
+    }
+
+    // Set a transport-level error for a specific URL (Finding 10).
+    void setTransportError(const std::string& url, TransportError err, const std::string& msg) {
+        HttpResponse r;
+        r.statusCode = 0;
+        r.transportError = err;
+        r.errorMessage = msg;
+        responses_[url] = r;
     }
 
     [[nodiscard]] HttpResponse get(const std::string& url) override {
@@ -51,6 +66,7 @@ public:
         if (cancelled && cancelled()) {
             HttpResponse r;
             r.statusCode = 0;
+            r.transportError = TransportError::Cancelled;
             r.errorMessage = "cancelled";
             return r;
         }

@@ -208,6 +208,7 @@ describe('Download Area - location search', () => {
         await new Promise((r) => setTimeout(r, delay))
         return results
       }),
+      attribution: '© OpenStreetMap contributors',
     }
   }
 
@@ -249,6 +250,7 @@ describe('Download Area - location search', () => {
       search: vi.fn(async () => {
         throw new Error('Network error')
       }),
+      attribution: '© OpenStreetMap contributors',
     }
     await expect(client.search('test')).rejects.toThrow('Network error')
   })
@@ -299,6 +301,7 @@ describe('Download Area - location search', () => {
         await new Promise((r) => setTimeout(r, 10))
         return [{ displayName: query, lat: 0, lon: 0 }]
       }),
+      attribution: '© OpenStreetMap contributors',
     }
 
     // Simulate two rapid explicit searches.

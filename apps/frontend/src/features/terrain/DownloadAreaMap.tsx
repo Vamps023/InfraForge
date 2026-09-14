@@ -131,38 +131,27 @@ export function DownloadAreaMap({
   const [mode, setMode] = useState<MapMode>('navigate')
   const fitRef = useRef<L.Map | null>(null)
 
-  // Location search state (IMPORTANT 6).
+  // Location search state (IMPORTANT 6, Finding 2).
   // Explicit search: user enters a location, presses Search or Enter,
   // and exactly one request is made. No autocomplete on every keystroke.
-  // Client-side throttling enforces the Nominatim usage policy
-  // (max 1 request per second).
+  // Throttling is owned by the search client (Finding 2), not the UI.
+  // Explicit UX states: searching, no-results, error, results (Finding 2).
   const [searchQuery, setSearchQuery] = useState('')
   const [searchResults, setSearchResults] = useState<SearchResult[]>([])
   const [searching, setSearching] = useState(false)
   const [searchError, setSearchError] = useState<string | null>(null)
+  const [hasSearched, setHasSearched] = useState(false)
   const searchGenRef = useRef(0)
-  const lastSearchTimeRef = useRef(0)
-
-  // Minimum interval between Nominatim requests (1 req/sec policy).
-  const MIN_SEARCH_INTERVAL_MS = 1000
 
   const handleSearch = useCallback(() => {
     const query = searchQuery.trim()
     if (query.length < 2 || !searchClient) return
 
-    // Client-side throttling: enforce minimum interval between requests.
-    const now = Date.now()
-    const elapsed = now - lastSearchTimeRef.current
-    if (elapsed < MIN_SEARCH_INTERVAL_MS) {
-      const waitMs = MIN_SEARCH_INTERVAL_MS - elapsed
-      setTimeout(() => handleSearch(), waitMs)
-      return
-    }
-    lastSearchTimeRef.current = now
-
+    // Stale response guard: increment generation so old responses are ignored.
     const gen = ++searchGenRef.current
     setSearching(true)
     setSearchError(null)
+    setHasSearched(true)
     searchClient.search(query)
       .then((results) => {
         // Stale response guard: ignore if a newer search started.
@@ -235,6 +224,9 @@ export function DownloadAreaMap({
               Search
             </button>
             {searching && <span className="search-status">Searching...</span>}
+            {!searching && hasSearched && !searchError && searchResults.length === 0 && (
+              <span className="search-no-results">No results found</span>
+            )}
             {searchError && <span className="search-error">{searchError}</span>}
             {searchResults.length > 0 && (
               <ul className="search-results">
@@ -250,6 +242,7 @@ export function DownloadAreaMap({
                 ))}
               </ul>
             )}
+            <span className="search-attribution">{searchClient.attribution}</span>
           </div>
         )}
         <div className="go-to-controls">
@@ -303,7 +296,7 @@ export function DownloadAreaMap({
       >
         <TileLayer
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          url="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
           maxZoom={19}
         />
         <DrawHandler onDraw={handleDraw} mode={mode} />

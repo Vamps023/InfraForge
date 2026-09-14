@@ -8,11 +8,27 @@
 
 namespace infraforge::ports {
 
+// Transport-level error category for an HTTP request. Preserves the
+// underlying transport failure type so the terrain domain can map it to
+// the correct provider error (e.g. DNS failure vs timeout vs cancellation)
+// instead of collapsing all transport failures to "timeout".
+enum class TransportError {
+    None,                 // No transport error (HTTP exchange completed).
+    Cancelled,            // Request was cancelled by the caller.
+    Timeout,              // Connect or transfer timeout.
+    DnsFailure,           // DNS resolution failure.
+    ConnectionFailure,   // TCP connect / connection reset.
+    TlsFailure,           // TLS handshake / certificate failure.
+    ProtocolFailure,      // HTTP protocol error (malformed response).
+    UnknownNetworkFailure, // Network failure that doesn't fit above.
+};
+
 // HTTP response from a GET request.
 struct HttpResponse {
     int statusCode{0};
     std::string body;
     std::string errorMessage;
+    TransportError transportError{TransportError::None};
     bool ok() const { return statusCode >= 200 && statusCode < 300; }
 };
 

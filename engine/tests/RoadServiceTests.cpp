@@ -339,7 +339,9 @@ TEST_CASE_FIXTURE(RoadServiceTestFixture, "road scene projection produces mesh d
     // The origin is (0,0,0) in this test, so vertices should be near the
     // source polyline coordinates.
     const auto& v0 = projection.meshes[0].vertices[0];
-    CHECK(v0.x != 0.0f || v0.y != 0.0f);  // At least one coordinate is non-zero.
+    // At least one coordinate is non-zero.
+    const bool hasNonZeroCoord = (v0.x != 0.0f) || (v0.y != 0.0f);
+    CHECK(hasNonZeroCoord);
 }
 
 TEST_CASE_FIXTURE(RoadServiceTestFixture, "undo redo after reopen") {
@@ -356,13 +358,13 @@ TEST_CASE_FIXTURE(RoadServiceTestFixture, "undo redo after reopen") {
     CHECK(roads[0].name == "Renamed Road");
 
     // Undo the rename.
-    roadService->undo(summary.roadId);
+    REQUIRE(roadService->undo(summary.roadId));
     roads = roadService->listRoads();
     REQUIRE(roads.size() == 1);
     CHECK(roads[0].name == "Undo Road");
 
     // Redo the rename.
-    roadService->redo(summary.roadId);
+    REQUIRE(roadService->redo(summary.roadId));
     roads = roadService->listRoads();
     REQUIRE(roads.size() == 1);
     CHECK(roads[0].name == "Renamed Road");
@@ -396,7 +398,7 @@ TEST_CASE_FIXTURE(RoadServiceTestFixture, "delete and undo delete after reopen")
     CHECK(roads.empty());
 
     // Undo the delete.
-    roadService->undo(summary.roadId);
+    REQUIRE(roadService->undo(summary.roadId));
     roads = roadService->listRoads();
     REQUIRE(roads.size() == 1);
     CHECK(roads[0].roadId == summary.roadId);

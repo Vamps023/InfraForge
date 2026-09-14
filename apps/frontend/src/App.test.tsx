@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen, act } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { render, screen } from '@testing-library/react'
 import { create } from '@bufbuild/protobuf'
 import { ProjectSummarySchema, type ProjectSummary } from '@infraforge/protocol'
 import { useViewportStore, type ViewportState } from './features/viewport/viewportStore'
@@ -11,22 +11,18 @@ import { commandRegistry, type CommandContext } from './editor/commands/useComma
 import { registerBuiltinCommands, unregisterBuiltinCommands } from './editor/commands/builtinCommands'
 import type { AvailabilityContext } from './editor/availability'
 
-// ViewportArea is a private component in App.tsx. To test its rendering
-// behavior (Home screen vs renderer status overlay vs native viewport
-// path) without importing the full App (which starts an engine session),
-// we re-implement the same precedence logic in a test harness that
-// mirrors the production ViewportArea exactly. This is acceptable because
-// the tests verify the STATE MACHINE contract, not the visual styling.
-//
-// The contract under test:
-//   1. viewport-host div is always mounted
-//   2. showHomeScreen → ProjectHomeScreen (regardless of renderer state)
-//   3. !showHomeScreen && !surfaceActive → renderer status overlay
-//   4. !showHomeScreen && surfaceActive → no overlay (native viewport)
-//
-// Additionally, we verify that blockedByOverlay (which controls native
-// viewport visibility via useViewportHost) tracks showHomeScreen, not
-// surfaceActive.
+// These tests exercise the REAL production ViewportArea component
+// (extracted from App.tsx into features/viewport/ViewportArea.tsx) and the
+// REAL production visibility helpers (computeShowHomeScreen,
+// computeBlockedByOverlay in features/viewport/viewportVisibility.ts).
+// No test-only copies of rendering precedence or visibility logic exist
+// here — if the production code regresses, these tests fail.
+
+import { ViewportArea } from './features/viewport/ViewportArea'
+import {
+  computeShowHomeScreen,
+  computeBlockedByOverlay,
+} from './features/viewport/viewportVisibility'
 
 function makeSummary(): ProjectSummary {
   return create(ProjectSummarySchema, {
@@ -61,47 +57,11 @@ function ctx(availability: AvailabilityContext): CommandContext {
   return { availability }
 }
 
-// Mirrors the ViewportArea precedence from App.tsx. If App.tsx changes,
-// this harness must be updated to match — that's the point: the test
-// catches regressions in the precedence logic.
-function ViewportAreaHarness({
-  showHomeScreen,
-  context,
-}: {
-  showHomeScreen: boolean
-  context: CommandContext
-}) {
-  const rendererStatus = useViewportStore((state) => state.status)
-  const surfaceActive = rendererStatus.state === 'ready' || rendererStatus.state === 'recreating'
-
-  return (
-    <main className="viewport-area" aria-label="Viewport" data-testid="viewport-area">
-      <div className="viewport-host" data-testid="viewport-host" />
-      {showHomeScreen ? (
-        <div data-testid="home-screen" role="region" aria-label="Start screen">
-          InfraForge
-        </div>
-      ) : !surfaceActive ? (
-        <div data-testid="renderer-overlay" className="viewport-overlay">
-          {rendererStatus.state === 'failed' || rendererStatus.state === 'stopped' ? (
-            <h1>Native viewport unavailable</h1>
-          ) : (
-            <h1>Starting native viewport…</h1>
-          )}
-        </div>
-      ) : null}
-    </main>
-  )
-}
-
-// Mirrors the blockedByOverlay computation from App.tsx.
-function computeBlockedByOverlay(openDialog: string | null, showHomeScreen: boolean): boolean {
-  return openDialog !== null || showHomeScreen
-}
-
-// Mirrors showHomeScreen from App.tsx.
-function computeShowHomeScreen(projectOpen: boolean, activeWorkspace: string): boolean {
-  return !projectOpen || activeWorkspace === 'home'
+// A stable hostRef for ViewportArea. The native viewport host div must
+// remain mounted for every state; we verify that by checking the div is
+// always present.
+function makeHostRef(): React.RefObject<HTMLDivElement | null> {
+  return { current: null }
 }
 
 beforeEach(() => {
@@ -128,6 +88,32 @@ function setRendererState(state: ViewportState, detail = ''): void {
   useViewportStore.getState().setStatus({ state, detail })
 }
 
+// Helper to detect the home screen in the rendered output. The production
+// ProjectHomeScreen renders a region with aria-label="Start screen".
+function expectHomeVisible(): void {
+  expect(screen.getByRole('region', { name: 'Start screen' })).toBeInTheDocument()
+}
+
+function expectHomeAbsent(): void {
+  expect(screen.queryByRole('region', { name: 'Start screen' })).not.toBeInTheDocument()
+}
+
+// Helper to detect the renderer status overlay. The production ViewportArea
+// renders an h1 with "Starting native viewport…" or "Native viewport
+// unavailable".
+function expectRendererOverlayVisible(): void {
+  expect(screen.getByText(/Starting native viewport|Native viewport unavailable/)).toBeInTheDocument()
+}
+
+function expectRendererOverlayAbsent(): void {
+  expect(screen.queryByText(/Starting native viewport|Native viewport unavailable/)).not.toBeInTheDocument()
+}
+
+// Helper to detect the viewport-host div.
+function expectViewportHostMounted(): void {
+  expect(document.querySelector('.viewport-host')).not.toBeNull()
+}
+
 describe('ViewportArea Home screen independence from renderer state', () => {
   // No project + each renderer state → Home must be shown
   const noProjectStates: ViewportState[] = [
@@ -142,55 +128,100 @@ describe('ViewportArea Home screen independence from renderer state', () => {
   ]
 
   for (const state of noProjectStates) {
-    it(`no project + renderer ${state} → Home shown`, () => {
+    it(`no project + renderer ${state} → Home visible`, () => {
       setRendererState(state, `detail for ${state}`)
       const showHomeScreen = computeShowHomeScreen(false, 'terrain')
-      render(<ViewportAreaHarness showHomeScreen={showHomeScreen} context={ctx(noProjectReadyContext())} />)
-      expect(screen.getByTestId('home-screen')).toBeInTheDocument()
-      expect(screen.queryByTestId('renderer-overlay')).not.toBeInTheDocument()
+      render(
+        <ViewportArea
+          hostRef={makeHostRef()}
+          showHomeScreen={showHomeScreen}
+          commandContext={ctx(noProjectReadyContext())}
+        />,
+      )
+      expectHomeVisible()
+      expectRendererOverlayAbsent()
     })
   }
 
-  it('project open + Home workspace + renderer suspended → Home shown', () => {
+  it('project open + Home workspace + renderer suspended → Home visible', () => {
     useProjectStore.getState().setSummary(makeSummary())
     useWorkspaceStore.getState().setWorkspace('home')
     setRendererState('suspended', 'surface hidden by shell')
     const showHomeScreen = computeShowHomeScreen(true, 'home')
-    render(<ViewportAreaHarness showHomeScreen={showHomeScreen} context={ctx(readyContext())} />)
-    expect(screen.getByTestId('home-screen')).toBeInTheDocument()
-    expect(screen.queryByTestId('renderer-overlay')).not.toBeInTheDocument()
+    render(
+      <ViewportArea
+        hostRef={makeHostRef()}
+        showHomeScreen={showHomeScreen}
+        commandContext={ctx(readyContext())}
+      />,
+    )
+    expectHomeVisible()
+    expectRendererOverlayAbsent()
   })
 
-  it('project open + Home workspace + renderer ready → Home shown', () => {
+  it('project open + Home workspace + renderer ready → Home visible', () => {
     useProjectStore.getState().setSummary(makeSummary())
     useWorkspaceStore.getState().setWorkspace('home')
     setRendererState('ready', 'Renderer ready')
     const showHomeScreen = computeShowHomeScreen(true, 'home')
-    render(<ViewportAreaHarness showHomeScreen={showHomeScreen} context={ctx(readyContext())} />)
-    expect(screen.getByTestId('home-screen')).toBeInTheDocument()
-    expect(screen.queryByTestId('renderer-overlay')).not.toBeInTheDocument()
+    render(
+      <ViewportArea
+        hostRef={makeHostRef()}
+        showHomeScreen={showHomeScreen}
+        commandContext={ctx(readyContext())}
+      />,
+    )
+    expectHomeVisible()
+    expectRendererOverlayAbsent()
   })
 
-  it('project open + Terrain workspace + renderer ready → native viewport path active, Home absent', () => {
+  it('Terrain workspace + renderer ready → Home absent, no overlay', () => {
     useProjectStore.getState().setSummary(makeSummary())
     useWorkspaceStore.getState().setWorkspace('terrain')
     setRendererState('ready', 'Renderer ready')
     const showHomeScreen = computeShowHomeScreen(true, 'terrain')
-    render(<ViewportAreaHarness showHomeScreen={showHomeScreen} context={ctx(readyContext())} />)
-    expect(screen.queryByTestId('home-screen')).not.toBeInTheDocument()
-    expect(screen.queryByTestId('renderer-overlay')).not.toBeInTheDocument()
-    // viewport-host must always be mounted
-    expect(screen.getByTestId('viewport-host')).toBeInTheDocument()
+    render(
+      <ViewportArea
+        hostRef={makeHostRef()}
+        showHomeScreen={showHomeScreen}
+        commandContext={ctx(readyContext())}
+      />,
+    )
+    expectHomeAbsent()
+    expectRendererOverlayAbsent()
+    expectViewportHostMounted()
   })
 
-  it('project open + Terrain workspace + renderer starting → renderer overlay shown, Home absent', () => {
+  it('Terrain workspace + renderer starting → renderer-status overlay visible, Home absent', () => {
     useProjectStore.getState().setSummary(makeSummary())
     useWorkspaceStore.getState().setWorkspace('terrain')
     setRendererState('starting', 'Starting…')
     const showHomeScreen = computeShowHomeScreen(true, 'terrain')
-    render(<ViewportAreaHarness showHomeScreen={showHomeScreen} context={ctx(readyContext())} />)
-    expect(screen.queryByTestId('home-screen')).not.toBeInTheDocument()
-    expect(screen.getByTestId('renderer-overlay')).toBeInTheDocument()
+    render(
+      <ViewportArea
+        hostRef={makeHostRef()}
+        showHomeScreen={showHomeScreen}
+        commandContext={ctx(readyContext())}
+      />,
+    )
+    expectHomeAbsent()
+    expectRendererOverlayVisible()
+  })
+
+  it('Terrain workspace + renderer failed → renderer-status overlay visible, Home absent', () => {
+    useProjectStore.getState().setSummary(makeSummary())
+    useWorkspaceStore.getState().setWorkspace('terrain')
+    setRendererState('failed', 'GPU lost')
+    const showHomeScreen = computeShowHomeScreen(true, 'terrain')
+    render(
+      <ViewportArea
+        hostRef={makeHostRef()}
+        showHomeScreen={showHomeScreen}
+        commandContext={ctx(readyContext())}
+      />,
+    )
+    expectHomeAbsent()
+    expectRendererOverlayVisible()
   })
 })
 
@@ -198,8 +229,14 @@ describe('Viewport host always mounted', () => {
   it('viewport-host is mounted when Home is shown', () => {
     setRendererState('suspended', 'surface hidden by shell')
     const showHomeScreen = computeShowHomeScreen(false, 'terrain')
-    render(<ViewportAreaHarness showHomeScreen={showHomeScreen} context={ctx(noProjectReadyContext())} />)
-    expect(screen.getByTestId('viewport-host')).toBeInTheDocument()
+    render(
+      <ViewportArea
+        hostRef={makeHostRef()}
+        showHomeScreen={showHomeScreen}
+        commandContext={ctx(noProjectReadyContext())}
+      />,
+    )
+    expectViewportHostMounted()
   })
 
   it('viewport-host is mounted when renderer overlay is shown', () => {
@@ -207,8 +244,14 @@ describe('Viewport host always mounted', () => {
     useWorkspaceStore.getState().setWorkspace('terrain')
     setRendererState('starting', 'Starting…')
     const showHomeScreen = computeShowHomeScreen(true, 'terrain')
-    render(<ViewportAreaHarness showHomeScreen={showHomeScreen} context={ctx(readyContext())} />)
-    expect(screen.getByTestId('viewport-host')).toBeInTheDocument()
+    render(
+      <ViewportArea
+        hostRef={makeHostRef()}
+        showHomeScreen={showHomeScreen}
+        commandContext={ctx(readyContext())}
+      />,
+    )
+    expectViewportHostMounted()
   })
 
   it('viewport-host is mounted when native viewport path is active', () => {
@@ -216,42 +259,141 @@ describe('Viewport host always mounted', () => {
     useWorkspaceStore.getState().setWorkspace('terrain')
     setRendererState('ready', 'Renderer ready')
     const showHomeScreen = computeShowHomeScreen(true, 'terrain')
-    render(<ViewportAreaHarness showHomeScreen={showHomeScreen} context={ctx(readyContext())} />)
-    expect(screen.getByTestId('viewport-host')).toBeInTheDocument()
+    render(
+      <ViewportArea
+        hostRef={makeHostRef()}
+        showHomeScreen={showHomeScreen}
+        commandContext={ctx(readyContext())}
+      />,
+    )
+    expectViewportHostMounted()
   })
 })
 
-describe('Workspace transition visibility', () => {
-  it('switching Home → Terrain changes desired native viewport visibility from false → true', () => {
+describe('Home screen does not disappear when renderer suspends', () => {
+  // This is the core regression test for the circular dependency bug.
+  // Before the fix, ViewportArea gated Home on surfaceActive. When the
+  // shell hid the native viewport (because Home was shown), the renderer
+  // reported 'suspended', which is not surfaceActive, so Home disappeared.
+  it('Home stays visible when renderer transitions ready → suspended', () => {
+    setRendererState('ready', 'Renderer ready')
+    const hostRef = makeHostRef()
+    const { rerender } = render(
+      <ViewportArea
+        hostRef={hostRef}
+        showHomeScreen={computeShowHomeScreen(false, 'terrain')}
+        commandContext={ctx(noProjectReadyContext())}
+      />,
+    )
+    expectHomeVisible()
+
+    // Shell hides native viewport → renderer suspends
+    setRendererState('suspended', 'surface hidden by shell')
+    rerender(
+      <ViewportArea
+        hostRef={hostRef}
+        showHomeScreen={computeShowHomeScreen(false, 'terrain')}
+        commandContext={ctx(noProjectReadyContext())}
+      />,
+    )
+    expectHomeVisible()
+  })
+
+  it('Home stays visible when renderer transitions suspended → ready → suspended', () => {
+    setRendererState('suspended', 'surface hidden by shell')
+    const hostRef = makeHostRef()
+    const { rerender } = render(
+      <ViewportArea
+        hostRef={hostRef}
+        showHomeScreen={computeShowHomeScreen(false, 'terrain')}
+        commandContext={ctx(noProjectReadyContext())}
+      />,
+    )
+    expectHomeVisible()
+
+    setRendererState('ready', 'Renderer ready')
+    rerender(
+      <ViewportArea
+        hostRef={hostRef}
+        showHomeScreen={computeShowHomeScreen(false, 'terrain')}
+        commandContext={ctx(noProjectReadyContext())}
+      />,
+    )
+    expectHomeVisible()
+
+    setRendererState('suspended', 'surface hidden by shell')
+    rerender(
+      <ViewportArea
+        hostRef={hostRef}
+        showHomeScreen={computeShowHomeScreen(false, 'terrain')}
+        commandContext={ctx(noProjectReadyContext())}
+      />,
+    )
+    expectHomeVisible()
+  })
+})
+
+describe('computeShowHomeScreen (production helper)', () => {
+  it('returns true when no project is open', () => {
+    expect(computeShowHomeScreen(false, 'terrain')).toBe(true)
+    expect(computeShowHomeScreen(false, 'home')).toBe(true)
+  })
+
+  it('returns true when project is open and workspace is home', () => {
+    expect(computeShowHomeScreen(true, 'home')).toBe(true)
+  })
+
+  it('returns false when project is open and workspace is terrain', () => {
+    expect(computeShowHomeScreen(true, 'terrain')).toBe(false)
+  })
+})
+
+describe('computeBlockedByOverlay (production helper)', () => {
+  it('returns true when a dialog is open', () => {
+    expect(computeBlockedByOverlay('new-project', false)).toBe(true)
+    expect(computeBlockedByOverlay('import-terrain', false)).toBe(true)
+  })
+
+  it('returns true when home screen is shown (no dialog)', () => {
+    expect(computeBlockedByOverlay(null, true)).toBe(true)
+  })
+
+  it('returns false when no dialog and home screen is not shown', () => {
+    expect(computeBlockedByOverlay(null, false)).toBe(false)
+  })
+
+  it('returns true when both dialog and home screen are active', () => {
+    expect(computeBlockedByOverlay('georeference', true)).toBe(true)
+  })
+})
+
+describe('Workspace transition visibility (production helpers)', () => {
+  it('switching Home → Terrain changes blockedByOverlay true → false', () => {
     useProjectStore.getState().setSummary(makeSummary())
 
     // Start on Home
     useWorkspaceStore.getState().setWorkspace('home')
-    const homeShowHomeScreen = computeShowHomeScreen(true, 'home')
-    const homeBlocked = computeBlockedByOverlay(null, homeShowHomeScreen)
-    expect(homeBlocked).toBe(true)
+    const homeShow = computeShowHomeScreen(true, 'home')
+    expect(computeBlockedByOverlay(null, homeShow)).toBe(true)
 
     // Switch to Terrain
     useWorkspaceStore.getState().setWorkspace('terrain')
-    const terrainShowHomeScreen = computeShowHomeScreen(true, 'terrain')
-    const terrainBlocked = computeBlockedByOverlay(null, terrainShowHomeScreen)
-    expect(terrainBlocked).toBe(false)
+    const terrainShow = computeShowHomeScreen(true, 'terrain')
+    expect(computeBlockedByOverlay(null, terrainShow)).toBe(false)
   })
 
-  it('switching Terrain → Home changes desired native viewport visibility from true → false', () => {
+  it('switching Terrain → Home changes blockedByOverlay false → true', () => {
     useProjectStore.getState().setSummary(makeSummary())
 
     // Start on Terrain
     useWorkspaceStore.getState().setWorkspace('terrain')
-    const terrainShowHomeScreen = computeShowHomeScreen(true, 'terrain')
-    const terrainBlocked = computeBlockedByOverlay(null, terrainShowHomeScreen)
-    expect(terrainBlocked).toBe(false)
+    const terrainShow = computeShowHomeScreen(true, 'terrain')
+    expect(computeBlockedByOverlay(null, terrainShow)).toBe(false)
 
     // Switch to Home
     useWorkspaceStore.getState().setWorkspace('home')
-    const homeShowHomeScreen = computeShowHomeScreen(true, 'home')
-    const homeBlocked = computeBlockedByOverlay(null, homeShowHomeScreen)
-    expect(homeBlocked).toBe(true)
+    const homeShow = computeShowHomeScreen(true, 'home')
+    expect(computeBlockedByOverlay(null, homeShow)).toBe(true)
   })
 
   it('no project always blocks viewport regardless of workspace', () => {
@@ -266,66 +408,6 @@ describe('Workspace transition visibility', () => {
     useProjectStore.getState().setSummary(makeSummary())
     useWorkspaceStore.getState().setWorkspace('terrain')
     const showHomeScreen = computeShowHomeScreen(true, 'terrain')
-    // Simulate a dialog open
-    const blocked = computeBlockedByOverlay('new-project', showHomeScreen)
-    expect(blocked).toBe(true)
-  })
-})
-
-describe('Home screen does not disappear when renderer suspends', () => {
-  // This is the core regression test for the circular dependency bug.
-  // Before the fix, ViewportArea gated Home on surfaceActive. When the
-  // shell hid the native viewport (because Home was shown), the renderer
-  // reported 'suspended', which is not surfaceActive, so Home disappeared.
-  it('Home stays visible when renderer transitions ready → suspended', () => {
-    // No project, renderer starts ready
-    setRendererState('ready', 'Renderer ready')
-    const { rerender } = render(
-      <ViewportAreaHarness
-        showHomeScreen={computeShowHomeScreen(false, 'terrain')}
-        context={ctx(noProjectReadyContext())}
-      />,
-    )
-    expect(screen.getByTestId('home-screen')).toBeInTheDocument()
-
-    // Shell hides native viewport → renderer suspends
-    setRendererState('suspended', 'surface hidden by shell')
-    rerender(
-      <ViewportAreaHarness
-        showHomeScreen={computeShowHomeScreen(false, 'terrain')}
-        context={ctx(noProjectReadyContext())}
-      />,
-    )
-    // Home must still be visible
-    expect(screen.getByTestId('home-screen')).toBeInTheDocument()
-  })
-
-  it('Home stays visible when renderer transitions suspended → ready → suspended', () => {
-    setRendererState('suspended', 'surface hidden by shell')
-    const { rerender } = render(
-      <ViewportAreaHarness
-        showHomeScreen={computeShowHomeScreen(false, 'terrain')}
-        context={ctx(noProjectReadyContext())}
-      />,
-    )
-    expect(screen.getByTestId('home-screen')).toBeInTheDocument()
-
-    setRendererState('ready', 'Renderer ready')
-    rerender(
-      <ViewportAreaHarness
-        showHomeScreen={computeShowHomeScreen(false, 'terrain')}
-        context={ctx(noProjectReadyContext())}
-      />,
-    )
-    expect(screen.getByTestId('home-screen')).toBeInTheDocument()
-
-    setRendererState('suspended', 'surface hidden by shell')
-    rerender(
-      <ViewportAreaHarness
-        showHomeScreen={computeShowHomeScreen(false, 'terrain')}
-        context={ctx(noProjectReadyContext())}
-      />,
-    )
-    expect(screen.getByTestId('home-screen')).toBeInTheDocument()
+    expect(computeBlockedByOverlay('new-project', showHomeScreen)).toBe(true)
   })
 })

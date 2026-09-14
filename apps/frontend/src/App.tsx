@@ -1,20 +1,19 @@
 import { useEffect, useRef, useState } from 'react'
-import { Box } from 'lucide-react'
-import { connectEngineSession, type EngineSession, type EngineSessionStatus } from './lib/engineSession'
+import { connectEngineSession, type EngineSession } from './lib/engineSession'
 import { GeoreferencePanel } from './features/geo/GeoreferencePanel'
 import { NewProjectDialog } from './features/project/NewProjectDialog'
 import { subscribeProjectEvents } from './features/project/projectEvents'
 import { subscribeShellEvents } from './editor/shell/shellEventProjector'
 import { useProjectStore } from './features/project/projectStore'
 import { useViewportHost } from './features/viewport/useViewportHost'
-import { useViewportStore, viewportSurfaceActive } from './features/viewport/viewportStore'
+import { ViewportArea } from './features/viewport/ViewportArea'
+import { computeShowHomeScreen, computeBlockedByOverlay } from './features/viewport/viewportVisibility'
 import { useUiStore } from './state/uiStore'
 
 import { AppHeader } from './editor/shell/AppHeader'
 import { WorkspaceRail } from './editor/shell/WorkspaceRail'
 import { ContextToolbar } from './editor/shell/ContextToolbar'
 import { StatusBar } from './editor/shell/StatusBar'
-import { ProjectHomeScreen } from './editor/shell/ProjectHomeScreen'
 import { BottomPanel } from './editor/shell/BottomPanel'
 import { useWorkspaceStore } from './editor/shell/workspaceStore'
 import { EditorLayout } from './editor/layout/EditorLayout'
@@ -35,70 +34,6 @@ import { registerTerrainOutlinerProjection, unregisterTerrainOutlinerProjection 
 import { registerTerrainInspectorSection, unregisterTerrainInspectorSection } from './features/terrain/terrainInspectorSection'
 import { subscribeTerrainEvents, setTerrainScenePublisher } from './features/terrain/terrainEvents'
 import { fetchTerrainScene } from './features/terrain/terrainApi'
-
-// ViewportArea — hosts the native Vulkan child HWND and shows overlay
-// states (starting/error) when the renderer surface is not active. The
-// viewport host div must always be in the DOM for the native viewport
-// process lifecycle; overlays are CSS-only and do not occlude the HWND.
-//
-// The native viewport is a child HWND reparented onto the BrowserWindow.
-// CSS overlays in the webview cannot render above it, so when an overlay
-// that must be visible to the user is shown (the project home screen when
-// no project is open or the Home workspace is active), the parent reports
-// a blocking overlay so the desktop shell hides the native viewport
-// (ViewportVisibilityPolicy).
-//
-// UI precedence inside the viewport area:
-//   1. viewport-host div (always mounted — native viewport lifecycle)
-//   2. ProjectHomeScreen (when showHomeScreen — independent of renderer
-//      state, because hiding the native viewport causes the renderer to
-//      report 'suspended', which is NOT surfaceActive; gating Home on
-//      surfaceActive would create a circular dependency that makes Home
-//      disappear)
-//   3. Renderer status overlay (when !showHomeScreen && !surfaceActive —
-//      only shown for authoring workspaces when the renderer is not yet
-//      ready or has failed)
-function ViewportArea({
-  hostRef,
-  showHomeScreen,
-  commandContext,
-}: {
-  hostRef: React.RefObject<HTMLDivElement | null>
-  showHomeScreen: boolean
-  commandContext: ReturnType<typeof useCommandContext>
-}) {
-  const rendererStatus = useViewportStore((state) => state.status)
-  const surfaceActive = viewportSurfaceActive(rendererStatus.state)
-
-  return (
-    <main className="viewport-area" aria-label="Viewport">
-      <div className="viewport-host" ref={hostRef} />
-      {showHomeScreen ? (
-        <ProjectHomeScreen context={commandContext} />
-      ) : !surfaceActive ? (
-        <div className="viewport-overlay">
-          <div className="viewport-grid" aria-hidden="true" />
-          <div className="empty-state">
-            <div className="empty-state-icon">
-              <Box size={22} />
-            </div>
-            {rendererStatus.state === 'failed' || rendererStatus.state === 'stopped' ? (
-              <>
-                <h1>Native viewport unavailable</h1>
-                <p className="empty-state-error">{rendererStatus.detail}</p>
-              </>
-            ) : (
-              <>
-                <h1>Starting native viewport…</h1>
-                <p>{rendererStatus.detail}</p>
-              </>
-            )}
-          </div>
-        </div>
-      ) : null}
-    </main>
-  )
-}
 
 export function App() {
   const engineStatus = useUiStore((state) => state.engineStatus)
@@ -163,19 +98,13 @@ export function App() {
   // The home screen is shown when no project is open OR when the user
   // explicitly navigates to the Home workspace. In both cases the native
   // viewport must be hidden so the CSS overlay is visible to the user.
-  const showHomeScreen = !projectOpen || activeWorkspace === 'home'
+  const showHomeScreen = computeShowHomeScreen(projectOpen, activeWorkspace)
 
   // Blocking application overlays that render over the editor surface. The
   // native child-HWND viewport cannot be occluded by CSS z-index, so the
   // page reports this centrally and the desktop shell hides/restores the
   // native viewport (with a placement refresh) through its visibility
   // policy.
-  //
-  // The project home screen (shown when no project is open or when the user
-  // navigates to the Home workspace) is a CSS overlay that must be visible
-  // to the user. Because the native viewport HWND sits on top of the
-  // webview, the home screen would be hidden behind it unless we report a
-  // blocking overlay so the desktop shell hides the native surface.
   //
   // The blocking signal includes `!projectOpen` (not `surfaceActive &&
   // !projectOpen`) so that `blockedByOverlay` is true from initial mount —
@@ -185,7 +114,7 @@ export function App() {
   // before the renderer's `setViewportVisible(false)` IPC round-trip
   // lands, which would briefly show the native surface over the home
   // screen.
-  const blockingOverlayActive = openDialog !== null || showHomeScreen
+  const blockingOverlayActive = computeBlockedByOverlay(openDialog, showHomeScreen)
   useViewportHost(viewportHostRef, { blockedByOverlay: blockingOverlayActive })
 
   useEffect(() => {

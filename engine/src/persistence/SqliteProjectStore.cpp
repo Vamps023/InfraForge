@@ -500,6 +500,10 @@ domain::road::RoadRecord SqliteProjectStore::insertRoad(const domain::road::Road
     return withinStoreBoundary([&] { return insertRoadImpl(road); });
 }
 
+domain::road::RoadRecord SqliteProjectStore::updateRoad(const domain::road::RoadRecord& road) {
+    return withinStoreBoundary([&] { return updateRoadImpl(road); });
+}
+
 void SqliteProjectStore::removeRoad(const std::string& roadId) {
     withinStoreBoundary([&] { removeRoadImpl(roadId); });
 }
@@ -982,6 +986,174 @@ domain::road::RoadRecord SqliteProjectStore::insertRoadImpl(
         if (connection_->lastChanges() != 1) {
             fail(ports::StoreErrorCategory::PersistenceFailure,
                 "project_state row went missing during road insert (corrupt project database)");
+        }
+        transaction.commit();
+    }
+
+    record_.revision += 1;
+    record_.modifiedAt = modifiedAt;
+    auto result = road;
+    result.modifiedAt = modifiedAt;
+    return result;
+}
+
+domain::road::RoadRecord SqliteProjectStore::updateRoadImpl(
+    const domain::road::RoadRecord& road) {
+    if (!connection_.has_value()) {
+        throw std::logic_error("cannot update a road without an open project session");
+    }
+    const std::string modifiedAt = runtime::utcTimestampNow();
+    const std::string roadIdText = domain::road::uuidTextFromRoadId(road.id);
+    {
+        SqliteTransaction transaction{*connection_};
+
+        // Delete all existing road data, then re-insert the full record.
+        // This is a full canonical replacement within one transaction.
+        SqliteStatement delAnchors{*connection_,
+            "DELETE FROM road_protected_anchors WHERE road_id = ?"};
+        delAnchors.bindText(1, roadIdText);
+        (void)delAnchors.step();
+
+        SqliteStatement delSrcVtx{*connection_,
+            "DELETE FROM road_source_vertices WHERE road_id = ?"};
+        delSrcVtx.bindText(1, roadIdText);
+        (void)delSrcVtx.step();
+
+        SqliteStatement delSrc{*connection_,
+            "DELETE FROM road_source WHERE road_id = ?"};
+        delSrc.bindText(1, roadIdText);
+        (void)delSrc.step();
+
+        SqliteStatement delSup{*connection_,
+            "DELETE FROM road_superelevation_breakpoints WHERE road_id = ?"};
+        delSup.bindText(1, roadIdText);
+        (void)delSup.step();
+
+        SqliteStatement delElev{*connection_,
+            "DELETE FROM road_elevation_breakpoints WHERE road_id = ?"};
+        delElev.bindText(1, roadIdText);
+        (void)delElev.step();
+
+        SqliteStatement delSeg{*connection_,
+            "DELETE FROM road_segments WHERE road_id = ?"};
+        delSeg.bindText(1, roadIdText);
+        (void)delSeg.step();
+
+        // Update the road row itself.
+        SqliteStatement updateRoadRow{*connection_,
+            "UPDATE roads SET display_name = ?, modified_at = ? WHERE id = ?"};
+        updateRoadRow.bindText(1, road.displayName);
+        updateRoadRow.bindText(2, modifiedAt);
+        updateRoadRow.bindText(3, roadIdText);
+        (void)updateRoadRow.step();
+        if (connection_->lastChanges() != 1) {
+            fail(ports::StoreErrorCategory::NotFound,
+                "road not found during update: " + roadIdText);
+        }
+
+        // Re-insert segments.
+        for (const auto& sr : road.segments) {
+            SqliteStatement insertSeg{*connection_,
+                "INSERT INTO road_segments "
+                "(road_id, segment_index, segment_kind, start_easting, start_northing, "
+                "start_heading, length, curvature, start_curvature, end_curvature) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"};
+            insertSeg.bindText(1, roadIdText);
+            insertSeg.bindInt64(2, static_cast<std::int64_t>(sr.segmentIndex));
+            insertSeg.bindText(3, domain::road::alignmentSegmentKindName(sr.kind));
+            insertSeg.bindDouble(4, sr.start.easting);
+            insertSeg.bindDouble(5, sr.start.northing);
+            insertSeg.bindDouble(6, sr.startHeading);
+            insertSeg.bindDouble(7, sr.length);
+            insertSeg.bindDouble(8, sr.curvature);
+            insertSeg.bindDouble(9, sr.startCurvature);
+            insertSeg.bindDouble(10, sr.endCurvature);
+            (void)insertSeg.step();
+        }
+
+        // Re-insert elevation breakpoints.
+        for (std::size_t i = 0; i < road.elevationBreakpoints.size(); ++i) {
+            const auto& bp = road.elevationBreakpoints[i];
+            SqliteStatement insertBp{*connection_,
+                "INSERT INTO road_elevation_breakpoints "
+                "(road_id, breakpoint_index, station, value) VALUES (?, ?, ?, ?)"};
+            insertBp.bindText(1, roadIdText);
+            insertBp.bindInt64(2, static_cast<std::int64_t>(i));
+            insertBp.bindDouble(3, bp.station);
+            insertBp.bindDouble(4, bp.value);
+            (void)insertBp.step();
+        }
+
+        // Re-insert superelevation breakpoints.
+        for (std::size_t i = 0; i < road.superelevationBreakpoints.size(); ++i) {
+            const auto& bp = road.superelevationBreakpoints[i];
+            SqliteStatement insertBp{*connection_,
+                "INSERT INTO road_superelevation_breakpoints "
+                "(road_id, breakpoint_index, station, value) VALUES (?, ?, ?, ?)"};
+            insertBp.bindText(1, roadIdText);
+            insertBp.bindInt64(2, static_cast<std::int64_t>(i));
+            insertBp.bindDouble(3, bp.station);
+            insertBp.bindDouble(4, bp.value);
+            (void)insertBp.step();
+        }
+
+        // Re-insert source.
+        if (road.hasSource) {
+            nlohmann::json tagsJson = nlohmann::json::array();
+            for (const auto& tag : road.sourceTags) {
+                tagsJson.push_back({{"key", tag.key}, {"value", tag.value}});
+            }
+            SqliteStatement insertSrc{*connection_,
+                "INSERT INTO road_source "
+                "(road_id, provider, source_id, source_crs, imported_at, tags) "
+                "VALUES (?, ?, ?, ?, ?, ?)"};
+            insertSrc.bindText(1, roadIdText);
+            insertSrc.bindText(2, domain::road::sourceProviderName(road.provider));
+            insertSrc.bindText(3, road.sourceId);
+            insertSrc.bindText(4, road.sourceCrs);
+            insertSrc.bindText(5, road.importedAt);
+            insertSrc.bindText(6, tagsJson.dump());
+            (void)insertSrc.step();
+
+            for (const auto& v : road.sourceVertices) {
+                SqliteStatement insertVtx{*connection_,
+                    "INSERT INTO road_source_vertices "
+                    "(road_id, vertex_index, x, y, z) VALUES (?, ?, ?, ?, ?)"};
+                insertVtx.bindText(1, roadIdText);
+                insertVtx.bindInt64(2, static_cast<std::int64_t>(v.index));
+                insertVtx.bindDouble(3, v.x);
+                insertVtx.bindDouble(4, v.y);
+                if (v.z.has_value()) {
+                    insertVtx.bindDouble(5, *v.z);
+                } else {
+                    insertVtx.bindNull(5);
+                }
+                (void)insertVtx.step();
+            }
+        }
+
+        // Re-insert protected anchors.
+        for (const auto& a : road.protectedAnchors) {
+            SqliteStatement insertAnchor{*connection_,
+                "INSERT INTO road_protected_anchors "
+                "(road_id, anchor_index, station, easting, northing, kind) "
+                "VALUES (?, ?, ?, ?, ?, ?)"};
+            insertAnchor.bindText(1, roadIdText);
+            insertAnchor.bindInt64(2, static_cast<std::int64_t>(a.index));
+            insertAnchor.bindDouble(3, a.station);
+            insertAnchor.bindDouble(4, a.position.easting);
+            insertAnchor.bindDouble(5, a.position.northing);
+            insertAnchor.bindText(6, domain::road::anchorKindName(a.kind));
+            (void)insertAnchor.step();
+        }
+
+        SqliteStatement state{*connection_,
+            "UPDATE project_state SET revision = revision + 1, modified_at = ? WHERE id = 1"};
+        state.bindText(1, modifiedAt);
+        (void)state.step();
+        if (connection_->lastChanges() != 1) {
+            fail(ports::StoreErrorCategory::PersistenceFailure,
+                "project_state row went missing during road update (corrupt project database)");
         }
         transaction.commit();
     }

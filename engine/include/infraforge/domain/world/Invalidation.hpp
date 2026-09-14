@@ -17,6 +17,7 @@ enum class InvalidationClass : std::uint8_t {
     Topology,
     Terrain,
     Simulation,
+    Road,
 };
 
 [[nodiscard]] std::string_view invalidationClassName(InvalidationClass invalidationClass) noexcept;
@@ -25,7 +26,7 @@ enum class InvalidationClass : std::uint8_t {
 
 // Number of distinct invalidation classes; iteration bound for callers that
 // sweep the full class set.
-[[nodiscard]] constexpr std::size_t invalidationClassCount() noexcept { return 5; }
+[[nodiscard]] constexpr std::size_t invalidationClassCount() noexcept { return 6; }
 
 // Bit mask over InvalidationClass values, carried through mutation results
 // and per-chunk dirty state. Zero bits mean "no invalidation declared".
@@ -65,7 +66,7 @@ public:
     friend bool operator==(const InvalidationMask&, const InvalidationMask&) = default;
 
 private:
-    static constexpr std::uint8_t kAllBits = 0b0001'1111;
+    static constexpr std::uint8_t kAllBits = 0b0011'1111;
 
     constexpr explicit InvalidationMask(const std::uint8_t bits) noexcept
         : bits_(bits) {}

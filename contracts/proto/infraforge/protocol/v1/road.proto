@@ -1,0 +1,244 @@
+syntax = "proto3";
+
+package infraforge.protocol.v1;
+
+// Road domain contract: canonical mathematical alignment authoring,
+// editing, fitting, and projection. The frontend receives projections
+// (summaries, inspector details) and events only — never canonical
+// geometry payloads or render meshes.
+//
+// Road canonical state (RoadId, ReferenceAlignment, profiles, source,
+// protected anchors) is owned by the engine and persisted to SQLite.
+// Derived tessellation/mesh data is never canonical and is regenerated
+// from the mathematical alignment.
+
+// ---- Projections ----
+
+// Lightweight road summary for the outliner and road list.
+message RoadSummary {
+  string road_id = 1;
+  string name = 2;
+  double length = 3;
+  uint32 alignment_segment_count = 4;
+  string source_provider = 5;
+  string source_id = 6;
+  uint32 protected_anchor_count = 7;
+  uint64 revision = 8;
+}
+
+// One alignment segment in a road projection.
+message RoadAlignmentSegmentInfo {
+  string kind = 1;  // "line", "arc", "clothoid"
+  double start_station = 2;
+  double length = 3;
+  double start_curvature = 4;
+  double end_curvature = 5;
+}
+
+// Detailed road projection for the inspector.
+message RoadDetails {
+  string road_id = 1;
+  string name = 2;
+  double length = 3;
+  uint32 alignment_segment_count = 4;
+  repeated RoadAlignmentSegmentInfo alignment_segments = 5;
+  bool has_elevation_profile = 6;
+  uint32 elevation_breakpoint_count = 7;
+  bool has_superelevation_profile = 8;
+  uint32 superelevation_breakpoint_count = 9;
+  string source_provider = 10;
+  string source_id = 11;
+  string source_crs = 12;
+  uint32 protected_anchor_count = 13;
+  bool is_valid = 14;
+  repeated RoadDiagnostic diagnostics = 15;
+  uint64 revision = 16;
+}
+
+// Road diagnostic projection.
+message RoadDiagnostic {
+  string code = 1;
+  string message = 2;
+  string severity = 3;
+}
+
+// ---- Commands ----
+
+// Create a new road from a source polyline. The engine runs the shared
+// deterministic fitter to produce a canonical ReferenceAlignment.
+message CreateRoadCommand {
+  string name = 1;
+  // Source polyline vertices in canonical project coordinates.
+  repeated double source_eastings = 2;
+  repeated double source_northings = 3;
+  // Optional elevations (same length as eastings; empty means absent).
+  repeated double source_elevations = 4;
+  // Position tolerance for the fit (canonical project units).
+  double position_tolerance = 5;
+  // Optional maximum curvature constraint.
+  optional double max_curvature = 6;
+  // Protected anchor station indices (0-based into the source polyline).
+  repeated uint32 protected_anchor_indices = 7;
+}
+
+// Delete a road by ID.
+message DeleteRoadCommand {
+  string road_id = 1;
+}
+
+// Rename a road.
+message RenameRoadCommand {
+  string road_id = 1;
+  string name = 2;
+}
+
+// Insert a control point into a road's source polyline and refit.
+message InsertRoadControlCommand {
+  string road_id = 1;
+  // Index in the source polyline to insert before (0-based).
+  uint32 insert_before_index = 2;
+  double easting = 3;
+  double northing = 4;
+  optional double elevation = 5;
+}
+
+// Move a control point in a road's source polyline and refit.
+message MoveRoadControlCommand {
+  string road_id = 1;
+  // Index of the control point to move (0-based).
+  uint32 control_index = 2;
+  double easting = 3;
+  double northing = 4;
+  optional double elevation = 5;
+}
+
+// Delete a control point from a road's source polyline and refit.
+message DeleteRoadControlCommand {
+  string road_id = 1;
+  // Index of the control point to delete (0-based).
+  uint32 control_index = 2;
+}
+
+// Fit/refit a road from its source polyline with new parameters.
+message FitRoadSourceCommand {
+  string road_id = 1;
+  double position_tolerance = 2;
+  optional double max_curvature = 3;
+}
+
+// Update the elevation profile of a road.
+message UpdateRoadElevationCommand {
+  string road_id = 1;
+  repeated double stations = 2;
+  repeated double elevations = 3;
+}
+
+// Update the superelevation profile of a road.
+message UpdateRoadSuperelevationCommand {
+  string road_id = 1;
+  repeated double stations = 2;
+  repeated double superelevations = 3;
+}
+
+// Undo the last road command.
+message UndoRoadCommand {
+  // If empty, undoes the last command of any road.
+  string road_id = 1;
+}
+
+// Redo the last undone road command.
+message RedoRoadCommand {
+  string road_id = 1;
+}
+
+// List all roads in the project.
+message ListRoadsCommand {}
+
+// Get detailed information about a specific road.
+message GetRoadCommand {
+  string road_id = 1;
+}
+
+// ---- Results ----
+
+message CreateRoadResult {
+  RoadSummary road = 1;
+}
+
+message DeleteRoadResult {
+  // Empty on success.
+}
+
+message RenameRoadResult {
+  RoadSummary road = 1;
+}
+
+message InsertRoadControlResult {
+  RoadSummary road = 1;
+}
+
+message MoveRoadControlResult {
+  RoadSummary road = 1;
+}
+
+message DeleteRoadControlResult {
+  RoadSummary road = 1;
+}
+
+message FitRoadSourceResult {
+  RoadSummary road = 1;
+}
+
+message UpdateRoadElevationResult {
+  RoadSummary road = 1;
+}
+
+message UpdateRoadSuperelevationResult {
+  RoadSummary road = 1;
+}
+
+message UndoRoadResult {
+  RoadSummary road = 1;
+}
+
+message RedoRoadResult {
+  RoadSummary road = 1;
+}
+
+message ListRoadsResult {
+  repeated RoadSummary roads = 1;
+}
+
+message GetRoadResult {
+  RoadDetails road = 1;
+}
+
+// ---- Events ----
+
+// Emitted when a road is created.
+message RoadCreatedEvent {
+  string road_id = 1;
+  string name = 2;
+  uint64 revision = 3;
+}
+
+// Emitted when a road is updated (geometry, profile, or name change).
+message RoadUpdatedEvent {
+  string road_id = 1;
+  uint64 revision = 2;
+}
+
+// Emitted when a road is deleted.
+message RoadRemovedEvent {
+  string road_id = 1;
+  uint64 revision = 2;
+}
+
+// Emitted when road geometry changes (refit, control point edit).
+message RoadGeometryChangedEvent {
+  string road_id = 1;
+  uint64 revision = 2;
+  // Affected world chunk coordinates.
+  repeated int64 chunk_x = 3;
+  repeated int64 chunk_y = 4;
+}

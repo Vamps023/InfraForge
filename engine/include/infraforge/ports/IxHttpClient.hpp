@@ -116,6 +116,10 @@ public:
 private:
     // Map ixwebsocket HttpErrorCode to our port-level TransportError.
     // This keeps ixwebsocket types out of the terrain domain (Finding 10).
+    // BLOCKER 13: Only map to categories ixwebsocket can genuinely
+    // distinguish. UrlMalformed is a URL parsing error, not a DNS failure.
+    // ixwebsocket does not expose a distinct TLS error code, so TLS
+    // failures surface as CannotConnect (ConnectionFailure).
     [[nodiscard]] static TransportError mapHttpErrorCode(ix::HttpErrorCode code) {
         switch (code) {
         case ix::HttpErrorCode::Ok:
@@ -126,9 +130,13 @@ private:
             return TransportError::Timeout;
         case ix::HttpErrorCode::CannotConnect:
         case ix::HttpErrorCode::CannotCreateSocket:
+            // ixwebsocket does not distinguish DNS, TLS, or TCP connect
+            // failures — all surface as CannotConnect. Map to
+            // ConnectionFailure rather than guessing DNS or TLS.
             return TransportError::ConnectionFailure;
         case ix::HttpErrorCode::UrlMalformed:
-            return TransportError::DnsFailure;
+            // URL parsing error — not a network/DNS failure.
+            return TransportError::UnknownNetworkFailure;
         case ix::HttpErrorCode::SendError:
         case ix::HttpErrorCode::ReadError:
         case ix::HttpErrorCode::CannotReadStatusLine:

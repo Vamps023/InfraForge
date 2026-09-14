@@ -12,7 +12,7 @@ import {
 } from './terrainApi'
 import { useTerrainStore } from './terrainStore'
 import { DownloadAreaMap, type GeoBounds, type SelectionTileInfo } from './DownloadAreaMap'
-import { NominatimLocationSearchClient } from './locationSearch'
+import { createLocationSearchClient } from './locationSearch'
 
 interface ImportTerrainDialogProps {
   client: EngineClient
@@ -322,9 +322,10 @@ interface DrawnArea {
   north: number
 }
 
-// Production location search client (Nominatim). Created once at module
-// scope; stateless and safe to share across renders (IMPORTANT 6).
-const nominatimSearchClient = new NominatimLocationSearchClient()
+// Production location search client (BLOCKER 4). Created via the factory
+// which reads runtime-configurable search provider configuration.
+// Stateless and safe to share across renders.
+const searchClient = createLocationSearchClient()
 
 // Plan identity: a stable key derived from the inputs that produced the
 // plan (Finding 1). Used to detect and ignore stale plan responses and to
@@ -361,6 +362,50 @@ function planIdentityMatches(a: PlanIdentity, b: PlanIdentity): boolean {
     a.south === b.south &&
     a.east === b.east &&
     a.north === b.north
+}
+
+// BLOCKER 15: Attribution display with expandable details.
+// Shows a concise summary inline, with a "View attribution" button that
+// expands to show the full required attribution text. This avoids
+// destroying the dialog layout with a huge paragraph while still
+// making the full attribution accessible and selectable.
+function AttributionDisplay({ attribution }: { attribution: string }) {
+  const [expanded, setExpanded] = useState(false)
+  // Concise summary: first line or first 80 chars.
+  const summary = attribution.split('\n')[0] ?? attribution
+  const isLong = attribution.length > 100 || attribution.includes('\n')
+  return (
+    <div className="form-static form-attribution">
+      <Info size={12} /> {summary}
+      {isLong && (
+        <button
+          type="button"
+          className="button secondary"
+          style={{ marginLeft: '0.5rem', fontSize: '0.85em' }}
+          aria-expanded={expanded}
+          aria-controls="attribution-details"
+          onClick={() => setExpanded(!expanded)}
+        >
+          {expanded ? 'Hide' : 'View'} attribution
+        </button>
+      )}
+      {expanded && isLong && (
+        <div
+          id="attribution-details"
+          className="form-attribution-details"
+          style={{
+            marginTop: '0.5rem',
+            maxHeight: '150px',
+            overflowY: 'auto',
+            whiteSpace: 'pre-wrap',
+            fontSize: '0.85em',
+          }}
+        >
+          {attribution}
+        </div>
+      )}
+    </div>
+  )
 }
 
 function DownloadAreaImport({ client, onClose }: { client: EngineClient; onClose: () => void }) {
@@ -600,11 +645,7 @@ function DownloadAreaImport({ client, onClose }: { client: EngineClient; onClose
         {(() => {
           const selected = providers.find((p) => p.providerId === selectedProvider)
           if (selected && selected.attribution) {
-            return (
-              <div className="form-static form-attribution">
-                <Info size={12} /> {selected.attribution}
-              </div>
-            )
+            return <AttributionDisplay attribution={selected.attribution} />
           }
           return null
         })()}
@@ -643,7 +684,7 @@ function DownloadAreaImport({ client, onClose }: { client: EngineClient; onClose
         }
         onTileToggle={toggleTile}
         tileSize={tileSize}
-        searchClient={nominatimSearchClient}
+        searchClient={searchClient}
       />
 
       <div className="form-row">

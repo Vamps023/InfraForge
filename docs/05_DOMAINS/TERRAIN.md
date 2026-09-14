@@ -158,20 +158,26 @@ The production terrain DEM provider is **AWS Terrain Tiles (Terrarium)**:
 - **CRS:** Web Mercator (EPSG:3857)
 - **Tile size:** 256×256 pixels
 - **Coverage:** Global
-- **Resolution:** Effective plan resolution is computed from the selected zoom (z11) and the area's center latitude: `groundResolution = (tileSizeMeters * cos(lat)) / 256`. This varies from ~76 m/px at the equator to ~38 m/px at 60° latitude. The provider's `maxResolutionMpp` is 0 (unknown) because the Terrarium dataset is a composite of multiple sources with varying native resolutions.
+- **Resolution:** Effective plan resolution is supplied by the provider via `effectiveResolutionMpp()`, not computed by `TerrainService`. The Terrarium provider computes it from the selected zoom (z11) and the area's center latitude: `groundResolution = (tileSizeMeters * cos(lat)) / 256`. This varies from ~76 m/px at the equator to ~38 m/px at 60° latitude. The provider's `maxResolutionMpp` is 0 (unknown) because the Terrarium dataset is a composite of multiple sources with varying native resolutions. `TerrainService` is provider-neutral and contains no Terrarium-specific zoom/resolution logic.
 - **Authentication:** None required (AWS Open Data, S3 public bucket)
-- **Attribution:** `Elevation data © Mapzen, USGS, NASA, and other open data sources. Full attribution: https://github.com/tilezen/joerd/blob/master/docs/attribution.md` — The AWS Terrain Tiles / Mapzen Terrarium dataset is a composite of multiple elevation sources (SRTM, USGS 3DEP, GMTED2010, NED, etc.). The authoritative attribution reference is the joerd project documentation. Verified 2026-09-14.
+- **Attribution:** The Terrarium provider retains the full required attribution set derived from the authoritative joerd attribution documentation. Since Terrarium responses do not expose which underlying source contributed to each pixel/tile, a conservative full source set is retained persistently with the `TerrainDataset`. The attribution survives offline reopen and does not require re-contacting the provider. The Download Area UI shows a concise attribution summary with an expandable "View attribution" section exposing the full text. The Terrain Inspector provides access to the full persisted attribution similarly. Attribution wording is derived directly from the authoritative joerd attribution documentation at https://github.com/tilezen/joerd/blob/master/docs/attribution.md. Verified against joerd attribution documentation on 2026-09-14.
 - **License:** Various open data licenses (USGS public domain, NASA, etc.)
 - **Rate limits:** No published limits; bounded retry with exponential backoff handles transient failures
 - **Download size:** Unknown (0) — PNG compression varies per tile, so size cannot be deterministically known before fetch. The protocol defines 0 = unknown; the UI displays `—`.
 - **XYZ validation:** z in [0, 20], x in [0, 2^z), y in [0, 2^z) with overflow-safe arithmetic.
-- **Tile boundary:** Half-open interval [min, max) for east/north edges to avoid overfetch on exact boundaries.
+- **Tile boundary:** Half-open interval semantics for XYZ tile ranges:
+  - **West/minX:** inclusive (first tile intersecting the area).
+  - **East/maxX:** exclusive (an exact east boundary does NOT include the next tile to the east; the boundary is nudged toward `-inf` via `std::nextafter`).
+  - **North/maxY:** inclusive (first tile intersecting the area).
+  - **South/minY:** exclusive (an exact south boundary does NOT include the next tile to the south; the boundary is nudged toward `+inf` via `std::nextafter`).
+  - World edges are clamped to `[0, 2^z)` with no magic epsilon.
+  - This ensures no required provider tile is missed and no extra tile is fetched on exact east or south boundaries.
 
 The provider fetches PNG tiles via HTTP (ixwebsocket HttpClient), decodes Terrarium-encoded elevation values using GDAL, and writes temporary GeoTIFFs with proper CRS and geotransform for the canonical ingestion pipeline. The `MockTerrainProvider` is retained for deterministic unit tests only and is not exposed as a production user option.
 
 ### HTTP cancellation
 
-HTTP cancellation is interruptible during all phases of the request:
+HTTP cancellation is interruptible throughout the synchronous request lifecycle where the transport library supports it:
 
 - **DNS/connect:** A RAII watcher thread polls the application cancellation callback every 50ms and sets `args->cancel` (the `std::atomic<bool>` that ixwebsocket checks internally at every I/O boundary).
 - **TLS/connect:** Same watcher thread mechanism.
@@ -181,20 +187,20 @@ HTTP cancellation is interruptible during all phases of the request:
 - **Retries:** Cancellation is checked before each retry attempt.
 - **Retry backoff:** The backoff loop checks cancellation at bounded intervals (100ms).
 
-The watcher thread is exception-safe (RAII `WatcherJoinGuard`): it is always signalled and joined before `get()` returns, even if the HTTP call throws. No detached threads, no unsafe captures, no thread leaks.
+The watcher thread is exception-safe (RAII `WatcherJoinGuard`): it is always signalled and joined before `get()` returns, even if the HTTP call throws. No detached threads, no unsafe captures, no thread leaks. The generic `HttpClient` port contract requires that implementations support prompt cancellation throughout the synchronous request lifecycle where the transport library supports it.
 
 ### HTTP error classification
 
-Transport-level errors are classified into a port-level `TransportError` enum:
+Transport-level errors are classified into a port-level `TransportError` enum. The mapping reflects what the underlying ixwebsocket library can genuinely tell us — no fake precision:
 
 - `None` — HTTP exchange completed.
 - `Cancelled` — Request was cancelled by the caller.
 - `Timeout` — Connect or transfer timeout.
-- `DnsFailure` — DNS resolution failure.
-- `ConnectionFailure` — TCP connect / connection reset.
-- `TlsFailure` — TLS handshake / certificate failure.
+- `DnsFailure` — DNS resolution failure (only when the library specifically reports DNS failure).
+- `ConnectionFailure` — TCP connect / connection reset / malformed URL (UrlMalformed is classified here, not as DnsFailure, because a malformed URL is not a DNS failure).
+- `TlsFailure` — TLS handshake / certificate failure (only when the library distinguishes TLS specifically).
 - `ProtocolFailure` — HTTP protocol error (malformed response).
-- `UnknownNetworkFailure` — Network failure that doesn't fit above.
+- `UnknownNetworkFailure` — Network failure that doesn't fit above categories.
 
 These map to terrain provider error semantics:
 
@@ -210,27 +216,37 @@ These map to terrain provider error semantics:
 
 Location search uses a configurable provider abstraction:
 
-- **`LocationSearchClient`** — interface for search providers.
+- **`LocationSearchClient`** — interface for search providers (includes `cancelPending()` for lifecycle management).
 - **`LocationSearchConfig`** — endpoint, throttling, cache, attribution configuration.
 - **`NominatimLocationSearchClient`** — production implementation using the Nominatim public API.
+- **`defaultLocationSearchConfig`** — the default configuration (public Nominatim endpoint, 1 req/s throttle, 32-entry cache).
+- **`setLocationSearchConfig()` / `getActiveSearchConfig()`** — runtime-switchable configuration. The active config can be changed without modifying terrain UI code. `createLocationSearchClient()` creates a client from the active config.
 
 Search behavior:
 
 - **Explicit search:** User enters a location, presses Search or Enter, and exactly one request is made. No autocomplete on every keystroke.
-- **Client-owned throttling:** Max 1 request per second (Nominatim usage policy), enforced by the search client, not the UI.
-- **Bounded LRU cache:** Normalized queries (whitespace/case) are cached with a bounded maximum (32 entries).
-- **Explicit UX states:** Searching, no-results, error, results — no-results is visible, not silently an empty list.
+- **Client-owned throttling:** Max 1 request per second (Nominatim usage policy), enforced by the search client, not the UI. Throttled requests propagate both success and failure — a delayed HTTP failure rejects the returned promise.
+- **Bounded LRU cache:** Normalized queries (whitespace/case) are cached with a configurable maximum (default 32 entries). Cache capacity belongs to each client instance, not a global default.
+- **Cancellation:** `cancelPending()` cancels any delayed throttled request. `DownloadAreaMap` calls `cancelPending()` on unmount, ensuring no network request fires after the component is destroyed and no React state updates occur after unmount.
+- **Explicit UX states:** Searching, no-results, error, results — no-results is visible, not silently an empty list. The searching indicator clears on both success and failure.
 - **Attribution:** `© OpenStreetMap contributors` is shown in the search UI.
 - **Stale response suppression:** A generation counter ensures stale responses are ignored.
+
+Request identification (Nominatim policy compliance):
+
+- Browser/Electron renderer Fetch restricts setting `User-Agent`. The application relies on a valid `Referer` header being present in the packaged application, which satisfies Nominatim's identification requirements for application clients. The endpoint remains runtime-configurable via `setLocationSearchConfig()`, allowing switching to a different geocoding provider if required. No terrain truth is sent — only the text search query.
 
 Search results are frontend UX only — they reposition the map and are NOT terrain truth.
 
 ### OSM tile endpoint
 
-The Leaflet tile layer uses the canonical OSM endpoint:
+The Leaflet tile layer uses a configurable map tile provider (`MapTileConfig`):
 
-- `https://tile.openstreetmap.org/{z}/{x}/{y}.png` (no subdomain)
-- Attribution: `© OpenStreetMap contributors` is visible.
+- **`defaultMapTileConfig`** — the default configuration:
+  - URL: `https://tile.openstreetmap.org/{z}/{x}/{y}.png` (no subdomain)
+  - Attribution: `© OpenStreetMap contributors` is visible.
+  - Max zoom: 19
+- The `DownloadAreaMap` component accepts an optional `mapTileConfig` prop, allowing the tile provider to be switched without modifying the component. The default uses public OSM tiles, which is policy-compliant for the current development/release. The provider can be switched at runtime if required.
 
 ### Selection tile size semantics
 

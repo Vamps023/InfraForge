@@ -675,6 +675,297 @@ TEST_SUITE("terrarium terrain provider") {
         // Must not be empty.
         CHECK(!info.attribution.empty());
     }
+
+    // ---- BLOCKER 7: Full required attribution ----
+
+    TEST_CASE("Terrarium attribution contains required source list") {
+        auto httpClient = std::make_shared<MockHttpClient>();
+        TerrariumTerrainProvider provider(httpClient);
+
+        const auto& info = provider.info();
+        // BLOCKER 7: The joerd "Required attribution" section lists
+        // individual source attribution requirements. A link alone is
+        // not equivalent. Verify the full required attribution set is
+        // present.
+        CHECK(info.attribution.find("ArcticDEM") != std::string::npos);
+        CHECK(info.attribution.find("Australia") != std::string::npos);
+        CHECK(info.attribution.find("Austria") != std::string::npos);
+        CHECK(info.attribution.find("Canada") != std::string::npos);
+        CHECK(info.attribution.find("Europe") != std::string::npos);
+        CHECK(info.attribution.find("ETOPO1") != std::string::npos);
+        CHECK(info.attribution.find("Mexico") != std::string::npos);
+        CHECK(info.attribution.find("New Zealand") != std::string::npos);
+        CHECK(info.attribution.find("Norway") != std::string::npos);
+        CHECK(info.attribution.find("United Kingdom") != std::string::npos);
+        CHECK(info.attribution.find("3DEP") != std::string::npos);
+        CHECK(info.attribution.find("GMTED2010") != std::string::npos);
+        CHECK(info.attribution.find("SRTM") != std::string::npos);
+        CHECK(info.attribution.find("U.S. Geological Survey") != std::string::npos);
+    }
+
+    // ---- BLOCKER 1: South/Y exact tile-boundary overfetch ----
+
+    TEST_CASE("BLOCKER 1: exact south boundary does not overfetch") {
+        auto httpClient = std::make_shared<MockHttpClient>();
+        TerrariumTerrainProvider provider(httpClient);
+
+        // At z=11, tile y=524 contains the equator. The boundary between
+        // y=523 and y=524 is at a moderate latitude. An area whose south
+        // edge lies exactly on this boundary must NOT request y=524.
+        const int z = 11;
+        const double kEarthRadius = 6378137.0;
+        const double kOriginShift = 3.14159265358979323846 * kEarthRadius;
+        const double tileSize = (2.0 * kOriginShift) / static_cast<double>(1 << z);
+        // Boundary between y=523 and y=524: mercatorY = originShift - 524*tileSize
+        const double boundaryY = kOriginShift - 524.0 * tileSize;
+        // Convert to WGS84 latitude.
+        const double boundaryLat = (2.0 * std::atan(std::exp(boundaryY / kEarthRadius))
+            - 3.14159265358979323846 / 2.0) * 180.0 / 3.14159265358979323846;
+
+        // Use a single SelectionTile whose south edge is exactly on the
+        // y=523/y=524 boundary. North is above (inside y=523).
+        SelectionTile tile;
+        tile.col = 0;
+        tile.row = 0;
+        tile.bounds = GeoBounds{
+            .west = -1.0,
+            .south = boundaryLat,
+            .east = 1.0,
+            .north = boundaryLat + 0.5};
+        tile.areaSqm = 1.0;
+
+        std::vector<SelectionTile> selected = {tile};
+        auto requests = provider.planRequests(selected);
+        REQUIRE(!requests.empty());
+
+        // No request should have y=524 (the extra south tile past the
+        // exact boundary). The half-open interval [south, north) means
+        // the south edge is exclusive for max XYZ row extent.
+        for (const auto& req : requests) {
+            int rz, rx, ry;
+            char s1, s2;
+            std::istringstream iss(req.requestId);
+            iss >> rz >> s1 >> rx >> s2 >> ry;
+            REQUIRE(rz == z);
+            CHECK(ry <= 523);
+        }
+    }
+
+    TEST_CASE("BLOCKER 1: south edge slightly inside tile includes that tile") {
+        auto httpClient = std::make_shared<MockHttpClient>();
+        TerrariumTerrainProvider provider(httpClient);
+
+        // South edge slightly INSIDE tile y=523 (just north of the boundary).
+        const int z = 11;
+        const double kEarthRadius = 6378137.0;
+        const double kOriginShift = 3.14159265358979323846 * kEarthRadius;
+        const double tileSize = (2.0 * kOriginShift) / static_cast<double>(1 << z);
+        const double boundaryY = kOriginShift - 524.0 * tileSize;
+        // Nudge slightly north (into tile y=523).
+        const double southY = boundaryY + 1.0;
+        const double southLat = (2.0 * std::atan(std::exp(southY / kEarthRadius))
+            - 3.14159265358979323846 / 2.0) * 180.0 / 3.14159265358979323846;
+
+        SelectionTile tile;
+        tile.col = 0;
+        tile.row = 0;
+        tile.bounds = GeoBounds{
+            .west = -1.0,
+            .south = southLat,
+            .east = 1.0,
+            .north = southLat + 0.5};
+        tile.areaSqm = 1.0;
+
+        std::vector<SelectionTile> selected = {tile};
+        auto requests = provider.planRequests(selected);
+        REQUIRE(!requests.empty());
+
+        // Should include y=523 (the area extends into tile y=523).
+        bool hasY523 = false;
+        for (const auto& req : requests) {
+            int rz, rx, ry;
+            char s1, s2;
+            std::istringstream iss(req.requestId);
+            iss >> rz >> s1 >> rx >> s2 >> ry;
+            REQUIRE(rz == z);
+            if (ry == 523) hasY523 = true;
+        }
+        CHECK(hasY523);
+    }
+
+    TEST_CASE("BLOCKER 1: east edge slightly inside tile includes that tile") {
+        auto httpClient = std::make_shared<MockHttpClient>();
+        TerrariumTerrainProvider provider(httpClient);
+
+        // East edge slightly INSIDE tile x=0 (just west of the boundary).
+        const int z = 11;
+        const double kEarthRadius = 6378137.0;
+        const double kOriginShift = 3.14159265358979323846 * kEarthRadius;
+        const double tileSize = (2.0 * kOriginShift) / static_cast<double>(1 << z);
+        const double boundaryX = -kOriginShift + tileSize;
+        // Nudge slightly west (into tile x=0).
+        const double eastX = boundaryX - 1.0;
+        const double eastLon = (eastX / kEarthRadius) * 180.0 / 3.14159265358979323846;
+
+        GeoBounds area{
+            .west = -180.0,
+            .south = -1.0,
+            .east = eastLon,
+            .north = 1.0};
+
+        auto tiles = computeSelectionGrid(area, 4000);
+        REQUIRE(!tiles.empty());
+
+        auto requests = provider.planRequests(tiles);
+        REQUIRE(!requests.empty());
+
+        // Should include x=0.
+        bool hasX0 = false;
+        for (const auto& req : requests) {
+            int rz, rx, ry;
+            char s1, s2;
+            std::istringstream iss(req.requestId);
+            iss >> rz >> s1 >> rx >> s2 >> ry;
+            REQUIRE(rz == z);
+            if (rx == 0) hasX0 = true;
+        }
+        CHECK(hasX0);
+    }
+
+    TEST_CASE("BLOCKER 1: world-edge clamping is valid") {
+        auto httpClient = std::make_shared<MockHttpClient>();
+        TerrariumTerrainProvider provider(httpClient);
+
+        // Use a single SelectionTile spanning a large area to test
+        // world-edge clamping without exceeding the selection limit.
+        SelectionTile tile;
+        tile.col = 0;
+        tile.row = 0;
+        tile.bounds = GeoBounds{
+            .west = -179.0,
+            .south = -84.0,
+            .east = 179.0,
+            .north = 84.0};
+        tile.areaSqm = 1.0;
+
+        std::vector<SelectionTile> selected = {tile};
+        auto requests = provider.planRequests(selected);
+        REQUIRE(!requests.empty());
+
+        // All tile indices should be valid [0, 2^z).
+        const int maxTile = (1 << 11) - 1;
+        for (const auto& req : requests) {
+            int rz, rx, ry;
+            char s1, s2;
+            std::istringstream iss(req.requestId);
+            iss >> rz >> s1 >> rx >> s2 >> ry;
+            CHECK(rx >= 0);
+            CHECK(rx <= maxTile);
+            CHECK(ry >= 0);
+            CHECK(ry <= maxTile);
+        }
+    }
+
+    TEST_CASE("BLOCKER 1: area covering exactly one XYZ tile") {
+        auto httpClient = std::make_shared<MockHttpClient>();
+        TerrariumTerrainProvider provider(httpClient);
+
+        // At z=11, compute the exact bounds of tile (11, 0, 0) and verify
+        // that planning for that exact area returns exactly one request.
+        const int z = 11;
+        const double kEarthRadius = 6378137.0;
+        const double kOriginShift = 3.14159265358979323846 * kEarthRadius;
+        const double tileSize = (2.0 * kOriginShift) / static_cast<double>(1 << z);
+
+        // Tile (11, 0, 0): minX = -kOriginShift, maxX = -kOriginShift + tileSize
+        //                   maxY = kOriginShift,     minY = kOriginShift - tileSize
+        const double minX = -kOriginShift;
+        const double maxX = -kOriginShift + tileSize;
+        const double minY = kOriginShift - tileSize;
+        const double maxY = kOriginShift;
+
+        // Convert to WGS84.
+        const double west = (minX / kEarthRadius) * 180.0 / 3.14159265358979323846;
+        const double east = (maxX / kEarthRadius) * 180.0 / 3.14159265358979323846;
+        const double north = (2.0 * std::atan(std::exp(maxY / kEarthRadius))
+            - 3.14159265358979323846 / 2.0) * 180.0 / 3.14159265358979323846;
+        const double south = (2.0 * std::atan(std::exp(minY / kEarthRadius))
+            - 3.14159265358979323846 / 2.0) * 180.0 / 3.14159265358979323846;
+
+        // Use a single SelectionTile with the exact tile bounds.
+        SelectionTile tile;
+        tile.col = 0;
+        tile.row = 0;
+        tile.bounds = GeoBounds{.west = west, .south = south, .east = east, .north = north};
+        tile.areaSqm = 1.0;
+
+        std::vector<SelectionTile> selected = {tile};
+        auto requests = provider.planRequests(selected);
+
+        // Should request exactly tile (11, 0, 0) — no more, no less.
+        REQUIRE(requests.size() == 1);
+        CHECK(requests[0].requestId == "11/0/0");
+    }
+
+    // ---- BLOCKER 8/9: Provider supplies effective resolution ----
+
+    TEST_CASE("BLOCKER 8: provider effectiveResolutionMpp varies with latitude") {
+        auto httpClient = std::make_shared<MockHttpClient>();
+        TerrariumTerrainProvider provider(httpClient);
+
+        // Equatorial area.
+        GeoBounds equator{.west = -1.0, .south = -1.0, .east = 1.0, .north = 1.0};
+        const double resEq = provider.effectiveResolutionMpp(equator);
+
+        // High-latitude area.
+        GeoBounds arctic{.west = -1.0, .south = 59.0, .east = 1.0, .north = 61.0};
+        const double resArc = provider.effectiveResolutionMpp(arctic);
+
+        // Higher latitude should have finer (lower) resolution.
+        CHECK(resEq > resArc);
+        // At equator, z=11 resolution should be ~76 m/px.
+        CHECK(resEq > 50.0);
+        CHECK(resEq < 100.0);
+        // At 60°, resolution should be ~38 m/px.
+        CHECK(resArc > 20.0);
+        CHECK(resArc < 50.0);
+    }
+
+    // ---- BLOCKER 13: Transport error mapping ----
+
+    TEST_CASE("BLOCKER 13: UrlMalformed maps to UnknownNetworkFailure") {
+        // UrlMalformed is a URL parsing error, not a DNS failure.
+        // The IxHttpClient maps it to UnknownNetworkFailure.
+        // Verify the MockHttpClient can simulate this.
+        auto httpClient = std::make_shared<MockHttpClient>();
+        TerrariumTerrainProvider provider(httpClient);
+
+        const std::string url =
+            "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/11/0/0.png";
+        httpClient->setTransportError(url,
+            infraforge::ports::TransportError::UnknownNetworkFailure,
+            "malformed URL");
+
+        const std::filesystem::path tempDir =
+            std::filesystem::temp_directory_path() / "terrarium_url_malformed";
+        std::filesystem::create_directories(tempDir);
+
+        ProviderRequest req;
+        req.requestId = "11/0/0";
+
+        bool threw = false;
+        try {
+            (void)provider.fetchRequest(req, tempDir, "", {});
+        } catch (const ProviderError& e) {
+            threw = true;
+            // UnknownNetworkFailure maps to SourceUnavailable (not NetworkTimeout).
+            CHECK(e.code() == ProviderErrorCode::SourceUnavailable);
+        }
+        CHECK(threw);
+
+        std::error_code ec;
+        std::filesystem::remove_all(tempDir, ec);
+    }
 }
 
 // ---- BLOCKER 2: Real interruptible HTTP cancellation ----

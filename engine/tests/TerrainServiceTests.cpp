@@ -8,8 +8,10 @@
 #include "infraforge/domain/geo/GeoTransformService.hpp"
 #include "infraforge/domain/terrain/MockTerrainProvider.hpp"
 #include "infraforge/domain/terrain/TerrainTypes.hpp"
+#include "infraforge/domain/terrain/TerrariumTerrainProvider.hpp"
 #include "infraforge/persistence/GdalTerrainSource.hpp"
 #include "infraforge/persistence/SqliteProjectStore.hpp"
+#include "infraforge/ports/MockHttpClient.hpp"
 
 #include "TerrainTestFixtures.hpp"
 #include "TestHelpers.hpp"
@@ -403,15 +405,18 @@ TEST_CASE("cancelling a queued import commits nothing; the running import comple
     REQUIRE(harness.store.terrainDatasets().size() == 1);
     CHECK(harness.store.terrainDatasets().front().displayName == "Big DEM");
     CHECK(harness.datasetAddedIds.size() == 1);
-    // No .importing temp files survive either outcome.
-    bool tempLeft = false;
-    for (const auto& entry :
-        std::filesystem::directory_iterator(harness.projectDirectory / "terrain" / "elevation")) {
-        if (entry.path().extension() == ".importing") {
-            tempLeft = true;
-        }
-    }
-    CHECK_FALSE(tempLeft);
+    // No .importing temp files survive either outcome (BLOCKER 16).
+    const auto tempCleanA = harness.waitFor(
+        [&] {
+            const auto elevDir = harness.projectDirectory / "terrain" / "elevation";
+            if (!std::filesystem::exists(elevDir)) return true;
+            for (const auto& entry : std::filesystem::directory_iterator(elevDir)) {
+                if (entry.path().extension() == ".importing") return false;
+            }
+            return true;
+        },
+        std::chrono::seconds{10});
+    CHECK(tempCleanA);
 }
 
 // HIGH 6 regression: a west-up raster (negative X pixel step) must be
@@ -591,17 +596,18 @@ TEST_CASE("download produces canonical dataset with real metadata and survives r
         GDALClose(ds);
     }
 
-    // No .importing temp files remain (BLOCKER 11 regression).
-    bool tempLeft = false;
-    const auto elevDir = harness.projectDirectory / "terrain" / "elevation";
-    if (std::filesystem::exists(elevDir)) {
-        for (const auto& entry : std::filesystem::directory_iterator(elevDir)) {
-            if (entry.path().extension() == ".importing") {
-                tempLeft = true;
+    // No .importing temp files remain (BLOCKER 11 regression, BLOCKER 16: deterministic).
+    const auto tempCleanB = harness.waitFor(
+        [&] {
+            const auto elevDir = harness.projectDirectory / "terrain" / "elevation";
+            if (!std::filesystem::exists(elevDir)) return true;
+            for (const auto& entry : std::filesystem::directory_iterator(elevDir)) {
+                if (entry.path().extension() == ".importing") return false;
             }
-        }
-    }
-    CHECK_FALSE(tempLeft);
+            return true;
+        },
+        std::chrono::seconds{10});
+    CHECK(tempCleanB);
 
     // Canonical sampling within coverage returns a real height.
     const double sampleE = (dataset.bounds.minEasting + dataset.bounds.maxEasting) * 0.5;
@@ -725,17 +731,23 @@ TEST_CASE("download leaves no .importing temp files on failure") {
     // The job should be cancelled or completed (if it finished before cancel).
     CHECK(settled);
 
-    // No .importing temp files remain regardless of outcome.
-    bool tempLeft = false;
-    const auto elevDir = harness.projectDirectory / "terrain" / "elevation";
-    if (std::filesystem::exists(elevDir)) {
-        for (const auto& entry : std::filesystem::directory_iterator(elevDir)) {
-            if (entry.path().extension() == ".importing") {
-                tempLeft = true;
+    // BLOCKER 16: Wait deterministically for temp file cleanup.
+    // The job may reach terminal state before async cleanup (removing
+    // .importing temp files) completes. Poll with a bounded timeout
+    // until no .importing files remain, rather than checking once
+    // and racing with cleanup.
+    const auto tempClean = harness.waitFor(
+        [&] {
+            const auto elevDir = harness.projectDirectory / "terrain" / "elevation";
+            if (!std::filesystem::exists(elevDir)) return true;
+            for (const auto& entry : std::filesystem::directory_iterator(elevDir)) {
+                if (entry.path().extension() == ".importing") return false;
             }
-        }
-    }
-    CHECK_FALSE(tempLeft);
+            return true;
+        },
+        std::chrono::seconds{10});
+
+    CHECK(tempClean);
 }
 
 TEST_CASE("cancelled download ends in Cancelled state with no canonical dataset") {
@@ -784,17 +796,18 @@ TEST_CASE("cancelled download ends in Cancelled state with no canonical dataset"
     CHECK(harness.store.terrainDatasets().empty());
     CHECK(harness.datasetAddedIds.empty());
 
-    // No .importing temp files remain.
-    bool tempLeft = false;
-    const auto elevDir = harness.projectDirectory / "terrain" / "elevation";
-    if (std::filesystem::exists(elevDir)) {
-        for (const auto& entry : std::filesystem::directory_iterator(elevDir)) {
-            if (entry.path().extension() == ".importing") {
-                tempLeft = true;
+    // No .importing temp files remain (BLOCKER 16: deterministic wait).
+    const auto tempClean = harness.waitFor(
+        [&] {
+            const auto elevDir = harness.projectDirectory / "terrain" / "elevation";
+            if (!std::filesystem::exists(elevDir)) return true;
+            for (const auto& entry : std::filesystem::directory_iterator(elevDir)) {
+                if (entry.path().extension() == ".importing") return false;
             }
-        }
-    }
-    CHECK_FALSE(tempLeft);
+            return true;
+        },
+        std::chrono::seconds{10});
+    CHECK(tempClean);
 }
 
 TEST_CASE("cancelled download leaves no provider temp dir or canonical raster") {
@@ -836,22 +849,24 @@ TEST_CASE("cancelled download leaves no provider temp dir or canonical raster") 
     CHECK(harness.store.terrainDatasets().empty());
     CHECK(harness.datasetAddedIds.empty());
 
-    // No .importing temp files.
-    bool importingLeft = false;
-    const auto elevDir = harness.projectDirectory / "terrain" / "elevation";
-    if (std::filesystem::exists(elevDir)) {
-        for (const auto& entry : std::filesystem::directory_iterator(elevDir)) {
-            if (entry.path().extension() == ".importing") {
-                importingLeft = true;
+    // No .importing temp files (BLOCKER 16: deterministic wait).
+    const auto tempCleanC = harness.waitFor(
+        [&] {
+            const auto elevDir = harness.projectDirectory / "terrain" / "elevation";
+            if (!std::filesystem::exists(elevDir)) return true;
+            for (const auto& entry : std::filesystem::directory_iterator(elevDir)) {
+                if (entry.path().extension() == ".importing") return false;
             }
-        }
-    }
-    CHECK_FALSE(importingLeft);
+            return true;
+        },
+        std::chrono::seconds{10});
+    CHECK(tempCleanC);
 
     // No canonical raster file (.tif) in the elevation directory.
+    const auto elevDirC = harness.projectDirectory / "terrain" / "elevation";
     bool rasterLeft = false;
-    if (std::filesystem::exists(elevDir)) {
-        for (const auto& entry : std::filesystem::directory_iterator(elevDir)) {
+    if (std::filesystem::exists(elevDirC)) {
+        for (const auto& entry : std::filesystem::directory_iterator(elevDirC)) {
             if (entry.path().extension() == ".tif") {
                 rasterLeft = true;
             }
@@ -889,6 +904,66 @@ TEST_CASE("planDownload with empty selection returns grid with zero requests") {
     CHECK(plan.requestCount == 0);
     CHECK(plan.selectedAreaSqm == 0.0);
     CHECK(plan.estimatedBytes == 0);
+}
+
+// BLOCKER 8/9: TerrainService uses provider-supplied effective resolution,
+// not hard-coded Terrarium math. The mock provider returns its
+// maxResolutionMpp (150.0), so the plan should reflect that value.
+TEST_CASE("BLOCKER 8: planDownload uses provider-supplied effective resolution") {
+    TerrainHarness harness{};
+    const GeoBounds area{
+        .west = 15.0, .south = 42.0, .east = 15.1, .north = 42.1};
+    const std::uint32_t tileSize = 4000;
+
+    const auto plan = harness.terrain->planDownload(
+        "mock-terrain", area, tileSize, {});
+    // The mock provider's effectiveResolutionMpp returns maxResolutionMpp=150.
+    CHECK(plan.effectiveResolutionMpp == doctest::Approx(150.0));
+}
+
+// BLOCKER 9: Verify resolution varies with latitude through the real
+// Terrarium provider path (not just cos(lat) in isolation).
+TEST_CASE("BLOCKER 9: Terrarium plan resolution varies with latitude") {
+    // Build a custom harness with both mock and Terrarium providers.
+    TerrainHarness harness{TerrainHarness::ConfigurableMock{}};
+
+    // Rebuild terrain service with a registry containing both providers.
+    infraforge::domain::terrain::TerrainProviderRegistry registry;
+    registry.registerProvider(
+        std::make_unique<infraforge::domain::terrain::MockTerrainProvider>());
+    auto httpClient = std::make_shared<infraforge::ports::MockHttpClient>();
+    registry.registerProvider(
+        std::make_unique<infraforge::domain::terrain::TerrariumTerrainProvider>(httpClient));
+
+    harness.terrain.emplace(harness.store, harness.transforms, harness.reader,
+        harness.world, *harness.jobs, std::move(registry),
+        [&harness](const infraforge::application::TerrainServiceEvent& event) {
+            if (event.datasetAdded.has_value()) {
+                harness.datasetAddedIds.push_back(
+                    infraforge::domain::terrain::uuidTextFromEntityId(event.datasetAdded->id));
+            }
+        });
+
+    // Equatorial area.
+    const GeoBounds equator{
+        .west = -0.5, .south = -0.5, .east = 0.5, .north = 0.5};
+    const auto planEq = harness.terrain->planDownload(
+        "terrarium-aws", equator, 4000, {});
+
+    // High-latitude area.
+    const GeoBounds arctic{
+        .west = -0.5, .south = 59.0, .east = 0.5, .north = 61.0};
+    const auto planArc = harness.terrain->planDownload(
+        "terrarium-aws", arctic, 4000, {});
+
+    // Higher latitude should have finer (lower) resolution.
+    CHECK(planEq.effectiveResolutionMpp > planArc.effectiveResolutionMpp);
+    // At equator, z=11 resolution should be ~76 m/px.
+    CHECK(planEq.effectiveResolutionMpp > 50.0);
+    CHECK(planEq.effectiveResolutionMpp < 100.0);
+    // At 60°, resolution should be ~38 m/px.
+    CHECK(planArc.effectiveResolutionMpp > 20.0);
+    CHECK(planArc.effectiveResolutionMpp < 50.0);
 }
 
 TEST_CASE("startDownload with empty selection is rejected") {

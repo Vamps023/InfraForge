@@ -51,7 +51,7 @@ struct TerrainImportSpec {
     // Absolute path of the external DEM source file.
     std::filesystem::path sourcePath;
     std::string displayName;
-    std::string elevationUnitOverride;
+    std::string elevationUnitOverride{};
 };
 
 // Inspector projection of one dataset: canonical record plus derived tile
@@ -168,7 +168,7 @@ private:
         std::filesystem::path tempFile;            // project-owned .importing temp
         domain::world::ChunkGrid grid;             // tile-scope capture
         domain::geo::ProjectGeoreference project;  // immutable value snapshot
-        std::string elevationUnitOverride;
+        std::string elevationUnitOverride{};
     };
     struct TilesPayload {
         std::string datasetUuid;

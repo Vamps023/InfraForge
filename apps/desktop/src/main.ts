@@ -47,16 +47,16 @@ function isValidBoundsPayload(payload: unknown): payload is ViewportBoundsPayloa
 function computePlacement(window: BrowserWindow, payload: ViewportBoundsPayload): ViewportPlacement {
   const contentBounds = window.getContentBounds()
   const screenRect = screen.dipToScreenRect(window, {
-    x: contentBounds.x + payload.rect.x,
-    y: contentBounds.y + payload.rect.y,
-    width: payload.rect.width,
-    height: payload.rect.height,
+    x: Math.round(contentBounds.x + payload.rect.x),
+    y: Math.round(contentBounds.y + payload.rect.y),
+    width: Math.max(1, Math.round(payload.rect.width)),
+    height: Math.max(1, Math.round(payload.rect.height)),
   })
   return {
-    screenX: screenRect.x,
-    screenY: screenRect.y,
-    width: screenRect.width,
-    height: screenRect.height,
+    screenX: Math.round(screenRect.x),
+    screenY: Math.round(screenRect.y),
+    width: Math.max(1, Math.round(screenRect.width)),
+    height: Math.max(1, Math.round(screenRect.height)),
     dpiScale: payload.dpiScale,
   }
 }

@@ -9,6 +9,7 @@
       "default-features": false
     },
     "ixwebsocket",
+    "libpng",
     "nlohmann-json",
     {
       "name": "proj",

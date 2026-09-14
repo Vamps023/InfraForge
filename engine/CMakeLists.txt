@@ -4,6 +4,7 @@ find_package(unofficial-sqlite3 CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(PROJ CONFIG REQUIRED)
 find_package(GDAL CONFIG REQUIRED)
+find_package(PNG REQUIRED)
 
 set(INFRAFORGE_PROTOCOL_PROTOS
     ${PROJECT_SOURCE_DIR}/contracts/proto/infraforge/protocol/v1/foundation.proto
@@ -73,6 +74,7 @@ target_link_libraries(infraforge_core PUBLIC
     nlohmann_json::nlohmann_json
     PROJ::proj
     GDAL::GDAL
+    PNG::PNG
 )
 
 # The geospatial runtime locates its PROJ data directory (proj.db) through

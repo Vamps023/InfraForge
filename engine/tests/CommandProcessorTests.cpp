@@ -176,6 +176,10 @@ TEST_SUITE("command processor") {
 
         processor.post("conn-1", createCommandFrame("req-create", scratch.path()));
         REQUIRE(sink.waitForResults(1, kWaitTimeout));
+        // Wait for event delivery to settle before checking events —
+        // the result and events are posted sequentially on the executor,
+        // but waitForResults only waits for the result, not the events.
+        REQUIRE(sink.waitForQuiet(std::chrono::milliseconds{100}, kWaitTimeout));
 
         const auto results = sink.results();
         REQUIRE(results.size() == 1);

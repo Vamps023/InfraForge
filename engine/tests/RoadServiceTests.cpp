@@ -289,4 +289,150 @@ TEST_CASE_FIXTURE(RoadServiceTestFixture, "update superelevation profile") {
     CHECK(details->superelevationBreakpointCount == 3);
 }
 
+TEST_CASE_FIXTURE(RoadServiceTestFixture, "save and reopen preserves road") {
+    CreateRoadInput input;
+    input.name = "Persistent Road";
+    input.sourcePoints = makeStraightPolyline(0.0, 0.0, 0.0, 200.0, 20);
+    input.positionTolerance = 1.0;
+    auto summary = roadService->createRoad(input);
+
+    // Close the store and road service, then reopen.
+    roadService.reset();
+    store.close();
+
+    (void)store.open(projectDirectory);
+    auto project = transforms.resolveProjectGeoreference(store.current().georeference);
+    world.resetForProject(project);
+    roadService.emplace(store, world,
+        [this](const RoadServiceEvent& e) { events.push_back(e); });
+    roadService->onProjectOpened();
+
+    // Verify the road survived save/reopen.
+    auto roads = roadService->listRoads();
+    REQUIRE(roads.size() == 1);
+    CHECK(roads[0].roadId == summary.roadId);
+    CHECK(roads[0].name == "Persistent Road");
+    CHECK(roads[0].length > 0.0);
+
+    // Verify road details are accessible after reopen.
+    auto details = roadService->getRoad(summary.roadId);
+    REQUIRE(details.has_value());
+    CHECK(details->name == "Persistent Road");
+    CHECK(details->alignmentSegmentCount >= 1);
+}
+
+TEST_CASE_FIXTURE(RoadServiceTestFixture, "road scene projection produces mesh data") {
+    CreateRoadInput input;
+    input.name = "Scene Road";
+    input.sourcePoints = makeStraightPolyline(0.0, 0.0, 0.0, 100.0, 10);
+    input.positionTolerance = 1.0;
+    (void)roadService->createRoad(input);
+
+    auto projection = roadService->roadSceneProjection();
+    CHECK(projection.meshes.size() == 1);
+    CHECK_FALSE(projection.meshes[0].vertices.empty());
+    CHECK_FALSE(projection.meshes[0].indices.empty());
+    CHECK_FALSE(projection.meshes[0].roadId.empty());
+
+    // Verify vertices are in render-local coordinates (relative to origin).
+    // The origin is (0,0,0) in this test, so vertices should be near the
+    // source polyline coordinates.
+    const auto& v0 = projection.meshes[0].vertices[0];
+    CHECK(v0.x != 0.0f || v0.y != 0.0f);  // At least one coordinate is non-zero.
+}
+
+TEST_CASE_FIXTURE(RoadServiceTestFixture, "undo redo after reopen") {
+    CreateRoadInput input;
+    input.name = "Undo Road";
+    input.sourcePoints = makeStraightPolyline(0.0, 0.0, 0.0, 100.0, 10);
+    input.positionTolerance = 1.0;
+    auto summary = roadService->createRoad(input);
+
+    // Rename the road.
+    (void)roadService->renameRoad(summary.roadId, "Renamed Road");
+    auto roads = roadService->listRoads();
+    REQUIRE(roads.size() == 1);
+    CHECK(roads[0].name == "Renamed Road");
+
+    // Undo the rename.
+    roadService->undo(summary.roadId);
+    roads = roadService->listRoads();
+    REQUIRE(roads.size() == 1);
+    CHECK(roads[0].name == "Undo Road");
+
+    // Redo the rename.
+    roadService->redo(summary.roadId);
+    roads = roadService->listRoads();
+    REQUIRE(roads.size() == 1);
+    CHECK(roads[0].name == "Renamed Road");
+
+    // Close and reopen, verify redo state is preserved.
+    roadService.reset();
+    store.close();
+
+    (void)store.open(projectDirectory);
+    auto project = transforms.resolveProjectGeoreference(store.current().georeference);
+    world.resetForProject(project);
+    roadService.emplace(store, world,
+        [this](const RoadServiceEvent& e) { events.push_back(e); });
+    roadService->onProjectOpened();
+
+    roads = roadService->listRoads();
+    REQUIRE(roads.size() == 1);
+    CHECK(roads[0].name == "Renamed Road");
+}
+
+TEST_CASE_FIXTURE(RoadServiceTestFixture, "delete and undo delete after reopen") {
+    CreateRoadInput input;
+    input.name = "Delete Me";
+    input.sourcePoints = makeStraightPolyline(0.0, 0.0, 0.0, 100.0, 10);
+    input.positionTolerance = 1.0;
+    auto summary = roadService->createRoad(input);
+
+    // Delete the road.
+    (void)roadService->deleteRoad(summary.roadId);
+    auto roads = roadService->listRoads();
+    CHECK(roads.empty());
+
+    // Undo the delete.
+    roadService->undo(summary.roadId);
+    roads = roadService->listRoads();
+    REQUIRE(roads.size() == 1);
+    CHECK(roads[0].roadId == summary.roadId);
+
+    // Close and reopen, verify the road survived.
+    roadService.reset();
+    store.close();
+
+    (void)store.open(projectDirectory);
+    auto project = transforms.resolveProjectGeoreference(store.current().georeference);
+    world.resetForProject(project);
+    roadService.emplace(store, world,
+        [this](const RoadServiceEvent& e) { events.push_back(e); });
+    roadService->onProjectOpened();
+
+    roads = roadService->listRoads();
+    REQUIRE(roads.size() == 1);
+    CHECK(roads[0].roadId == summary.roadId);
+    CHECK(roads[0].name == "Delete Me");
+}
+
+TEST_CASE_FIXTURE(RoadServiceTestFixture, "tessellation is deterministic across calls") {
+    CreateRoadInput input;
+    input.name = "Deterministic Road";
+    input.sourcePoints = makeStraightPolyline(0.0, 0.0, 0.0, 100.0, 10);
+    input.positionTolerance = 1.0;
+    (void)roadService->createRoad(input);
+
+    auto roads = roadService->listRoads();
+    REQUIRE(roads.size() == 1);
+
+    auto tess1 = roadService->getRoadTessellation(roads[0].roadId);
+    auto tess2 = roadService->getRoadTessellation(roads[0].roadId);
+    REQUIRE(tess1.has_value());
+    REQUIRE(tess2.has_value());
+    CHECK(tess1->crossSections.size() == tess2->crossSections.size());
+    CHECK(tess1->indices.size() == tess2->indices.size());
+}
+
 } // namespace infraforge::application

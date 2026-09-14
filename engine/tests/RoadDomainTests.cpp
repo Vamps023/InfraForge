@@ -559,7 +559,9 @@ TEST_CASE("authored road has empty source geometry") {
 TEST_CASE("imported road retains source polyline and provenance") {
     RoadSource source;
     source.geometry.sourceCrs = "EPSG:4326";
-    source.geometry.vertices = {{-122.4, 37.8, 10.0}, {-122.41, 37.81, 12.0}};
+    source.geometry.vertices = {
+        {-122.4, 37.8, std::optional<double>{10.0}},
+        {-122.41, 37.81, std::optional<double>{12.0}}};
     source.provenance.provider = SourceProvider::Osm;
     source.provenance.sourceId = "way/123456";
     source.provenance.tags = {{"highway", "motorway"}, {"lanes", "2"}};
@@ -575,7 +577,9 @@ TEST_CASE("imported road retains source polyline and provenance") {
 TEST_CASE("source geometry is distinct from canonical alignment") {
     // Source polyline in WGS84 is NOT the canonical alignment.
     RoadSource source;
-    source.geometry.vertices = {{-122.4, 37.8}, {-122.41, 37.81}};
+    source.geometry.vertices = {
+        {-122.4, 37.8, std::optional<double>{}},
+        {-122.41, 37.81, std::optional<double>{}}};
     source.provenance.provider = SourceProvider::Osm;
 
     // Canonical alignment is in project coordinates, separate.
@@ -708,6 +712,92 @@ TEST_CASE("protected anchor with displaced position is detected") {
     auto diagnostics = validateProtectedAnchors(alignment, {anchor});
     REQUIRE_FALSE(diagnostics.empty());
     CHECK(diagnostics[0].code == infraforge::domain::road::RoadErrorCode::PositionDiscontinuity);
+}
+
+TEST_CASE("protected anchor with non-finite position is rejected") {
+    auto alignment = makeAlignment();
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    ProtectedAnchor anchor{.station = 50.0,
+        .position = {nan, 0.0}, .kind = AnchorKind::UserPinned};
+    auto diagnostics = validateProtectedAnchors(alignment, {anchor});
+    REQUIRE_FALSE(diagnostics.empty());
+    CHECK(diagnostics[0].code == infraforge::domain::road::RoadErrorCode::NonFiniteParameter);
+}
+
+TEST_CASE("protected anchor with non-finite easting is rejected") {
+    auto alignment = makeAlignment();
+    const double inf = std::numeric_limits<double>::infinity();
+    ProtectedAnchor anchor{.station = 50.0,
+        .position = {inf, 0.0}, .kind = AnchorKind::UserPinned};
+    auto diagnostics = validateProtectedAnchors(alignment, {anchor});
+    REQUIRE_FALSE(diagnostics.empty());
+    CHECK(diagnostics[0].code == infraforge::domain::road::RoadErrorCode::NonFiniteParameter);
+}
+
+TEST_CASE("non-finite position tolerance is rejected") {
+    auto alignment = makeAlignment();
+    ProtectedAnchor anchor{.station = 50.0, .position = {50.0, 0.0}, .kind = AnchorKind::UserPinned};
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    auto diagnostics = validateProtectedAnchors(alignment, {anchor}, nan);
+    REQUIRE_FALSE(diagnostics.empty());
+    CHECK(diagnostics[0].code == infraforge::domain::road::RoadErrorCode::InvalidArgument);
+}
+
+TEST_CASE("arc with huge-but-finite curvature and length produces non-finite end and is rejected") {
+    // Individually finite parameters, but curvature * length overflows to inf.
+    const double hugeCurvature = 1e300;
+    const double hugeLength = 1e300;
+    CircularArcSegment arc{.start = {0.0, 0.0}, .startHeading = 0.0,
+        .curvature = hugeCurvature, .length = hugeLength};
+    auto built = ReferenceAlignment::build({arc});
+    REQUIRE_FALSE(built.has_value());
+    // Should report non-finite derived geometry, not succeed.
+    bool foundNonFinite = false;
+    for (const auto& d : built.error()) {
+        if (d.code == infraforge::domain::road::RoadErrorCode::NonFiniteParameter) {
+            foundNonFinite = true;
+            break;
+        }
+    }
+    CHECK(foundNonFinite);
+}
+
+TEST_CASE("clothoid with huge-but-finite parameters does not hang or crash") {
+    using infraforge::domain::road::ClothoidSegment;
+    // Finite but extreme parameters that would overflow phase computation.
+    const double hugeCurvature = 1e300;
+    ClothoidSegment spiral{.start = {0.0, 0.0}, .startHeading = 0.0,
+        .startCurvature = 0.0, .endCurvature = hugeCurvature, .length = 1e300};
+    // This should not hang; the builder should reject non-finite derived geometry.
+    auto built = ReferenceAlignment::build({spiral});
+    REQUIRE_FALSE(built.has_value());
+    bool foundNonFinite = false;
+    for (const auto& d : built.error()) {
+        if (d.code == infraforge::domain::road::RoadErrorCode::NonFiniteParameter) {
+            foundNonFinite = true;
+            break;
+        }
+    }
+    CHECK(foundNonFinite);
+}
+
+TEST_CASE("alignment with huge heading does not hang angle normalization") {
+    // A huge but finite heading should not cause iterative normalization to hang.
+    const double hugeHeading = 1e18;
+    LineSegment line1{.start = {0.0, 0.0}, .heading = 0.0, .length = 100.0};
+    const auto line1End = line1.endSample();
+    LineSegment line2{.start = line1End.position, .heading = hugeHeading, .length = 100.0};
+    // This should fail G1 continuity (huge heading difference) but not hang.
+    auto built = ReferenceAlignment::build({line1, line2});
+    REQUIRE_FALSE(built.has_value());
+    bool foundHeading = false;
+    for (const auto& d : built.error()) {
+        if (d.code == infraforge::domain::road::RoadErrorCode::HeadingDiscontinuity) {
+            foundHeading = true;
+            break;
+        }
+    }
+    CHECK(foundHeading);
 }
 
 } // TEST_SUITE

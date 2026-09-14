@@ -119,6 +119,13 @@ void integrateClothoid(double theta0, double kappa0, double alpha, double s,
         return;
     }
     const double phaseChange = std::abs(kappa0 * s + alpha * s * s);
+    if (!std::isfinite(phaseChange)) {
+        // Finite parameters can overflow through multiplication; return zero
+        // rather than producing non-finite results or unbounded subdivision.
+        outCos = 0.0;
+        outSin = 0.0;
+        return;
+    }
     constexpr double kMaxPhasePerSub = kPi / 4.0;
     long long m = static_cast<long long>(phaseChange / kMaxPhasePerSub) + 1;
     constexpr long long kMaxSub = 4096;

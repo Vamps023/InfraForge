@@ -152,6 +152,10 @@ void SqliteStatement::bindDouble(const int index, const double value) {
     requireOk(sqlite3_bind_double(handle_, index, value), "bind double failed");
 }
 
+void SqliteStatement::bindNull(const int index) {
+    requireOk(sqlite3_bind_null(handle_, index), "bind null failed");
+}
+
 bool SqliteStatement::step() {
     const int resultCode = sqlite3_step(handle_);
     if (resultCode == SQLITE_ROW) {

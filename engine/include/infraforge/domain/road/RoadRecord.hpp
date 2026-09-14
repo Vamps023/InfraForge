@@ -2,6 +2,7 @@
 
 #include "infraforge/domain/road/Road.hpp"
 
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -37,7 +38,7 @@ struct RoadSourceVertexRecord {
     std::uint64_t index{0};
     double x{0.0};
     double y{0.0};
-    double z{0.0};
+    std::optional<double> z;
 
     friend bool operator==(const RoadSourceVertexRecord&, const RoadSourceVertexRecord&) = default;
 };

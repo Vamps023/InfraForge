@@ -55,11 +55,22 @@ std::vector<RoadDiagnostic> validateProtectedAnchors(
     if (alignment.isEmpty()) {
         return diagnostics;
     }
+    if (!std::isfinite(positionTolerance) || positionTolerance < 0.0) {
+        diagnostics.push_back({RoadErrorCode::InvalidArgument,
+            "protected anchor position tolerance must be finite and non-negative"});
+        return diagnostics;
+    }
     const auto range = alignment.stationRange();
     for (const auto& anchor : anchors) {
         if (!std::isfinite(anchor.station)) {
             diagnostics.push_back({RoadErrorCode::NonFiniteParameter,
                 "protected anchor station is not finite"});
+            continue;
+        }
+        if (!std::isfinite(anchor.position.easting)
+            || !std::isfinite(anchor.position.northing)) {
+            diagnostics.push_back({RoadErrorCode::NonFiniteParameter,
+                "protected anchor position is not finite"});
             continue;
         }
         if (anchor.station < range.start || anchor.station > range.end) {

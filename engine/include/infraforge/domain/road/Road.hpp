@@ -22,18 +22,16 @@ namespace infraforge::domain::road {
 // value; source geometry is optional and stored separately.
 class Road {
 public:
-    Road() = default;
-
     // Builds a canonical road from its constituent parts. Validates the
     // alignment and profiles; returns typed diagnostics on failure. The
     // source geometry is optional (absent for authored roads).
     struct BuildInput {
         RoadId id{};
         std::string displayName;
-        ReferenceAlignment alignment;
-        ElevationProfile elevation;
-        SuperelevationProfile superelevation;
-        RoadSource source;
+        ReferenceAlignment alignment{};
+        ElevationProfile elevation{};
+        SuperelevationProfile superelevation{};
+        RoadSource source{};
     };
 
     [[nodiscard]] static std::expected<Road, std::vector<RoadDiagnostic>> build(BuildInput input);

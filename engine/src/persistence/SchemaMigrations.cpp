@@ -165,7 +165,7 @@ CREATE TABLE road_superelevation_breakpoints (
 
 CREATE TABLE road_source (
     road_id TEXT PRIMARY KEY,
-    provider TEXT NOT NULL,
+    provider TEXT NOT NULL CHECK (provider IN ('osm','opendrive','authored','other')),
     source_id TEXT NOT NULL DEFAULT '',
     source_crs TEXT NOT NULL DEFAULT '',
     imported_at TEXT NOT NULL DEFAULT '',
@@ -178,7 +178,7 @@ CREATE TABLE road_source_vertices (
     vertex_index INTEGER NOT NULL CHECK (vertex_index >= 0),
     x REAL NOT NULL,
     y REAL NOT NULL,
-    z REAL NOT NULL,
+    z REAL,
     PRIMARY KEY (road_id, vertex_index),
     FOREIGN KEY (road_id) REFERENCES road_source(road_id) ON DELETE CASCADE
 );
@@ -189,7 +189,7 @@ CREATE TABLE road_protected_anchors (
     station REAL NOT NULL,
     easting REAL NOT NULL,
     northing REAL NOT NULL,
-    kind TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('junction','endpoint','user_pinned','semantic')),
     PRIMARY KEY (road_id, anchor_index),
     FOREIGN KEY (road_id) REFERENCES roads(id) ON DELETE CASCADE
 );

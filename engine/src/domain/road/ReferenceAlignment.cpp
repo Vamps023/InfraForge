@@ -7,14 +7,13 @@
 namespace infraforge::domain::road {
 namespace {
 
-constexpr double kTwoPi = 2.0 * 3.14159265358979323846;
+constexpr double kPi = 3.14159265358979323846;
 
-// Smallest signed angular difference in (-pi, pi].
+// Smallest signed angular difference in (-pi, pi]. Uses std::remainder which
+// is bounded (no iterative loop) and handles non-finite inputs by returning
+// NaN, which callers detect via std::isfinite before comparing.
 double angleDelta(double a, double b) noexcept {
-    double d = a - b;
-    while (d > 3.14159265358979323846) { d -= kTwoPi; }
-    while (d <= -3.14159265358979323846) { d += kTwoPi; }
-    return d;
+    return std::remainder(a - b, 2.0 * kPi);
 }
 
 } // namespace
@@ -42,12 +41,33 @@ std::expected<ReferenceAlignment, std::vector<RoadDiagnostic>> ReferenceAlignmen
     }
 
     // Continuous stationing: segment i starts where segment i-1 ends.
+    // Also validate that derived end geometry (position, heading, curvature)
+    // is finite — individually finite parameters can produce non-finite
+    // results through overflow (e.g. huge curvature * length).
     std::vector<StationedSegment> stationed;
     stationed.reserve(segments.size());
     Station cursor = 0.0;
     for (std::size_t i = 0; i < segments.size(); ++i) {
+        // Validate derived end geometry before accepting this segment.
+        const AlignmentSample endSample = segmentEndSample(segments[i]);
+        if (!std::isfinite(endSample.position.easting)
+            || !std::isfinite(endSample.position.northing)
+            || !std::isfinite(endSample.heading)
+            || !std::isfinite(endSample.curvature)) {
+            diagnostics.push_back({RoadErrorCode::NonFiniteParameter,
+                "segment " + std::to_string(i)
+                    + " produces non-finite end geometry from finite parameters"});
+        }
         stationed.push_back({cursor, std::move(segments[i])});
         cursor += segmentLength(stationed.back().segment);
+        if (!std::isfinite(cursor)) {
+            diagnostics.push_back({RoadErrorCode::NonFiniteParameter,
+                "station accumulation overflowed to non-finite at segment "
+                    + std::to_string(i)});
+        }
+    }
+    if (!diagnostics.empty()) {
+        return std::unexpected(std::move(diagnostics));
     }
     const double totalLength = cursor;
 
@@ -69,8 +89,10 @@ std::expected<ReferenceAlignment, std::vector<RoadDiagnostic>> ReferenceAlignmen
                 "segment " + std::to_string(i) + " start does not match segment "
                     + std::to_string(i - 1) + " end (G0 failure)"});
         }
-        // G1: tangent/heading continuity (modulo 2*pi).
-        if (std::abs(angleDelta(nextHeading, prevEnd.heading)) > headingTolerance) {
+        // G1: tangent/heading continuity (modulo 2*pi). std::remainder
+        // returns NaN for non-finite inputs; detect and report that.
+        const double hd = angleDelta(nextHeading, prevEnd.heading);
+        if (!std::isfinite(hd) || std::abs(hd) > headingTolerance) {
             diagnostics.push_back({RoadErrorCode::HeadingDiscontinuity,
                 "segment " + std::to_string(i) + " start heading does not match segment "
                     + std::to_string(i - 1) + " end heading (G1 failure)"});

@@ -200,7 +200,9 @@ TEST_CASE("imported road with source geometry persists and reopens") {
 
     infraforge::domain::road::RoadSource source;
     source.geometry.sourceCrs = "EPSG:4326";
-    source.geometry.vertices = {{-122.4, 37.8, 10.0}, {-122.41, 37.81, 12.0}};
+    source.geometry.vertices = {
+        {-122.4, 37.8, std::optional<double>{10.0}},
+        {-122.41, 37.81, std::optional<double>{12.0}}};
     source.provenance.provider = SourceProvider::Osm;
     source.provenance.sourceId = "way/123456";
     source.provenance.tags = {{"highway", "motorway"}};
@@ -233,11 +235,57 @@ TEST_CASE("imported road with source geometry persists and reopens") {
     CHECK(restored.sourceCrs == "EPSG:4326");
     REQUIRE(restored.sourceVertices.size() == 2);
     CHECK(restored.sourceVertices[0].x == doctest::Approx(-122.4));
+    REQUIRE(restored.sourceVertices[0].z.has_value());
+    CHECK(*restored.sourceVertices[0].z == doctest::Approx(10.0));
     REQUIRE(restored.sourceTags.size() == 1);
     CHECK(restored.sourceTags[0].key == "highway");
     CHECK(restored.sourceTags[0].value == "motorway");
     REQUIRE(restored.protectedAnchors.size() == 2);
     CHECK(restored.protectedAnchors[0].kind == AnchorKind::Endpoint);
+    (void)store.close();
+}
+
+TEST_CASE("source vertex with missing elevation round-trips as absent z") {
+    infraforge::testhelpers::ScratchDirectory scratch;
+    infraforge::persistence::SqliteProjectStore store;
+    (void)store.create(infraforge::testhelpers::sampleCreateSpec(scratch.path()));
+
+    LineSegment line{.start = {0.0, 0.0}, .heading = 0.0, .length = 100.0};
+    auto alignment = ReferenceAlignment::build({line});
+    REQUIRE(alignment.has_value());
+
+    infraforge::domain::road::RoadSource source;
+    source.geometry.sourceCrs = "EPSG:4326";
+    // First vertex has no elevation (z absent), second has elevation.
+    source.geometry.vertices = {
+        {-122.4, 37.8, std::optional<double>{}},
+        {-122.41, 37.81, std::optional<double>{12.0}}};
+    source.provenance.provider = SourceProvider::Osm;
+    source.provenance.sourceId = "way/789";
+    source.provenance.importedAt = "2026-09-14T00:00:00Z";
+
+    Road::BuildInput input{
+        .id = makeRoadId("dddddddd-eeee-ffff-0000-111111111111"),
+        .displayName = "Missing Z Road",
+        .alignment = *alignment,
+        .source = source,
+    };
+    auto road = Road::build(std::move(input));
+    REQUIRE(road.has_value());
+
+    (void)store.insertRoad(toRecord(*road));
+    (void)store.save();
+    (void)store.close();
+
+    const auto projectDirectory = scratch.path() / "Test Project.iforge";
+    (void)store.open(projectDirectory);
+    auto roads = store.roads();
+    REQUIRE(roads.size() == 1);
+    const auto& restored = roads[0];
+    REQUIRE(restored.sourceVertices.size() == 2);
+    CHECK_FALSE(restored.sourceVertices[0].z.has_value());  // missing z stays absent
+    REQUIRE(restored.sourceVertices[1].z.has_value());
+    CHECK(*restored.sourceVertices[1].z == doctest::Approx(12.0));
     (void)store.close();
 }
 

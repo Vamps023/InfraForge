@@ -25,9 +25,9 @@ struct StationedSegment {
 // Default engineering tolerances for alignment continuity validation, in
 // canonical project units. Callers may pass tighter/looser tolerances to
 // build() when a domain policy requires it.
-inline constexpr double kDefaultPositionTolerance = 1e-6;   // metres
+inline constexpr double kDefaultPositionTolerance = 1e-6;   // canonical project units
 inline constexpr double kDefaultHeadingTolerance = 1e-6;    // radians
-inline constexpr double kDefaultCurvatureTolerance = 1e-9;  // 1/metres
+inline constexpr double kDefaultCurvatureTolerance = 1e-9;  // 1/canonical project units
 
 // Canonical reference alignment: an ordered sequence of line/arc/clothoid
 // segments with continuous stationing. Owns the road's horizontal mathematical

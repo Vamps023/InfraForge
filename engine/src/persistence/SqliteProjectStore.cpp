@@ -762,7 +762,12 @@ std::vector<domain::road::RoadRecord> SqliteProjectStore::roadsImpl() const {
         while (segRows.step()) {
             domain::road::RoadSegmentRecord sr;
             sr.segmentIndex = static_cast<std::uint64_t>(segRows.columnInt64(0));
-            sr.kind = *domain::road::alignmentSegmentKindFromName(segRows.columnText(1));
+            const auto kind = domain::road::alignmentSegmentKindFromName(segRows.columnText(1));
+            if (!kind.has_value()) {
+                fail(ports::StoreErrorCategory::PersistenceFailure,
+                    "road_segments.segment_kind is not a recognized enum value for road " + std::string{roadRows.columnText(0)});
+            }
+            sr.kind = *kind;
             sr.start.easting = segRows.columnDouble(2);
             sr.start.northing = segRows.columnDouble(3);
             sr.startHeading = segRows.columnDouble(4);
@@ -800,7 +805,12 @@ std::vector<domain::road::RoadRecord> SqliteProjectStore::roadsImpl() const {
         srcRows.bindText(1, roadRows.columnText(0));
         if (srcRows.step()) {
             road.hasSource = true;
-            road.provider = *domain::road::sourceProviderFromName(srcRows.columnText(0));
+            const auto provider = domain::road::sourceProviderFromName(srcRows.columnText(0));
+            if (!provider.has_value()) {
+                fail(ports::StoreErrorCategory::PersistenceFailure,
+                    "road_source.provider is not a recognized enum value for road " + std::string{roadRows.columnText(0)});
+            }
+            road.provider = *provider;
             road.sourceId = std::string{srcRows.columnText(1)};
             road.sourceCrs = std::string{srcRows.columnText(2)};
             road.importedAt = std::string{srcRows.columnText(3)};
@@ -817,9 +827,14 @@ std::vector<domain::road::RoadRecord> SqliteProjectStore::roadsImpl() const {
             vtxRows.bindText(1, roadRows.columnText(0));
             std::uint64_t vIdx = 0;
             while (vtxRows.step()) {
-                road.sourceVertices.push_back({vIdx++,
-                    vtxRows.columnDouble(0), vtxRows.columnDouble(1),
-                    vtxRows.columnDouble(2)});
+                domain::road::RoadSourceVertexRecord v;
+                v.index = vIdx++;
+                v.x = vtxRows.columnDouble(0);
+                v.y = vtxRows.columnDouble(1);
+                if (!vtxRows.columnIsNull(2)) {
+                    v.z = vtxRows.columnDouble(2);
+                }
+                road.sourceVertices.push_back(v);
             }
         }
 
@@ -830,10 +845,15 @@ std::vector<domain::road::RoadRecord> SqliteProjectStore::roadsImpl() const {
         anchorRows.bindText(1, roadRows.columnText(0));
         std::uint64_t aIdx = 0;
         while (anchorRows.step()) {
+            const auto anchorKind = domain::road::anchorKindFromName(anchorRows.columnText(3));
+            if (!anchorKind.has_value()) {
+                fail(ports::StoreErrorCategory::PersistenceFailure,
+                    "road_protected_anchors.kind is not a recognized enum value for road " + std::string{roadRows.columnText(0)});
+            }
             road.protectedAnchors.push_back({aIdx++,
                 anchorRows.columnDouble(0),
                 {anchorRows.columnDouble(1), anchorRows.columnDouble(2)},
-                *domain::road::anchorKindFromName(anchorRows.columnText(3))});
+                *anchorKind});
         }
 
         roads.push_back(std::move(road));
@@ -931,7 +951,11 @@ domain::road::RoadRecord SqliteProjectStore::insertRoadImpl(
                 insertVtx.bindInt64(2, static_cast<std::int64_t>(v.index));
                 insertVtx.bindDouble(3, v.x);
                 insertVtx.bindDouble(4, v.y);
-                insertVtx.bindDouble(5, v.z);
+                if (v.z.has_value()) {
+                    insertVtx.bindDouble(5, *v.z);
+                } else {
+                    insertVtx.bindNull(5);
+                }
                 (void)insertVtx.step();
             }
         }

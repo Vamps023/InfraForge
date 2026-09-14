@@ -35,8 +35,10 @@ namespace infraforge::domain::road {
 struct SourceVertex {
     double x{0.0};
     double y{0.0};
-    // Optional source-elevation, if the source provides it. May be NaN.
-    double z{0.0};
+    // Optional source-elevation, if the source provides it. Absent
+    // (nullopt) when the source has no elevation data; never represented
+    // as NaN so it round-trips safely through SQLite NULL.
+    std::optional<double> z;
 
     friend bool operator==(const SourceVertex&, const SourceVertex&) = default;
 };
@@ -116,9 +118,13 @@ struct ConditionedVertex {
 struct AlignmentFitInput {
     std::vector<ConditionedVertex> polyline;
     std::vector<ProtectedAnchor> protectedAnchors;
-    // Tolerances for the fit (position deviation, max curvature, ...).
+    // Tolerance for position deviation during the fit.
     double positionTolerance{kDefaultPositionTolerance};
-    double maxCurvature{0.05}; // 1/20m minimum radius by default
+    // Optional maximum curvature constraint (1/radius in canonical project
+    // units). When absent, the fitter must not invent a minimum radius or
+    // design speed (Issue #7: do not invent engineering constraints the
+    // caller has not supplied).
+    std::optional<double> maxCurvature;
 };
 
 // Result of an alignment fit: either a canonical ReferenceAlignment or a

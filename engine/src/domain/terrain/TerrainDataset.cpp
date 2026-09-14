@@ -57,7 +57,7 @@ std::string_view terrainErrorCodeName(TerrainErrorCode code) noexcept {
 }
 
 std::optional<TerrainErrorCode> terrainErrorCodeFromName(std::string_view name) noexcept {
-    for (std::size_t index = 0; index <= static_cast<std::size_t>(TerrainErrorCode::InvalidArgument);
+    for (std::size_t index = 0; index <= static_cast<std::size_t>(TerrainErrorCode::SelectionTooLarge);
          ++index) {
         const auto code = static_cast<TerrainErrorCode>(index);
         if (errorCodeName(code) == name) {

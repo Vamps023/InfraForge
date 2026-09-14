@@ -405,17 +405,13 @@ std::filesystem::path TerrariumTerrainProvider::fetchRequest(
         if (cancel) cancel();
 
         // Use the cancellation-aware HTTP overload. The atomic flag is
-        // set by the cancel callback wrapper in TerrainService.
+        // checked by the HTTP client before starting the request. We also
+        // check the cancel callback before and after each attempt.
         std::atomic<bool> cancelFlag{false};
-        auto cancelFn = [&cancelFlag] { cancelFlag.store(true); };
-        // If a cancellation callback was provided, wire it so that calling
-        // cancel() sets the flag; the HTTP client checks it before the
-        // request.
         if (cancel) {
-            // We cannot change the cancel callback mid-request; instead we
-            // check cancellation before and after the request, and use the
-            // cancellation-aware overload so the HTTP client also checks.
-            // The cancel callback itself throws when called.
+            // Check cancellation before the request; the callback throws
+            // on cancellation, which propagates up through the worker.
+            cancel();
         }
         auto response = httpClient_->get(url, cancelFlag);
 

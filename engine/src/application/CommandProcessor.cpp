@@ -225,6 +225,14 @@ std::string_view failureCodeName(const CommandFailureCode code) {
     case domain::terrain::TerrainErrorCode::InvalidCoverage:
     case domain::terrain::TerrainErrorCode::TileGenerationFailed:
     case domain::terrain::TerrainErrorCode::NodataCells:
+    case domain::terrain::TerrainErrorCode::ProviderAuthenticationFailed:
+    case domain::terrain::TerrainErrorCode::ProviderRateLimited:
+    case domain::terrain::TerrainErrorCode::ProviderNetworkTimeout:
+    case domain::terrain::TerrainErrorCode::ProviderUnavailable:
+    case domain::terrain::TerrainErrorCode::ProviderUnsupportedCoverage:
+    case domain::terrain::TerrainErrorCode::ProviderInvalidResponse:
+    case domain::terrain::TerrainErrorCode::ProviderCorruptResponse:
+    case domain::terrain::TerrainErrorCode::SelectionTooLarge:
         return CommandFailure(CommandFailureCode::TerrainUnsupported, error.what());
     }
     return CommandFailure(CommandFailureCode::TerrainUnsupported, error.what());

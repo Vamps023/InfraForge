@@ -254,7 +254,7 @@ button { color: inherit; }
 .working-area-summary.empty { color: var(--disabled); }
 
 /* Download Area map */
-.download-area-map { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 5px; overflow: hidden; background: #11151a; }
+.download-area-map { display: flex; flex-direction: column; min-height: 0; border: 1px solid var(--border); border-radius: 5px; overflow: hidden; background: #11151a; }
 .map-toolbar { display: flex; align-items: center; gap: 8px; padding: 8px; border-bottom: 1px solid var(--border); background: var(--bg-1); flex-wrap: wrap; }
 .map-search { position: relative; display: flex; align-items: center; gap: 6px; flex: 1; min-width: 240px; }
 .map-search-input { flex: 1; padding: 6px 8px; border: 1px solid var(--border-strong); border-radius: 3px; background: var(--bg-2); color: var(--text); font-size: 12px; }
@@ -282,7 +282,7 @@ button { color: inherit; }
 .map-goto-error { color: var(--error); font-size: 11px; }
 
 /* Map stage: dark background, no white flash, fills available height */
-.map-stage { position: relative; flex: 1; min-height: 360px; height: 520px; background: #11151a; }
+.map-stage { position: relative; flex: 0 0 clamp(360px, 52vh, 520px); min-height: 360px; height: clamp(360px, 52vh, 520px); background: #11151a; }
 .download-area-map.mode-draw .map-stage { cursor: crosshair; }
 .map-stage .leaflet-container { height: 100%; width: 100%; background: #11151a; }
 

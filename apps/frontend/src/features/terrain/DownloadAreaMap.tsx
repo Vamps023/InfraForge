@@ -155,17 +155,21 @@ function FitBounds({ bounds }: { bounds: GeoBounds | null }) {
 // when the map is mounted inside a dialog/hidden tab.
 function MapResizer({ token }: { token?: number }) {
   const map = useMap()
-  useEffect(() => {
+  const refresh = useCallback(() => {
     map.invalidateSize()
-  }, [map, token])
+    requestAnimationFrame(() => map.invalidateSize())
+  }, [map])
+  useEffect(() => {
+    refresh()
+  }, [refresh, token])
   useEffect(() => {
     const container = map.getContainer()
     const observer = new ResizeObserver(() => {
-      map.invalidateSize()
+      refresh()
     })
     observer.observe(container)
     return () => observer.disconnect()
-  }, [map])
+  }, [map, refresh])
   return null
 }
 

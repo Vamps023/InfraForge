@@ -47,7 +47,7 @@ function WorkspaceRailItem({
         className={`workspace-rail-item${active ? ' active' : ''}${!workspace.enabled ? ' disabled' : ''}`}
         aria-label={workspace.label}
         aria-current={active ? 'page' : undefined}
-        aria-disabled={!workspace.enabled}
+        aria-disabled={!workspace.enabled ? true : undefined}
         disabled={!workspace.enabled}
         onClick={onSelect}
       >

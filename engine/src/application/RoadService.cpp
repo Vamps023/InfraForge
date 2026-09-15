@@ -1215,11 +1215,27 @@ RoadRecord RoadService::buildNewRoadRecord(
     roadInput.source.provenance.provider = provider;
     roadInput.source.protectedAnchors = anchors;
 
-    // Blocker 16: if source elevations were supplied, build an initial
+    // Blocker 16/20: if source elevations were supplied, build an initial
     // elevation profile from them so the road starts with meaningful
-    // vertical geometry rather than discarding the data.
+    // vertical geometry rather than discarding the data. Source elevations
+    // are at SOURCE polyline stations; the elevation profile uses ALIGNMENT
+    // stations. Scale source stations to the alignment's station range so
+    // breakpoints are correctly positioned on the fitted alignment.
     if (!sourceElevations.empty()) {
         std::vector<ProfileBreakpoint> elevBreakpoints;
+        double sourceTotalLength = 0.0;
+        for (std::size_t i = 1; i < polyline.size(); ++i) {
+            const double dx = polyline[i].position.easting -
+                polyline[i - 1].position.easting;
+            const double dy = polyline[i].position.northing -
+                polyline[i - 1].position.northing;
+            sourceTotalLength += std::sqrt(dx * dx + dy * dy);
+        }
+        const double alignmentLength = alignment.totalLength();
+        const double stationScale = (sourceTotalLength > 1e-9)
+            ? alignmentLength / sourceTotalLength
+            : 1.0;
+
         double cumulativeStation = 0.0;
         for (std::size_t i = 0; i < polyline.size(); ++i) {
             if (i < sourceElevations.size() && sourceElevations[i].has_value()) {
@@ -1230,8 +1246,10 @@ RoadRecord RoadService::buildNewRoadRecord(
                         polyline[i - 1].position.northing;
                     cumulativeStation += std::sqrt(dx * dx + dy * dy);
                 }
+                // Map source station to alignment station.
+                const double alignmentStation = cumulativeStation * stationScale;
                 elevBreakpoints.push_back(
-                    {cumulativeStation, *sourceElevations[i]});
+                    {alignmentStation, *sourceElevations[i]});
             }
         }
         if (elevBreakpoints.size() >= 2) {

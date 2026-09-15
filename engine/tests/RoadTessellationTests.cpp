@@ -172,16 +172,46 @@ TEST_CASE("tessellateRoad with small interval produces more samples") {
     CHECK(tess.triangleCount() == 200);      // 100 pairs * 2 triangles
 }
 
-TEST_CASE("tessellateRoad clamps interval to safe minimum") {
+// Blocker 13: invalid tessellation inputs are rejected, not silently
+// clamped. A zero or negative interval would produce undefined geometry.
+TEST_CASE("tessellateRoad rejects zero interval") {
     auto alignment = makeStraightAlignment(100.0);
     RoadTessellationParams params;
     params.stationInterval = 0.0;  // invalid
     params.halfWidth = 5.0;
 
     auto tess = tessellateRoad(alignment, {}, {}, params);
-    // Should still produce a valid tessellation with the clamped interval.
-    CHECK(tess.crossSectionCount() >= 2);
-    CHECK(tess.triangleCount() >= 2);
+    CHECK(tess.isEmpty());
+}
+
+TEST_CASE("tessellateRoad rejects negative interval") {
+    auto alignment = makeStraightAlignment(100.0);
+    RoadTessellationParams params;
+    params.stationInterval = -5.0;
+    params.halfWidth = 5.0;
+
+    auto tess = tessellateRoad(alignment, {}, {}, params);
+    CHECK(tess.isEmpty());
+}
+
+TEST_CASE("tessellateRoad rejects non-finite interval") {
+    auto alignment = makeStraightAlignment(100.0);
+    RoadTessellationParams params;
+    params.stationInterval = std::numeric_limits<double>::quiet_NaN();
+    params.halfWidth = 5.0;
+
+    auto tess = tessellateRoad(alignment, {}, {}, params);
+    CHECK(tess.isEmpty());
+}
+
+TEST_CASE("tessellateRoad rejects negative halfWidth") {
+    auto alignment = makeStraightAlignment(100.0);
+    RoadTessellationParams params;
+    params.stationInterval = 10.0;
+    params.halfWidth = -5.0;
+
+    auto tess = tessellateRoad(alignment, {}, {}, params);
+    CHECK(tess.isEmpty());
 }
 
 } // namespace infraforge::domain::road

@@ -32,13 +32,23 @@ RoadTessellation tessellateRoad(
     }
 
     const double totalLength = alignment.totalLength();
-    if (totalLength <= 0.0) {
+    if (totalLength <= 0.0 || !std::isfinite(totalLength)) {
+        return tess;
+    }
+
+    // Blocker 13: harden tessellation inputs. Reject non-finite and
+    // negative parameters rather than silently clamping them — a NaN
+    // interval or negative width would produce undefined geometry.
+    if (!std::isfinite(params.stationInterval) || params.stationInterval <= 0.0) {
+        return tess;
+    }
+    if (!std::isfinite(params.halfWidth) || params.halfWidth < 0.0) {
         return tess;
     }
 
     // Clamp station interval to a safe minimum and ensure at least 2 samples.
     const double interval = std::max(params.stationInterval, 1e-3);
-    const double halfWidth = std::max(params.halfWidth, 0.0);
+    const double halfWidth = params.halfWidth;
 
     // Sample the alignment at regular station intervals.
     // Always include station 0 and the final station.

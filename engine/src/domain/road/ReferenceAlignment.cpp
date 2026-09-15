@@ -23,7 +23,8 @@ std::expected<ReferenceAlignment, std::vector<RoadDiagnostic>> ReferenceAlignmen
     std::vector<AlignmentSegment> segments,
     const double positionTolerance,
     const double headingTolerance,
-    const double curvatureTolerance) {
+    const double curvatureTolerance,
+    const std::set<std::size_t>& anchorBoundarySegments) {
     std::vector<RoadDiagnostic> diagnostics;
 
     // Validate tolerances before using them for continuity checks. A NaN
@@ -117,8 +118,11 @@ std::expected<ReferenceAlignment, std::vector<RoadDiagnostic>> ReferenceAlignmen
                 "segment " + std::to_string(i) + " start heading does not match segment "
                     + std::to_string(i - 1) + " end heading (G1 failure)"});
         }
-        // Curvature continuity.
-        if (std::abs(nextCurvature - prevEndCurvature) > curvatureTolerance) {
+        // Curvature continuity. Skipped at protected-anchor boundaries:
+        // a junction anchor may carry an intentional curvature
+        // discontinuity and takes precedence over smoothness.
+        if (!anchorBoundarySegments.contains(i) &&
+            std::abs(nextCurvature - prevEndCurvature) > curvatureTolerance) {
             diagnostics.push_back({RoadErrorCode::CurvatureDiscontinuity,
                 "segment " + std::to_string(i) + " start curvature does not match segment "
                     + std::to_string(i - 1) + " end curvature"});

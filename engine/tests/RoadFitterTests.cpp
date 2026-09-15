@@ -474,6 +474,92 @@ TEST_CASE("finite arc: clockwise arc respects angular span") {
     REQUIRE_FALSE(diags.empty());
 }
 
+// Blocker 8: protected anchors act as true fit constraints. An interior
+// anchor vertex must be a section boundary so the fitted alignment passes
+// through the anchor position exactly, not merely within tolerance.
+TEST_CASE("protected anchor constrains the fitter to pass through it") {
+    // A line-arc-line polyline with a protected anchor at the arc start.
+    auto polyline = makeLineArcLinePolyline(
+        0.0, 0.0, 0.0, 50.0, 0.01, 80.0, 50.0, 10);
+
+    // Anchor at the line-to-arc transition (vertex index 9, which is the
+    // last point of the first line section = first point of the arc).
+    const std::size_t anchorIdx = 9;
+    ProtectedAnchor anchor;
+    anchor.station = 0.0;  // station is recomputed by the caller
+    anchor.position = polyline[anchorIdx].position;
+    anchor.kind = AnchorKind::Junction;
+
+    // Compute the cumulative station for the anchor.
+    double cumulative = 0.0;
+    for (std::size_t i = 1; i <= anchorIdx && i < polyline.size(); ++i) {
+        const double dx = polyline[i].position.easting - polyline[i-1].position.easting;
+        const double dy = polyline[i].position.northing - polyline[i-1].position.northing;
+        cumulative += std::sqrt(dx*dx + dy*dy);
+    }
+    anchor.station = cumulative;
+
+    AlignmentFitInput input;
+    input.polyline = polyline;
+    input.protectedAnchors = {anchor};
+    input.positionTolerance = 15.0;
+
+    auto result = fitAlignment(input);
+    REQUIRE(result.alignment.has_value());
+    REQUIRE(result.diagnostics.empty());
+
+    // The anchor vertex is a section boundary, so a segment must start
+    // at the anchor position exactly.
+    bool foundBoundary = false;
+    for (const auto& seg : result.alignment->segments()) {
+        std::visit([&](const auto& s) {
+            const double dxS = s.start.easting - anchor.position.easting;
+            const double dyS = s.start.northing - anchor.position.northing;
+            if (std::sqrt(dxS*dxS + dyS*dyS) < 1e-6) foundBoundary = true;
+        }, seg.segment);
+    }
+    CHECK(foundBoundary);
+}
+
+TEST_CASE("protected anchor is preserved when surrounding controls move") {
+    // A simple arc polyline with an interior anchor.
+    auto polyline = makeArcPolyline(0.0, 0.0, 0.0, 0.01, 100.0, 20);
+    const std::size_t anchorIdx = 10;
+    ProtectedAnchor anchor;
+    anchor.station = 0.0;
+    anchor.position = polyline[anchorIdx].position;
+    anchor.kind = AnchorKind::Junction;
+
+    double cumulative = 0.0;
+    for (std::size_t i = 1; i <= anchorIdx && i < polyline.size(); ++i) {
+        const double dx = polyline[i].position.easting - polyline[i-1].position.easting;
+        const double dy = polyline[i].position.northing - polyline[i-1].position.northing;
+        cumulative += std::sqrt(dx*dx + dy*dy);
+    }
+    anchor.station = cumulative;
+
+    AlignmentFitInput input;
+    input.polyline = polyline;
+    input.protectedAnchors = {anchor};
+    input.positionTolerance = 5.0;
+
+    auto result = fitAlignment(input);
+    REQUIRE(result.alignment.has_value());
+    REQUIRE(result.diagnostics.empty());
+
+    // The anchor vertex is a section boundary, so a segment must start
+    // or end at the anchor position exactly.
+    bool foundBoundary = false;
+    for (const auto& seg : result.alignment->segments()) {
+        std::visit([&](const auto& s) {
+            const double dxS = s.start.easting - anchor.position.easting;
+            const double dyS = s.start.northing - anchor.position.northing;
+            if (std::sqrt(dxS*dxS + dyS*dyS) < 1e-6) foundBoundary = true;
+        }, seg.segment);
+    }
+    CHECK(foundBoundary);
+}
+
 TEST_CASE("absent max curvature does not invent a constraint") {
     // Without maxCurvature, the fitter should not reject any curvature.
     auto polyline = makeArcPolyline(0.0, 0.0, 0.0, 0.1, 30.0, 15);

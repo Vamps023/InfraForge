@@ -68,12 +68,16 @@ struct PolylineSection {
 }
 
 // Segments the polyline into straight and curved sections by analyzing
-// heading changes between consecutive edges.
+// heading changes between consecutive edges. Protected anchor indices are
+// treated as hard section boundaries: each section starts/ends at an
+// anchor vertex so the fitted alignment passes through the anchor exactly
+// (Blocker 8).
 [[nodiscard]] std::vector<PolylineSection> detectSections(
     const std::vector<ConditionedVertex>& polyline,
     const std::vector<double>& stations,
     const std::vector<double>& edgeHeadings,
-    double straightThreshold) noexcept {
+    double straightThreshold,
+    const std::vector<std::size_t>& anchorIndices = {}) noexcept {
     std::vector<PolylineSection> sections;
     if (polyline.size() < 2) return sections;
 
@@ -100,12 +104,23 @@ struct PolylineSection {
         }
     }
 
-    // Group consecutive edges into sections.
+    // Build a set of anchor vertex indices for O(1) lookup. Anchor
+    // vertices are hard section boundaries: the fitter must produce a
+    // segment boundary at each anchor so the alignment passes through
+    // the anchor position exactly (Blocker 8).
+    std::vector<bool> isAnchor(polyline.size(), false);
+    for (const auto idx : anchorIndices) {
+        if (idx < polyline.size()) isAnchor[idx] = true;
+    }
+
+    // Group consecutive edges into sections. A section boundary is
+    // forced at every anchor vertex in addition to kind changes.
     std::size_t sectionStart = 0;
     SectionKind currentKind = edgeIsCurved[0] ? SectionKind::Curved : SectionKind::Straight;
     for (std::size_t i = 1; i < edgeIsCurved.size(); ++i) {
+        const bool atAnchor = isAnchor[i];
         SectionKind edgeKind = edgeIsCurved[i] ? SectionKind::Curved : SectionKind::Straight;
-        if (edgeKind != currentKind) {
+        if (atAnchor || edgeKind != currentKind) {
             sections.push_back({sectionStart, i, currentKind,
                 stations[sectionStart], stations[i]});
             sectionStart = i;
@@ -117,19 +132,19 @@ struct PolylineSection {
         stations[sectionStart], stations[polyline.size() - 1]});
 
     // Merge tiny sections (shorter than 2 edges) into neighbors.
+    // Never merge across an anchor boundary — anchors are hard
+    // constraints that must not be undone (Blocker 8).
     if (sections.size() > 2) {
         std::vector<PolylineSection> merged;
         merged.push_back(sections[0]);
         for (std::size_t i = 1; i < sections.size(); ++i) {
             auto& last = merged.back();
-            // Merge if the section is too short (fewer than minArcPoints for curved,
-            // or shorter than 3 points for straight) and has the same kind as the
-            // previous, or if it's a single-edge section.
-            if (sections[i].endIndex - sections[i].startIndex < 2) {
+            const bool anchorBoundary = isAnchor[sections[i].startIndex];
+            if (!anchorBoundary &&
+                sections[i].endIndex - sections[i].startIndex < 2) {
                 // Too short to be meaningful — merge with previous.
                 last.endIndex = sections[i].endIndex;
                 last.endStation = sections[i].endStation;
-                last.kind = last.kind;  // keep previous kind
             } else {
                 merged.push_back(sections[i]);
             }
@@ -303,6 +318,10 @@ struct PolylineSection {
 struct FitterState {
     std::vector<AlignmentSegment> segments;
     std::vector<RoadDiagnostic> diagnostics;
+    // Indices of segments that start at a protected anchor. At those
+    // boundaries the alignment may carry an intentional curvature
+    // discontinuity (the anchor takes precedence over smoothness).
+    std::set<std::size_t> anchorBoundarySegments;
 };
 
 // Computes a deterministic clothoid transition length for a curvature
@@ -341,9 +360,19 @@ struct FitterState {
 [[nodiscard]] FitterState buildSegments(
     const std::vector<ConditionedVertex>& polyline,
     const std::vector<PolylineSection>& sections,
-    const AlignmentFitConfig& config) noexcept {
+    const AlignmentFitConfig& config,
+    const std::vector<std::size_t>& anchorIndices = {}) noexcept {
     FitterState state;
     if (sections.empty()) return state;
+
+    // Anchor vertices are hard constraints: the alignment must pass
+    // through them exactly. Clothoid transitions must not be inserted at
+    // an anchor boundary because they would move the segment boundary
+    // away from the anchor position (Blocker 8).
+    std::vector<bool> isAnchorVertex(polyline.size(), false);
+    for (const auto idx : anchorIndices) {
+        if (idx < polyline.size()) isAnchorVertex[idx] = true;
+    }
 
     // For each section, produce the base segment (line or arc).
     struct BaseSegment {
@@ -351,6 +380,7 @@ struct FitterState {
         double startStation{0.0};
         double endStation{0.0};
         SectionKind kind{SectionKind::Straight};
+        bool startsAtAnchor{false};
     };
 
     std::vector<BaseSegment> baseSegments;
@@ -358,9 +388,10 @@ struct FitterState {
         const AlignmentPoint& startPt = polyline[sec.startIndex].position;
         const AlignmentPoint& endPt = polyline[sec.endIndex].position;
 
+        const bool startsAtAnchor = isAnchorVertex[sec.startIndex];
         if (sec.kind == SectionKind::Straight) {
             LineSegment line = fitLine(startPt, endPt);
-            baseSegments.push_back({line, sec.startStation, sec.endStation, SectionKind::Straight});
+            baseSegments.push_back({line, sec.startStation, sec.endStation, SectionKind::Straight, startsAtAnchor});
         } else {
             auto arc = fitArc(polyline, sec.startIndex, sec.endIndex);
             if (arc) {
@@ -370,10 +401,10 @@ struct FitterState {
                         "Fitted arc curvature exceeds the configured maximum"});
                     return state;
                 }
-                baseSegments.push_back({*arc, sec.startStation, sec.endStation, SectionKind::Curved});
+                baseSegments.push_back({*arc, sec.startStation, sec.endStation, SectionKind::Curved, startsAtAnchor});
             } else {
                 LineSegment line = fitLine(startPt, endPt);
-                baseSegments.push_back({line, sec.startStation, sec.endStation, SectionKind::Straight});
+                baseSegments.push_back({line, sec.startStation, sec.endStation, SectionKind::Straight, startsAtAnchor});
             }
         }
     }
@@ -404,8 +435,15 @@ struct FitterState {
         const double currStartK = segmentStartCurvature(baseSegments[i].segment);
         const double deltaK = currStartK - prevEndK;
 
-        if (std::abs(deltaK) < config.curvatureTolerance) {
-            // Curvature is already continuous — adjust start point/heading.
+        // At an anchor boundary, the alignment must pass through the
+        // anchor position exactly. Clothoid transitions would move the
+        // boundary away from the anchor, so we connect directly with
+        // G1 continuity instead (curvature discontinuity is accepted at
+        // anchor boundaries — the anchor takes precedence over smoothness).
+        const bool atAnchor = baseSegments[i].startsAtAnchor;
+        if (std::abs(deltaK) < config.curvatureTolerance || atAnchor) {
+            // Curvature is already continuous OR this is an anchor
+            // boundary — adjust start point/heading only.
             AlignmentSegment adjusted = baseSegments[i].segment;
             const AlignmentSample prevEnd = segmentEndSample(prev);
             std::visit([&](auto& seg) {
@@ -419,6 +457,9 @@ struct FitterState {
                     seg.startCurvature = prevEnd.curvature;
                 }
             }, adjusted);
+            if (atAnchor) {
+                state.anchorBoundarySegments.insert(state.segments.size());
+            }
             state.segments.push_back(adjusted);
         } else {
             // Blocker 5: insert a real clothoid transition between the
@@ -564,9 +605,28 @@ AlignmentFitResult fitAlignment(const AlignmentFitInput& input,
     const auto stations = computeStations(input.polyline);
     const auto edgeHeadings = computeEdgeHeadings(input.polyline);
 
+    // Blocker 8: protected anchors are true fit constraints. Map each
+    // anchor to its polyline vertex index and pass the indices to
+    // detectSections so each anchor vertex becomes a hard section
+    // boundary — the fitted alignment then passes through every anchor
+    // exactly instead of merely being validated after the fact.
+    std::vector<std::size_t> anchorIndices;
+    anchorIndices.reserve(input.protectedAnchors.size());
+    for (const auto& anchor : input.protectedAnchors) {
+        for (std::size_t i = 0; i < input.polyline.size(); ++i) {
+            const double dx = input.polyline[i].position.easting - anchor.position.easting;
+            const double dy = input.polyline[i].position.northing - anchor.position.northing;
+            if (std::sqrt(dx * dx + dy * dy) < 1e-9) {
+                anchorIndices.push_back(i);
+                break;
+            }
+        }
+    }
+
     // Detect sections.
     const auto sections = detectSections(
-        input.polyline, stations, edgeHeadings, config.straightHeadingThreshold);
+        input.polyline, stations, edgeHeadings, config.straightHeadingThreshold,
+        anchorIndices);
 
     if (sections.empty()) {
         result.diagnostics.push_back({
@@ -576,7 +636,7 @@ AlignmentFitResult fitAlignment(const AlignmentFitInput& input,
     }
 
     // Build segments with clothoid transitions.
-    auto state = buildSegments(input.polyline, sections, mergedConfig);
+    auto state = buildSegments(input.polyline, sections, mergedConfig, anchorIndices);
     if (!state.diagnostics.empty()) {
         result.diagnostics = std::move(state.diagnostics);
         return result;
@@ -599,7 +659,8 @@ AlignmentFitResult fitAlignment(const AlignmentFitInput& input,
         std::move(state.segments),
         input.positionTolerance,
         config.headingTolerance,
-        config.curvatureTolerance);
+        config.curvatureTolerance,
+        state.anchorBoundarySegments);
     if (!alignment.has_value()) {
         result.diagnostics = std::move(alignment.error());
         return result;

@@ -191,12 +191,11 @@ TEST_CASE("S-curve produces multi-segment alignment") {
     input.positionTolerance = 50.0;  // generous for S-curve fit
 
     auto result = fitAlignment(input);
-    // The fitter should either produce a valid alignment or typed diagnostics.
-    // Either outcome is acceptable as long as it's deterministic and safe.
-    REQUIRE((result.alignment.has_value() || !result.diagnostics.empty()));
-    if (result.alignment.has_value()) {
-        REQUIRE(result.alignment->segmentCount() >= 1);
-    }
+    // Blocker 21: require actual success — an S-curve is a standard road
+    // alignment shape that the fitter must produce, not merely diagnose.
+    REQUIRE(result.alignment.has_value());
+    REQUIRE(result.diagnostics.empty());
+    REQUIRE(result.alignment->segmentCount() >= 1);
 }
 
 TEST_CASE("coarse source points are fitted") {
@@ -212,8 +211,10 @@ TEST_CASE("coarse source points are fitted") {
     input.positionTolerance = 200.0;  // very generous for coarse data
 
     auto result = fitAlignment(input);
-    // The fitter should either produce a valid alignment or typed diagnostics.
-    REQUIRE((result.alignment.has_value() || !result.diagnostics.empty()));
+    // Blocker 21: require actual success — 4 points with a gentle curve
+    // is a valid road shape that must fit, not merely be diagnosed.
+    REQUIRE(result.alignment.has_value());
+    REQUIRE(result.diagnostics.empty());
 }
 
 TEST_CASE("protected junction is preserved exactly") {

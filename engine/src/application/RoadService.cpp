@@ -468,11 +468,23 @@ RoadSummary RoadService::updateElevation(const UpdateElevationInput& input) {
             "stations and elevations must have the same length"};
     }
 
-    // Blocker 15: validate profile data before persistence.
+    // Blocker 15/19: validate profile data before persistence. Stations
+    // must be within the alignment's station range [0, totalLength].
+    // Compute total length from segments (RoadRecord has no alignment).
+    double alignmentLength = 0.0;
+    for (const auto& seg : found->segments) {
+        alignmentLength += seg.length;
+    }
     for (std::size_t i = 0; i < input.stations.size(); ++i) {
         if (!std::isfinite(input.stations[i])) {
             throw CommandFailure{CommandFailureCode::InvalidArgument,
                 "elevation station " + std::to_string(i) + " is not finite"};
+        }
+        if (input.stations[i] < 0.0 || input.stations[i] > alignmentLength) {
+            throw CommandFailure{CommandFailureCode::InvalidArgument,
+                "elevation station " + std::to_string(i) + " (" +
+                std::to_string(input.stations[i]) + ") is outside the alignment range [0, " +
+                std::to_string(alignmentLength) + "]"};
         }
         if (!std::isfinite(input.elevations[i])) {
             throw CommandFailure{CommandFailureCode::InvalidArgument,
@@ -537,11 +549,22 @@ RoadSummary RoadService::updateSuperelevation(const UpdateSuperelevationInput& i
             "stations and superelevations must have the same length"};
     }
 
-    // Blocker 15: validate profile data before persistence.
+    // Blocker 15/19: validate profile data before persistence. Stations
+    // must be within the alignment's station range [0, totalLength].
+    double alignmentLength = 0.0;
+    for (const auto& seg : found->segments) {
+        alignmentLength += seg.length;
+    }
     for (std::size_t i = 0; i < input.stations.size(); ++i) {
         if (!std::isfinite(input.stations[i])) {
             throw CommandFailure{CommandFailureCode::InvalidArgument,
                 "superelevation station " + std::to_string(i) + " is not finite"};
+        }
+        if (input.stations[i] < 0.0 || input.stations[i] > alignmentLength) {
+            throw CommandFailure{CommandFailureCode::InvalidArgument,
+                "superelevation station " + std::to_string(i) + " (" +
+                std::to_string(input.stations[i]) + ") is outside the alignment range [0, " +
+                std::to_string(alignmentLength) + "]"};
         }
         if (!std::isfinite(input.superelevations[i])) {
             throw CommandFailure{CommandFailureCode::InvalidArgument,

@@ -685,4 +685,73 @@ TEST_CASE_FIXTURE(RoadAcceptanceFixture, "RoadId stable across multiple undo/red
     CHECK(summaryAfter->roadId == originalId);
 }
 
+// Blocker 19: Profile station bounds validation — stations must be
+// within the alignment's [0, totalLength] range.
+TEST_CASE_FIXTURE(RoadAcceptanceFixture, "Elevation update rejects out-of-range station") {
+    CreateRoadInput input;
+    input.name = "Bounds Road";
+    input.sourcePoints = makeStraightPolyline(0.0, 0.0, 0.0, 100.0, 5);
+    input.positionTolerance = 1.0;
+    auto summary = roadService->createRoad(input);
+
+    // Get the road's actual alignment length (may differ slightly from
+    // the source polyline length due to fitting).
+    auto details = roadService->getRoad(summary.roadId);
+    REQUIRE(details.has_value());
+    const double alignmentLength = details->length;
+
+    // Station beyond the alignment end must be rejected.
+    UpdateElevationInput elevInput;
+    elevInput.roadId = summary.roadId;
+    elevInput.stations = {0.0, alignmentLength + 10.0};
+    elevInput.elevations = {10.0, 20.0};
+
+    bool threw = false;
+    try {
+        (void)roadService->updateElevation(elevInput);
+    } catch (const CommandFailure& e) {
+        threw = true;
+        CHECK(std::string(e.what()).find("outside the alignment range") != std::string::npos);
+    }
+    CHECK(threw);
+
+    // Negative station must be rejected.
+    elevInput.stations = {-5.0, 50.0};
+    elevInput.elevations = {10.0, 20.0};
+    threw = false;
+    try {
+        (void)roadService->updateElevation(elevInput);
+    } catch (const CommandFailure& e) {
+        threw = true;
+        CHECK(std::string(e.what()).find("outside the alignment range") != std::string::npos);
+    }
+    CHECK(threw);
+}
+
+TEST_CASE_FIXTURE(RoadAcceptanceFixture, "Superelevation update rejects out-of-range station") {
+    CreateRoadInput input;
+    input.name = "Bounds Road 2";
+    input.sourcePoints = makeStraightPolyline(0.0, 0.0, 0.0, 100.0, 5);
+    input.positionTolerance = 1.0;
+    auto summary = roadService->createRoad(input);
+
+    auto details = roadService->getRoad(summary.roadId);
+    REQUIRE(details.has_value());
+    const double alignmentLength = details->length;
+
+    UpdateSuperelevationInput supInput;
+    supInput.roadId = summary.roadId;
+    supInput.stations = {0.0, alignmentLength + 10.0};
+    supInput.superelevations = {0.01, 0.02};
+
+    bool threw = false;
+    try {
+        (void)roadService->updateSuperelevation(supInput);
+    } catch (const CommandFailure& e) {
+        threw = true;
+        CHECK(std::string(e.what()).find("outside the alignment range") != std::string::npos);
+    }
+    CHECK(threw);
+}
+
 } // namespace infraforge::application

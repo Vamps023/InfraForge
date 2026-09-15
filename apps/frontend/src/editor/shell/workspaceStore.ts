@@ -14,7 +14,7 @@ import {
 // with real functionality are enabled; future workspaces appear as clearly
 // disabled with a "Coming later" tooltip (no fake functionality).
 //
-// Terrain is the first fully functional workspace (v0.1). Roads, Rail,
+// Terrain and Roads are functional authoring workspaces. Rail,
 // Environment, Traffic, and Simulation are future modules.
 
 export type WorkspaceId = 'home' | 'terrain' | 'roads' | 'rail' | 'environment' | 'traffic' | 'simulation'
@@ -30,15 +30,15 @@ export interface WorkspaceDefinition {
 export const WORKSPACES: WorkspaceDefinition[] = [
   { id: 'home', label: 'Home', icon: Home, enabled: true },
   { id: 'terrain', label: 'Terrain', icon: Mountain, enabled: true },
-  { id: 'roads', label: 'Roads', icon: Road, enabled: false, futureLabel: 'Roads — coming later' },
+  { id: 'roads', label: 'Roads', icon: Road, enabled: true },
   { id: 'rail', label: 'Rail', icon: Train, enabled: false, futureLabel: 'Rail — coming later' },
   { id: 'environment', label: 'Environment', icon: Trees, enabled: false, futureLabel: 'Environment — coming later' },
   { id: 'traffic', label: 'Traffic', icon: Car, enabled: false, futureLabel: 'Traffic — coming later' },
   { id: 'simulation', label: 'Simulation', icon: PlayCircle, enabled: false, futureLabel: 'Simulation — coming later' },
 ]
 
-// The terrain workspace is the only functional authoring workspace in v0.1.
-export const FUNCTIONAL_WORKSPACE_IDS: WorkspaceId[] = ['home', 'terrain']
+// Functional authoring workspaces.
+export const FUNCTIONAL_WORKSPACE_IDS: WorkspaceId[] = ['home', 'terrain', 'roads']
 
 interface WorkspaceState {
   activeWorkspace: WorkspaceId

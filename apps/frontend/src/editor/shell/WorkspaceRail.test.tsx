@@ -37,16 +37,24 @@ describe('WorkspaceRail', () => {
 
   it('does not switch when clicking a disabled workspace', async () => {
     render(<WorkspaceRail />)
-    const roadsBtn = screen.getByLabelText('Roads')
-    expect(roadsBtn).toBeDisabled()
-    await userEvent.click(roadsBtn)
+    const railBtn = screen.getByLabelText('Rail')
+    expect(railBtn).toBeDisabled()
+    await userEvent.click(railBtn)
     expect(useWorkspaceStore.getState().activeWorkspace).toBe('terrain')
+  })
+
+  it('switches to the roads workspace when clicked', async () => {
+    render(<WorkspaceRail />)
+    const roadsBtn = screen.getByLabelText('Roads')
+    expect(roadsBtn).not.toBeDisabled()
+    await userEvent.click(roadsBtn)
+    expect(useWorkspaceStore.getState().activeWorkspace).toBe('roads')
   })
 
   it('disabled workspaces have aria-disabled', () => {
     render(<WorkspaceRail />)
-    const roadsBtn = screen.getByLabelText('Roads')
-    expect(roadsBtn).toHaveAttribute('aria-disabled', 'true')
+    const railBtn = screen.getByLabelText('Rail')
+    expect(railBtn).toHaveAttribute('aria-disabled', 'true')
   })
 
   it('functional workspaces do not have aria-disabled', () => {

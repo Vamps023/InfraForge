@@ -35,6 +35,14 @@ import { registerTerrainInspectorSection, unregisterTerrainInspectorSection } fr
 import { subscribeTerrainEvents, setTerrainScenePublisher } from './features/terrain/terrainEvents'
 import { fetchTerrainScene } from './features/terrain/terrainApi'
 
+import { registerRoadCommands, unregisterRoadCommands } from './features/road/roadCommands'
+import { registerRoadOutlinerProjection, unregisterRoadOutlinerProjection } from './features/road/roadOutlinerProjection'
+import { registerRoadInspectorSection, unregisterRoadInspectorSection } from './features/road/roadInspectorSection'
+import { subscribeRoadEvents, setRoadScenePublisher } from './features/road/roadEvents'
+import { listRoads, fetchRoadScene } from './features/road/roadApi'
+import { CreateRoadDialog } from './features/road/CreateRoadDialog'
+import { RenameRoadDialog } from './features/road/RenameRoadDialog'
+
 export function App() {
   const engineStatus = useUiStore((state) => state.engineStatus)
   const setEngineStatus = useUiStore((state) => state.setEngineStatus)
@@ -55,6 +63,9 @@ export function App() {
     registerTerrainCommands({ getEngineClient: () => engineSessionRef.current?.client ?? null })
     registerTerrainOutlinerProjection()
     registerTerrainInspectorSection({ getEngineClient: () => engineSessionRef.current?.client ?? null })
+    registerRoadCommands({ getEngineClient: () => engineSessionRef.current?.client ?? null })
+    registerRoadOutlinerProjection()
+    registerRoadInspectorSection({ getEngineClient: () => engineSessionRef.current?.client ?? null })
     return () => {
       unregisterBuiltinCommands()
       unregisterProjectOverviewSection()
@@ -62,6 +73,9 @@ export function App() {
       unregisterTerrainCommands()
       unregisterTerrainOutlinerProjection()
       unregisterTerrainInspectorSection()
+      unregisterRoadCommands()
+      unregisterRoadOutlinerProjection()
+      unregisterRoadInspectorSection()
     }
   }, [])
 
@@ -134,6 +148,7 @@ export function App() {
       const unsubscribe = subscribeProjectEvents(result.session.client)
       const unsubscribeShell = subscribeShellEvents(result.session.client)
       const unsubscribeTerrain = subscribeTerrainEvents(result.session.client)
+      const unsubscribeRoad = subscribeRoadEvents(result.session.client)
 
       // Wire the terrain scene publisher: when terrain work settles, fetch
       // the updated scene projection and forward it to the native viewport
@@ -147,11 +162,24 @@ export function App() {
         })()
       })
 
+      // Wire the road scene publisher: when road work settles, fetch the
+      // updated road scene projection and forward it to the native viewport.
+      setRoadScenePublisher(() => {
+        void (async () => {
+          const scene = await fetchRoadScene(result.session.client).catch(() => null)
+          if (scene) {
+            window.infraforgeDesktop?.setViewportScene?.(scene as Record<string, unknown>)
+          }
+        })()
+      })
+
       const disposeSession = () => {
         unsubscribe()
         unsubscribeShell()
         unsubscribeTerrain()
+        unsubscribeRoad()
         setTerrainScenePublisher(null)
+        setRoadScenePublisher(null)
         result.session.dispose()
       }
 
@@ -237,6 +265,18 @@ export function App() {
       ) : null}
       {openDialog === 'diagnostics' ? (
         <DiagnosticsDialog onClose={() => closeDialog()} />
+      ) : null}
+      {openDialog === 'create-road' && engineSession && projectOpen ? (
+        <CreateRoadDialog
+          client={engineSession.client}
+          onClose={() => closeDialog()}
+        />
+      ) : null}
+      {openDialog === 'rename-road' && engineSession && projectOpen ? (
+        <RenameRoadDialog
+          client={engineSession.client}
+          onClose={() => closeDialog()}
+        />
       ) : null}
     </div>
   )

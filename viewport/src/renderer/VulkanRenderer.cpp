@@ -81,6 +81,9 @@ bool VulkanRenderer::start(const std::uint32_t initialWidth, const std::uint32_t
         terrainPass_.create(
             device_.physical(), device_.get(), device_.queue(), device_.queueFamily(),
             swapchain_.renderPass());
+        roadPass_.create(
+            device_.physical(), device_.get(), device_.queue(), device_.queueFamily(),
+            swapchain_.renderPass());
 
         VkCommandPoolCreateInfo poolInfo{};
         poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
@@ -162,6 +165,14 @@ void VulkanRenderer::setTerrainScene(const TerrainScene& scene) {
     terrainPass_.setScene(scene);
 }
 
+void VulkanRenderer::setRoadScene(const RoadScene& scene) {
+    {
+        std::lock_guard lock{stateMutex_};
+        pendingRoadScene_ = scene;
+    }
+    roadPass_.setScene(scene);
+}
+
 void VulkanRenderer::postCameraInput(const SurfaceInputEvent& event) {
     std::lock_guard lock{inputMutex_};
     // Bounded queue: input arrives at human rates; dropping stale deltas
@@ -182,6 +193,7 @@ void VulkanRenderer::stop() {
     if (initialized_) {
         vkDeviceWaitIdle(device_.get());
         terrainPass_.destroy();
+        roadPass_.destroy();
         gridPass_.destroy();
         swapchain_.destroy();
         commandPool_.reset();
@@ -248,6 +260,12 @@ void VulkanRenderer::runLoop(std::atomic_bool& running) {
             if (adoptedScene.has_value()) {
                 cameraController_.adoptScene(*adoptedScene);
             }
+        }
+
+        // Adopt pending road scene (no camera framing needed for roads).
+        {
+            std::lock_guard lock{stateMutex_};
+            pendingRoadScene_.reset();
         }
 
         // Drain raw mouse input into camera motion; the render thread owns
@@ -385,6 +403,8 @@ void VulkanRenderer::renderFrame(std::atomic_bool& running) {
     const EditorCamera& camera = cameraController_.camera();
     terrainPass_.update(camera);
     terrainPass_.record(command, camera);
+    roadPass_.update(camera);
+    roadPass_.record(command, camera);
     gridPass_.record(command, camera);
 
     vkCmdEndRenderPass(command);

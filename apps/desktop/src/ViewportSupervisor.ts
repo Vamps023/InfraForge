@@ -132,6 +132,40 @@ export class ViewportSupervisor {
     }
   }
 
+  // Blocker 1: Forwards the engine-derived road scene projection to the
+  // viewport through the single coherent "scene" control message type.
+  // The native ControlProtocol's "scene" handler parses BOTH terrain
+  // (parseTerrainScene) and road (parseRoadScene) data from the same JSON.
+  // Road-only updates send a "scene" with a "roads" field and no "tiles"
+  // field, so the terrain scene is empty and only the road scene updates.
+  // This avoids a competing "roadScene" control type that the native
+  // protocol does not recognize.
+  sendRoadScene(scene: Record<string, unknown>): void {
+    // Validate the road scene payload is a bounded plain object with roads.
+    if (typeof scene !== 'object' || scene === null || Array.isArray(scene)) {
+      return
+    }
+    const record = scene as Record<string, unknown>
+    if (!Array.isArray(record.meshes)) {
+      return
+    }
+    // Forward as a "scene" type with "roads" field so the native viewport's
+    // single scene parser handles both terrain and road data coherently.
+    const sceneControl: Record<string, unknown> = {
+      type: 'scene',
+      roads: record.meshes,
+    }
+    // Preserve revision as a string for lossless uint64 transport.
+    if (typeof record.revision === 'bigint') {
+      sceneControl.roadRevision = (record.revision as bigint).toString()
+    } else if (typeof record.revision === 'number') {
+      sceneControl.roadRevision = String(record.revision)
+    } else if (typeof record.revision === 'string') {
+      sceneControl.roadRevision = record.revision
+    }
+    this.sendControl(sceneControl)
+  }
+
   sendEmptyScene(): void {
     this.sendControl(emptyViewportScene() as unknown as Record<string, unknown>)
   }

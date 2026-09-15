@@ -1,5 +1,6 @@
 #pragma once
 
+#include "infraforge/viewport/renderer/RoadScene.hpp"
 #include "infraforge/viewport/renderer/TerrainScene.hpp"
 #include "infraforge/viewport/platform/SurfaceInput.hpp"
 
@@ -48,6 +49,7 @@ struct ShutdownCommand {
 };
 struct SceneCommand {
     TerrainScene scene;
+    RoadScene roads;
 };
 struct CameraCommand {
     ViewportAction action{ViewportAction::None};

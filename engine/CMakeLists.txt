@@ -10,6 +10,7 @@ set(INFRAFORGE_PROTOCOL_PROTOS
     ${PROJECT_SOURCE_DIR}/contracts/proto/infraforge/protocol/v1/foundation.proto
     ${PROJECT_SOURCE_DIR}/contracts/proto/infraforge/protocol/v1/geo.proto
     ${PROJECT_SOURCE_DIR}/contracts/proto/infraforge/protocol/v1/project.proto
+    ${PROJECT_SOURCE_DIR}/contracts/proto/infraforge/protocol/v1/road.proto
     ${PROJECT_SOURCE_DIR}/contracts/proto/infraforge/protocol/v1/terrain.proto
 )
 
@@ -36,6 +37,7 @@ add_library(infraforge_core STATIC
     src/application/GeoService.cpp
     src/application/JobSystem.cpp
     src/application/ProjectService.cpp
+    src/application/RoadService.cpp
     src/application/TerrainService.cpp
     src/application/TerrainTileGenerator.cpp
     src/application/WorldState.cpp
@@ -48,10 +50,12 @@ add_library(infraforge_core STATIC
     src/domain/terrain/TerrainSampler.cpp
     src/domain/terrain/MockTerrainProvider.cpp
     src/domain/terrain/TerrariumTerrainProvider.cpp
+    src/domain/road/AlignmentFitter.cpp
     src/domain/road/AlignmentPrimitives.cpp
     src/domain/road/ReferenceAlignment.cpp
     src/domain/road/Road.cpp
     src/domain/road/RoadRecord.cpp
+    src/domain/road/RoadTessellation.cpp
     src/domain/road/RoadTypes.cpp
     src/domain/road/VerticalProfiles.cpp
     src/domain/world/ChunkGrid.cpp
@@ -147,7 +151,11 @@ add_executable(infraforge-engine-tests
     tests/ProjectServiceTests.cpp
     tests/RoadDomainTests.cpp
     tests/RoadAlignmentFixturesTests.cpp
+    tests/RoadFitterTests.cpp
     tests/RoadPersistenceTests.cpp
+    tests/RoadServiceTests.cpp
+    tests/RoadTessellationTests.cpp
+    tests/RoadAcceptanceTests.cpp
     tests/SpatialBoundsTests.cpp
     tests/SpatialIndexTests.cpp
     tests/SqliteProjectStoreTests.cpp

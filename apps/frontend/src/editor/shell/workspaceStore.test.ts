@@ -28,14 +28,14 @@ describe('workspaceStore', () => {
     expect(ids).toContain('simulation')
   })
 
-  it('only home and terrain are functional in v0.1', () => {
-    expect(FUNCTIONAL_WORKSPACE_IDS).toEqual(['home', 'terrain'])
+  it('home, terrain, and roads are functional', () => {
+    expect(FUNCTIONAL_WORKSPACE_IDS).toEqual(['home', 'terrain', 'roads'])
   })
 
   it('future workspaces are disabled', () => {
     const future = WORKSPACES.filter((w) => !w.enabled)
     const futureIds = future.map((w) => w.id)
-    expect(futureIds).toEqual(['roads', 'rail', 'environment', 'traffic', 'simulation'])
+    expect(futureIds).toEqual(['rail', 'environment', 'traffic', 'simulation'])
   })
 
   it('future workspaces have a coming-later label', () => {

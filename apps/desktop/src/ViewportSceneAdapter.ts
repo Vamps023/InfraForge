@@ -45,6 +45,21 @@ export interface ViewportSceneTile {
   maxN: number
 }
 
+export interface ViewportRoadSceneVertex {
+  x: number
+  y: number
+  z: number
+  nx?: number
+  ny?: number
+  nz?: number
+}
+
+export interface ViewportRoadSceneMesh {
+  roadId: string
+  vertices: ViewportRoadSceneVertex[]
+  indices: number[]
+}
+
 export interface ViewportSceneControl {
   type: 'scene'
   originEasting: number
@@ -53,6 +68,9 @@ export interface ViewportSceneControl {
   tiles: ViewportSceneTile[]
   missingTiles: string
   revision: string
+  // Optional road scene data for the viewport renderer.
+  roads?: ViewportRoadSceneMesh[]
+  roadRevision?: string
 }
 
 function toBigIntString(value: bigint | string | number): string {
@@ -107,6 +125,50 @@ export function adaptTerrainScene(
 }
 
 /**
+ * Attach road scene data to an existing ViewportSceneControl. The road
+ * scene is an optional addition to the terrain scene; the viewport
+ * renderer parses the "roads" field if present.
+ */
+export function attachRoadScene(
+  control: ViewportSceneControl,
+  roadScene: unknown,
+): ViewportSceneControl {
+  if (typeof roadScene !== 'object' || roadScene === null || Array.isArray(roadScene)) {
+    return control
+  }
+  const rs = roadScene as Partial<{
+    originEasting: number
+    originNorthing: number
+    originHeight: number
+    meshes: Array<{
+      roadId: string
+      vertices: Array<{ x: number; y: number; z: number; nx?: number; ny?: number; nz?: number }>
+      indices: number[]
+    }>
+    revision: bigint | string | number
+  }>
+  if (!Array.isArray(rs.meshes)) {
+    return control
+  }
+  return {
+    ...control,
+    roads: rs.meshes.map((mesh) => ({
+      roadId: mesh.roadId,
+      vertices: mesh.vertices.map((v) => ({
+        x: v.x,
+        y: v.y,
+        z: v.z,
+        nx: v.nx,
+        ny: v.ny,
+        nz: v.nz,
+      })),
+      indices: mesh.indices,
+    })),
+    roadRevision: toBigIntString(rs.revision ?? 0),
+  }
+}
+
+/**
  * Build an empty/clear scene that satisfies the viewport's full schema.
  * Used on project close/switch to release all GPU terrain.
  */
@@ -119,5 +181,7 @@ export function emptyViewportScene(): ViewportSceneControl {
     tiles: [],
     missingTiles: '0',
     revision: '0',
+    roads: [],
+    roadRevision: '0',
   }
 }

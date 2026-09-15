@@ -16,6 +16,8 @@ std::string_view invalidationClassName(const InvalidationClass invalidationClass
         return "terrain";
     case InvalidationClass::Simulation:
         return "simulation";
+    case InvalidationClass::Road:
+        return "road";
     }
     return "";
 }

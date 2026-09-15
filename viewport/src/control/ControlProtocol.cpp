@@ -72,9 +72,12 @@ ControlCommand parseControlCommand(const std::string_view line) {
 
     if (type == "scene") {
         // The terrain scene body is parsed and validated by the renderer
-        // layer's scene parser (same explicit-rejection rules).
+        // layer's scene parser (same explicit-rejection rules). The road
+        // scene is an optional "roads" field within the same JSON.
         try {
-            return SceneCommand{.scene = parseTerrainScene(line)};
+            TerrainScene terrainScene = parseTerrainScene(line);
+            RoadScene roadScene = parseRoadScene(line);
+            return SceneCommand{.scene = std::move(terrainScene), .roads = std::move(roadScene)};
         } catch (const CommandParseError& error) {
             failParse(std::string("scene command rejected: ") + error.message);
         }

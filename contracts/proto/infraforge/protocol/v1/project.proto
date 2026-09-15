@@ -4,6 +4,7 @@ package infraforge.protocol.v1;
 
 import "infraforge/protocol/v1/geo.proto";
 import "infraforge/protocol/v1/terrain.proto";
+import "infraforge/protocol/v1/road.proto";
 
 // Project lifecycle contract: canonical create/open/save-as/save/close queries
 // executed by the native engine against the project database.
@@ -283,6 +284,21 @@ message CommandEnvelope {
     TerrainListSourcesCommand terrain_list_sources = 19;
     TerrainPlanDownloadCommand terrain_plan_download = 20;
     TerrainDownloadSelectedCommand terrain_download_selected = 21;
+    // Protocol 1.5 road authoring commands.
+    CreateRoadCommand create_road = 22;
+    DeleteRoadCommand delete_road = 23;
+    RenameRoadCommand rename_road = 24;
+    InsertRoadControlCommand insert_road_control = 25;
+    MoveRoadControlCommand move_road_control = 26;
+    DeleteRoadControlCommand delete_road_control = 27;
+    FitRoadSourceCommand fit_road_source = 28;
+    UpdateRoadElevationCommand update_road_elevation = 29;
+    UpdateRoadSuperelevationCommand update_road_superelevation = 30;
+    UndoRoadCommand undo_road = 31;
+    RedoRoadCommand redo_road = 32;
+    ListRoadsCommand list_roads = 33;
+    GetRoadCommand get_road = 34;
+    GetRoadSceneCommand get_road_scene = 35;
   }
 }
 
@@ -305,6 +321,21 @@ message ResultEnvelope {
     // Protocol 1.4 terrain download area results.
     TerrainListSourcesResult terrain_list_sources_result = 14;
     TerrainPlanDownloadResult terrain_plan_download_result = 15;
+    // Protocol 1.5 road authoring results.
+    CreateRoadResult create_road_result = 16;
+    DeleteRoadResult delete_road_result = 17;
+    RenameRoadResult rename_road_result = 18;
+    InsertRoadControlResult insert_road_control_result = 19;
+    MoveRoadControlResult move_road_control_result = 20;
+    DeleteRoadControlResult delete_road_control_result = 21;
+    FitRoadSourceResult fit_road_source_result = 22;
+    UpdateRoadElevationResult update_road_elevation_result = 23;
+    UpdateRoadSuperelevationResult update_road_superelevation_result = 24;
+    UndoRoadResult undo_road_result = 25;
+    RedoRoadResult redo_road_result = 26;
+    ListRoadsResult list_roads_result = 27;
+    GetRoadResult get_road_result = 28;
+    RoadSceneResult road_scene_result = 29;
   }
 }
 
@@ -327,5 +358,10 @@ message EventEnvelope {
     DiagnosticClearedEvent diagnostic_cleared = 15;
     // Protocol 1.4 terrain event.
     TerrainDatasetAddedEvent terrain_dataset_added = 16;
+    // Protocol 1.5 road events.
+    RoadCreatedEvent road_created = 17;
+    RoadUpdatedEvent road_updated = 18;
+    RoadRemovedEvent road_removed = 19;
+    RoadGeometryChangedEvent road_geometry_changed = 20;
   }
 }

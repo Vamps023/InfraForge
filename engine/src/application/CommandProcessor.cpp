@@ -10,6 +10,7 @@
 #include "infraforge/version.hpp"
 
 #include <infraforge/protocol/v1/foundation.pb.h>
+#include <infraforge/protocol/v1/road.pb.h>
 
 #include <chrono>
 #include <cstdint>
@@ -176,6 +177,34 @@ std::string_view commandName(const ProtocolFrame& frame) {
         return "job.cancel";
     case protocol::v1::CommandEnvelope::kJobList:
         return "job.list";
+    case protocol::v1::CommandEnvelope::kCreateRoad:
+        return "road.create";
+    case protocol::v1::CommandEnvelope::kDeleteRoad:
+        return "road.delete";
+    case protocol::v1::CommandEnvelope::kRenameRoad:
+        return "road.rename";
+    case protocol::v1::CommandEnvelope::kInsertRoadControl:
+        return "road.insert_control";
+    case protocol::v1::CommandEnvelope::kMoveRoadControl:
+        return "road.move_control";
+    case protocol::v1::CommandEnvelope::kDeleteRoadControl:
+        return "road.delete_control";
+    case protocol::v1::CommandEnvelope::kFitRoadSource:
+        return "road.fit_source";
+    case protocol::v1::CommandEnvelope::kUpdateRoadElevation:
+        return "road.update_elevation";
+    case protocol::v1::CommandEnvelope::kUpdateRoadSuperelevation:
+        return "road.update_superelevation";
+    case protocol::v1::CommandEnvelope::kUndoRoad:
+        return "road.undo";
+    case protocol::v1::CommandEnvelope::kRedoRoad:
+        return "road.redo";
+    case protocol::v1::CommandEnvelope::kListRoads:
+        return "road.list";
+    case protocol::v1::CommandEnvelope::kGetRoad:
+        return "road.get";
+    case protocol::v1::CommandEnvelope::kGetRoadScene:
+        return "road.get_scene";
     case protocol::v1::CommandEnvelope::COMMAND_NOT_SET:
         break;
     }
@@ -342,6 +371,8 @@ CommandProcessor::CommandProcessor(
     terrainService_.emplace(store_, transforms, *terrainReader_, world_, *jobs_,
         production::makeProductionTerrainProviders(),
         [this](const TerrainServiceEvent& event) { publishTerrainEvent(event); });
+    roadService_.emplace(store_, world_,
+        [this](const RoadServiceEvent& event) { publishRoadEvent(event); });
 }
 
 CommandProcessor::~CommandProcessor() {
@@ -444,6 +475,9 @@ void CommandProcessor::shutdown() {
     }
     if (terrainService_) {
         terrainService_->onProjectClosed();
+    }
+    if (roadService_) {
+        roadService_->onProjectClosed();
     }
 }
 
@@ -576,6 +610,49 @@ void CommandProcessor::processCommand(
             break;
         case protocol::v1::CommandEnvelope::kJobList:
             handleJobList(connectionId, frame);
+            break;
+        // Road commands.
+        case protocol::v1::CommandEnvelope::kCreateRoad:
+            handleCreateRoad(connectionId, frame);
+            break;
+        case protocol::v1::CommandEnvelope::kDeleteRoad:
+            handleDeleteRoad(connectionId, frame);
+            break;
+        case protocol::v1::CommandEnvelope::kRenameRoad:
+            handleRenameRoad(connectionId, frame);
+            break;
+        case protocol::v1::CommandEnvelope::kInsertRoadControl:
+            handleInsertRoadControl(connectionId, frame);
+            break;
+        case protocol::v1::CommandEnvelope::kMoveRoadControl:
+            handleMoveRoadControl(connectionId, frame);
+            break;
+        case protocol::v1::CommandEnvelope::kDeleteRoadControl:
+            handleDeleteRoadControl(connectionId, frame);
+            break;
+        case protocol::v1::CommandEnvelope::kFitRoadSource:
+            handleFitRoadSource(connectionId, frame);
+            break;
+        case protocol::v1::CommandEnvelope::kUpdateRoadElevation:
+            handleUpdateRoadElevation(connectionId, frame);
+            break;
+        case protocol::v1::CommandEnvelope::kUpdateRoadSuperelevation:
+            handleUpdateRoadSuperelevation(connectionId, frame);
+            break;
+        case protocol::v1::CommandEnvelope::kUndoRoad:
+            handleUndoRoad(connectionId, frame);
+            break;
+        case protocol::v1::CommandEnvelope::kRedoRoad:
+            handleRedoRoad(connectionId, frame);
+            break;
+        case protocol::v1::CommandEnvelope::kListRoads:
+            handleListRoads(connectionId, frame);
+            break;
+        case protocol::v1::CommandEnvelope::kGetRoad:
+            handleGetRoad(connectionId, frame);
+            break;
+        case protocol::v1::CommandEnvelope::kGetRoadScene:
+            handleGetRoadScene(connectionId, frame);
             break;
         case protocol::v1::CommandEnvelope::COMMAND_NOT_SET:
             throw CommandFailure{CommandFailureCode::InvalidArgument, "command envelope is empty"};
@@ -1274,8 +1351,10 @@ void CommandProcessor::publishTerrainEvent(const TerrainServiceEvent& event) {
 void CommandProcessor::syncTerrainSession() {
     if (store_.isOpen()) {
         terrainService_->onProjectOpened();
+        roadService_->onProjectOpened();
     } else {
         terrainService_->onProjectClosed();
+        roadService_->onProjectClosed();
         // Clear terrain-scoped diagnostics when the project closes, but only
         // if any were actually emitted (avoids spurious events).
         if (hasTerrainDiagnostics_) {
@@ -1442,6 +1521,382 @@ void CommandProcessor::evaluateVerticalReferenceDiagnostic(const domain::project
         // previously emitted. This is idempotent — removing a non-existent
         // diagnostic is a no-op on the frontend.
         publishDiagnosticRemoved(diagnosticId);
+    }
+}
+
+// ---- Road command handlers ----
+
+namespace {
+
+void fillRoadSummary(protocol::v1::RoadSummary* out, const RoadSummary& s) {
+    out->set_road_id(s.roadId);
+    out->set_name(s.name);
+    out->set_length(s.length);
+    out->set_alignment_segment_count(s.alignmentSegmentCount);
+    out->set_source_provider(s.sourceProvider);
+    out->set_source_id(s.sourceId);
+    out->set_protected_anchor_count(s.protectedAnchorCount);
+    out->set_revision(s.revision);
+}
+
+void fillRoadDetails(protocol::v1::RoadDetails* out, const RoadDetails& d) {
+    out->set_road_id(d.roadId);
+    out->set_name(d.name);
+    out->set_length(d.length);
+    out->set_alignment_segment_count(d.alignmentSegmentCount);
+    for (const auto& seg : d.alignmentSegments) {
+        auto* segOut = out->add_alignment_segments();
+        segOut->set_kind(seg.kind);
+        segOut->set_start_station(seg.startStation);
+        segOut->set_length(seg.length);
+        segOut->set_start_curvature(seg.startCurvature);
+        segOut->set_end_curvature(seg.endCurvature);
+    }
+    out->set_has_elevation_profile(d.hasElevationProfile);
+    out->set_elevation_breakpoint_count(d.elevationBreakpointCount);
+    out->set_has_superelevation_profile(d.hasSuperelevationProfile);
+    out->set_superelevation_breakpoint_count(d.superelevationBreakpointCount);
+    out->set_source_provider(d.sourceProvider);
+    out->set_source_id(d.sourceId);
+    out->set_source_crs(d.sourceCrs);
+    out->set_protected_anchor_count(d.protectedAnchorCount);
+    out->set_is_valid(d.isValid);
+    for (const auto& diag : d.diagnostics) {
+        auto* dOut = out->add_diagnostics();
+        dOut->set_code(std::string{domain::road::roadErrorCodeName(diag.code)});
+        dOut->set_message(diag.message);
+        dOut->set_severity("error");
+    }
+    out->set_revision(d.revision);
+}
+
+} // namespace
+
+void CommandProcessor::handleCreateRoad(const std::string& connectionId, const ProtocolFrame& frame) {
+    const auto& command = frame.command().create_road();
+    CreateRoadInput input;
+    input.name = command.name();
+    const auto count = command.source_eastings_size();
+    if (command.source_northings_size() != static_cast<int>(count)) {
+        throw CommandFailure{CommandFailureCode::InvalidArgument,
+            "source_eastings and source_northings must have the same length"};
+    }
+    input.sourcePoints.reserve(count);
+    for (int i = 0; i < count; ++i) {
+        input.sourcePoints.push_back(domain::road::AlignmentPoint{
+            command.source_eastings(i), command.source_northings(i)});
+    }
+    if (command.source_elevations_size() == static_cast<int>(count)) {
+        input.sourceElevations.reserve(count);
+        for (int i = 0; i < count; ++i) {
+            input.sourceElevations.push_back(command.source_elevations(i));
+        }
+    } else if (command.source_elevations_size() != 0) {
+        // Blocker 16: reject non-empty elevation arrays whose length does
+        // not equal the control/source point count.
+        throw CommandFailure{CommandFailureCode::InvalidArgument,
+            "source_elevations length must equal source point count when non-empty"};
+    } else {
+        input.sourceElevations.resize(count, std::nullopt);
+    }
+    input.positionTolerance = command.position_tolerance();
+    if (command.has_max_curvature()) {
+        input.maxCurvature = command.max_curvature();
+    }
+    for (int i = 0; i < command.protected_anchor_indices_size(); ++i) {
+        input.protectedAnchorIndices.push_back(command.protected_anchor_indices(i));
+    }
+
+    auto summary = roadService_->createRoad(input);
+
+    ProtocolFrame response;
+    response.set_request_id(frame.request_id());
+    fillRoadSummary(response.mutable_result()->mutable_create_road_result()->mutable_road(), summary);
+    sink_.sendToConnection(connectionId, response);
+}
+
+void CommandProcessor::handleDeleteRoad(const std::string& connectionId, const ProtocolFrame& frame) {
+    const auto& command = frame.command().delete_road();
+    auto summary = roadService_->deleteRoad(command.road_id());
+
+    ProtocolFrame response;
+    response.set_request_id(frame.request_id());
+    response.mutable_result()->mutable_delete_road_result();
+    sink_.sendToConnection(connectionId, response);
+}
+
+void CommandProcessor::handleRenameRoad(const std::string& connectionId, const ProtocolFrame& frame) {
+    const auto& command = frame.command().rename_road();
+    auto summary = roadService_->renameRoad(command.road_id(), command.name());
+
+    ProtocolFrame response;
+    response.set_request_id(frame.request_id());
+    fillRoadSummary(response.mutable_result()->mutable_rename_road_result()->mutable_road(), summary);
+    sink_.sendToConnection(connectionId, response);
+}
+
+void CommandProcessor::handleInsertRoadControl(const std::string& connectionId, const ProtocolFrame& frame) {
+    const auto& command = frame.command().insert_road_control();
+    InsertControlInput input;
+    input.roadId = command.road_id();
+    input.insertBeforeIndex = command.insert_before_index();
+    input.position = domain::road::AlignmentPoint{command.easting(), command.northing()};
+    if (command.has_elevation()) {
+        input.elevation = command.elevation();
+    }
+    auto summary = roadService_->insertControl(input);
+
+    ProtocolFrame response;
+    response.set_request_id(frame.request_id());
+    fillRoadSummary(response.mutable_result()->mutable_insert_road_control_result()->mutable_road(), summary);
+    sink_.sendToConnection(connectionId, response);
+}
+
+void CommandProcessor::handleMoveRoadControl(const std::string& connectionId, const ProtocolFrame& frame) {
+    const auto& command = frame.command().move_road_control();
+    MoveControlInput input;
+    input.roadId = command.road_id();
+    input.controlIndex = command.control_index();
+    input.position = domain::road::AlignmentPoint{command.easting(), command.northing()};
+    if (command.has_elevation()) {
+        input.elevation = command.elevation();
+    }
+    auto summary = roadService_->moveControl(input);
+
+    ProtocolFrame response;
+    response.set_request_id(frame.request_id());
+    fillRoadSummary(response.mutable_result()->mutable_move_road_control_result()->mutable_road(), summary);
+    sink_.sendToConnection(connectionId, response);
+}
+
+void CommandProcessor::handleDeleteRoadControl(const std::string& connectionId, const ProtocolFrame& frame) {
+    const auto& command = frame.command().delete_road_control();
+    DeleteControlInput input;
+    input.roadId = command.road_id();
+    input.controlIndex = command.control_index();
+    auto summary = roadService_->deleteControl(input);
+
+    ProtocolFrame response;
+    response.set_request_id(frame.request_id());
+    fillRoadSummary(response.mutable_result()->mutable_delete_road_control_result()->mutable_road(), summary);
+    sink_.sendToConnection(connectionId, response);
+}
+
+void CommandProcessor::handleFitRoadSource(const std::string& connectionId, const ProtocolFrame& frame) {
+    const auto& command = frame.command().fit_road_source();
+    FitSourceInput input;
+    input.roadId = command.road_id();
+    input.positionTolerance = command.position_tolerance();
+    if (command.has_max_curvature()) {
+        input.maxCurvature = command.max_curvature();
+    }
+    auto summary = roadService_->fitSource(input);
+
+    ProtocolFrame response;
+    response.set_request_id(frame.request_id());
+    fillRoadSummary(response.mutable_result()->mutable_fit_road_source_result()->mutable_road(), summary);
+    sink_.sendToConnection(connectionId, response);
+}
+
+void CommandProcessor::handleUpdateRoadElevation(const std::string& connectionId, const ProtocolFrame& frame) {
+    const auto& command = frame.command().update_road_elevation();
+    // Blocker 15: validate repeated-field sizes BEFORE indexing to avoid
+    // out-of-range access on malformed protocol commands.
+    if (command.stations_size() != command.elevations_size()) {
+        throw CommandFailure{CommandFailureCode::InvalidArgument,
+            "stations and elevations must have the same length"};
+    }
+    UpdateElevationInput input;
+    input.roadId = command.road_id();
+    for (int i = 0; i < command.stations_size(); ++i) {
+        input.stations.push_back(command.stations(i));
+        input.elevations.push_back(command.elevations(i));
+    }
+    auto summary = roadService_->updateElevation(input);
+
+    ProtocolFrame response;
+    response.set_request_id(frame.request_id());
+    fillRoadSummary(response.mutable_result()->mutable_update_road_elevation_result()->mutable_road(), summary);
+    sink_.sendToConnection(connectionId, response);
+}
+
+void CommandProcessor::handleUpdateRoadSuperelevation(const std::string& connectionId, const ProtocolFrame& frame) {
+    const auto& command = frame.command().update_road_superelevation();
+    // Blocker 15: validate repeated-field sizes BEFORE indexing to avoid
+    // out-of-range access on malformed protocol commands.
+    if (command.stations_size() != command.superelevations_size()) {
+        throw CommandFailure{CommandFailureCode::InvalidArgument,
+            "stations and superelevations must have the same length"};
+    }
+    UpdateSuperelevationInput input;
+    input.roadId = command.road_id();
+    for (int i = 0; i < command.stations_size(); ++i) {
+        input.stations.push_back(command.stations(i));
+        input.superelevations.push_back(command.superelevations(i));
+    }
+    auto summary = roadService_->updateSuperelevation(input);
+
+    ProtocolFrame response;
+    response.set_request_id(frame.request_id());
+    fillRoadSummary(response.mutable_result()->mutable_update_road_superelevation_result()->mutable_road(), summary);
+    sink_.sendToConnection(connectionId, response);
+}
+
+void CommandProcessor::handleUndoRoad(const std::string& connectionId, const ProtocolFrame& frame) {
+    const auto& command = frame.command().undo_road();
+    if (!roadService_->undo(command.road_id())) {
+        throw CommandFailure{CommandFailureCode::InvalidArgument,
+            "nothing to undo for road: " + command.road_id()};
+    }
+
+    ProtocolFrame response;
+    response.set_request_id(frame.request_id());
+    // Blocker 14: return a meaningful optional summary when the road still
+    // exists after undo, rather than always returning an empty result.
+    auto* result = response.mutable_result()->mutable_undo_road_result();
+    std::string effectiveId = command.road_id();
+    // If the roadId was empty (global undo), the service resolved it
+    // internally; we cannot easily recover the resolved id here, so we
+    // leave the summary unset for the global-undo case.
+    if (!effectiveId.empty()) {
+        auto summary = roadService_->getRoadSummary(effectiveId);
+        if (summary.has_value()) {
+            fillRoadSummary(result->mutable_road(), *summary);
+        }
+    }
+    sink_.sendToConnection(connectionId, response);
+}
+
+void CommandProcessor::handleRedoRoad(const std::string& connectionId, const ProtocolFrame& frame) {
+    const auto& command = frame.command().redo_road();
+    if (!roadService_->redo(command.road_id())) {
+        throw CommandFailure{CommandFailureCode::InvalidArgument,
+            "nothing to redo for road: " + command.road_id()};
+    }
+
+    ProtocolFrame response;
+    response.set_request_id(frame.request_id());
+    // Blocker 14: return a meaningful optional summary when the road still
+    // exists after redo.
+    auto* result = response.mutable_result()->mutable_redo_road_result();
+    std::string effectiveId = command.road_id();
+    if (!effectiveId.empty()) {
+        auto summary = roadService_->getRoadSummary(effectiveId);
+        if (summary.has_value()) {
+            fillRoadSummary(result->mutable_road(), *summary);
+        }
+    }
+    sink_.sendToConnection(connectionId, response);
+}
+
+void CommandProcessor::handleListRoads(const std::string& connectionId, const ProtocolFrame& frame) {
+    auto roads = roadService_->listRoads();
+
+    ProtocolFrame response;
+    response.set_request_id(frame.request_id());
+    auto* result = response.mutable_result()->mutable_list_roads_result();
+    for (const auto& r : roads) {
+        fillRoadSummary(result->add_roads(), r);
+    }
+    sink_.sendToConnection(connectionId, response);
+}
+
+void CommandProcessor::handleGetRoad(const std::string& connectionId, const ProtocolFrame& frame) {
+    const auto& command = frame.command().get_road();
+    auto details = roadService_->getRoad(command.road_id());
+    if (!details.has_value()) {
+        throw CommandFailure{CommandFailureCode::NotFound,
+            "road not found: " + command.road_id()};
+    }
+
+    ProtocolFrame response;
+    response.set_request_id(frame.request_id());
+    fillRoadDetails(response.mutable_result()->mutable_get_road_result()->mutable_road(), *details);
+    sink_.sendToConnection(connectionId, response);
+}
+
+void CommandProcessor::handleGetRoadScene(const std::string& connectionId, const ProtocolFrame& frame) {
+    auto projection = roadService_->roadSceneProjection();
+
+    ProtocolFrame response;
+    response.set_request_id(frame.request_id());
+    auto* scene = response.mutable_result()->mutable_road_scene_result();
+    scene->set_origin_easting(projection.originEasting);
+    scene->set_origin_northing(projection.originNorthing);
+    scene->set_origin_height(projection.originHeight);
+    scene->set_revision(projection.revision);
+    for (const auto& mesh : projection.meshes) {
+        auto* meshOut = scene->add_meshes();
+        meshOut->set_road_id(mesh.roadId);
+        for (const auto& v : mesh.vertices) {
+            auto* vOut = meshOut->add_vertices();
+            vOut->set_x(v.x);
+            vOut->set_y(v.y);
+            vOut->set_z(v.z);
+            vOut->set_nx(v.nx);
+            vOut->set_ny(v.ny);
+            vOut->set_nz(v.nz);
+        }
+        for (const auto idx : mesh.indices) {
+            meshOut->add_indices(idx);
+        }
+    }
+    sink_.sendToConnection(connectionId, response);
+}
+
+void CommandProcessor::publishRoadEvent(const RoadServiceEvent& event) {
+    ProtocolFrame eventFrame;
+    auto* envelope = eventFrame.mutable_event();
+    envelope->set_event_id(runtime::generateUuidV4());
+
+    switch (event.kind) {
+    case RoadServiceEvent::Kind::Created: {
+        auto* created = envelope->mutable_road_created();
+        created->set_road_id(event.roadId);
+        created->set_revision(event.revision);
+        break;
+    }
+    case RoadServiceEvent::Kind::Updated: {
+        auto* updated = envelope->mutable_road_updated();
+        updated->set_road_id(event.roadId);
+        updated->set_revision(event.revision);
+        break;
+    }
+    case RoadServiceEvent::Kind::Removed: {
+        auto* removed = envelope->mutable_road_removed();
+        removed->set_road_id(event.roadId);
+        removed->set_revision(event.revision);
+        break;
+    }
+    case RoadServiceEvent::Kind::GeometryChanged: {
+        auto* changed = envelope->mutable_road_geometry_changed();
+        changed->set_road_id(event.roadId);
+        changed->set_revision(event.revision);
+        for (const auto& chunk : event.affectedChunks) {
+            changed->add_chunk_x(chunk.x);
+            changed->add_chunk_y(chunk.y);
+        }
+        break;
+    }
+    }
+    sink_.broadcastEvent(eventFrame);
+
+    // Road mutations are canonical: derive revision/dirty projections.
+    if (store_.isOpen()) {
+        const auto& record = store_.current();
+        ProtocolFrame revisionFrame;
+        auto* revisionEnvelope = revisionFrame.mutable_event();
+        revisionEnvelope->set_event_id(runtime::generateUuidV4());
+        revisionEnvelope->mutable_project_revision_changed()->set_revision(record.revision);
+        sink_.broadcastEvent(revisionFrame);
+
+        ProtocolFrame dirtyFrame;
+        auto* dirtyEnvelope = dirtyFrame.mutable_event();
+        dirtyEnvelope->set_event_id(runtime::generateUuidV4());
+        auto* dirty = dirtyEnvelope->mutable_project_dirty_state_changed();
+        dirty->set_dirty(record.isDirty());
+        dirty->set_revision(record.revision);
+        sink_.broadcastEvent(dirtyFrame);
     }
 }
 

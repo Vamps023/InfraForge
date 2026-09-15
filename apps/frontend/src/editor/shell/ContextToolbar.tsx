@@ -1,4 +1,4 @@
-import { Download, FolderOpen, MapPin } from 'lucide-react'
+import { Download, FolderOpen, MapPin, Plus, Trash2, Undo2, Redo2, RefreshCw } from 'lucide-react'
 import { useWorkspaceStore } from './workspaceStore'
 import { Tooltip } from '../../ui/Tooltip'
 import {
@@ -11,6 +11,7 @@ import {
 // functionality. No fake buttons.
 //
 // Terrain workspace: Import (local file), Download Area, Georeference.
+// Roads workspace: Create, Delete, Rename, Refit, Undo, Redo.
 // Other workspaces: no actions yet (future modules).
 //
 // All buttons route through the central command registry via
@@ -24,6 +25,10 @@ export function ContextToolbar({ context }: { context: CommandContext }) {
 
   if (activeWorkspace === 'terrain') {
     return <TerrainContextToolbar context={context} />
+  }
+
+  if (activeWorkspace === 'roads') {
+    return <RoadsContextToolbar context={context} />
   }
 
   // Home and future workspaces have no context toolbar actions yet.
@@ -67,6 +72,83 @@ function TerrainContextToolbar({ context }: { context: CommandContext }) {
           onClick={() => void georeference.run()}
         >
           <MapPin size={14} /> Georeference
+        </button>
+      </Tooltip>
+    </div>
+  )
+}
+
+function RoadsContextToolbar({ context }: { context: CommandContext }) {
+  const createRoad = useCommandExecutor('road.create', context)
+  const deleteRoad = useCommandExecutor('road.delete', context)
+  const renameRoad = useCommandExecutor('road.rename', context)
+  const refitRoad = useCommandExecutor('road.fit-source', context)
+  const undoRoad = useCommandExecutor('road.undo', context)
+  const redoRoad = useCommandExecutor('road.redo', context)
+
+  return (
+    <div className="context-toolbar" aria-label="Roads workspace actions">
+      <span className="context-toolbar-label">Roads</span>
+      <div className="context-toolbar-divider" />
+      <Tooltip label={createRoad.availability.disabledReason ?? 'Create a new road from a source polyline'}>
+        <button
+          type="button"
+          className="tool-button"
+          disabled={!createRoad.availability.enabled}
+          onClick={() => void createRoad.run()}
+        >
+          <Plus size={14} /> Create Road
+        </button>
+      </Tooltip>
+      <Tooltip label={deleteRoad.availability.disabledReason ?? 'Delete the selected road'}>
+        <button
+          type="button"
+          className="tool-button"
+          disabled={!deleteRoad.availability.enabled}
+          onClick={() => void deleteRoad.run()}
+        >
+          <Trash2 size={14} /> Delete
+        </button>
+      </Tooltip>
+      <Tooltip label={renameRoad.availability.disabledReason ?? 'Rename the selected road'}>
+        <button
+          type="button"
+          className="tool-button"
+          disabled={!renameRoad.availability.enabled}
+          onClick={() => void renameRoad.run()}
+        >
+          Rename
+        </button>
+      </Tooltip>
+      <Tooltip label={refitRoad.availability.disabledReason ?? 'Refit road geometry from source polyline'}>
+        <button
+          type="button"
+          className="tool-button"
+          disabled={!refitRoad.availability.enabled}
+          onClick={() => void refitRoad.run()}
+        >
+          <RefreshCw size={14} /> Refit
+        </button>
+      </Tooltip>
+      <div className="context-toolbar-divider" />
+      <Tooltip label={undoRoad.availability.disabledReason ?? 'Undo the last road edit'}>
+        <button
+          type="button"
+          className="tool-button"
+          disabled={!undoRoad.availability.enabled}
+          onClick={() => void undoRoad.run()}
+        >
+          <Undo2 size={14} /> Undo
+        </button>
+      </Tooltip>
+      <Tooltip label={redoRoad.availability.disabledReason ?? 'Redo the last undone road edit'}>
+        <button
+          type="button"
+          className="tool-button"
+          disabled={!redoRoad.availability.enabled}
+          onClick={() => void redoRoad.run()}
+        >
+          <Redo2 size={14} /> Redo
         </button>
       </Tooltip>
     </div>

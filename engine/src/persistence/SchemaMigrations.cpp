@@ -11,7 +11,7 @@
 namespace infraforge::persistence {
 namespace {
 
-constexpr std::array<MigrationDefinition, 8> kCanonicalMigrations{{
+constexpr std::array<MigrationDefinition, 9> kCanonicalMigrations{{
     {
         .id = 1,
         .name = "core project foundation",
@@ -201,6 +201,27 @@ CREATE TABLE road_protected_anchors (
         .sql = R"sql(
 ALTER TABLE roads ADD COLUMN position_tolerance REAL NOT NULL DEFAULT 1.0;
 ALTER TABLE roads ADD COLUMN max_curvature REAL;
+)sql",
+    },
+    {
+        .id = 9,
+        .name = "road control vertices",
+        .sql = R"sql(
+CREATE TABLE road_control_vertices (
+    road_id TEXT NOT NULL,
+    vertex_index INTEGER NOT NULL CHECK (vertex_index >= 0),
+    x REAL NOT NULL,
+    y REAL NOT NULL,
+    z REAL,
+    PRIMARY KEY (road_id, vertex_index),
+    FOREIGN KEY (road_id) REFERENCES roads(id) ON DELETE CASCADE
+);
+
+-- Seed control vertices from the current source polyline so existing
+-- roads remain editable. Source evidence is preserved unchanged in
+-- road_source_vertices.
+INSERT INTO road_control_vertices (road_id, vertex_index, x, y, z)
+SELECT road_id, vertex_index, x, y, z FROM road_source_vertices;
 )sql",
     },
 }};

@@ -72,7 +72,14 @@ struct RoadRecord {
     std::string sourceCrs;
     std::string importedAt;
     std::vector<RoadSourceTagRecord> sourceTags;
+    // Immutable source evidence: the original polyline as imported or
+    // authored. Never modified by control edits; preserved for recovery
+    // and inspection (Blocker 6).
     std::vector<RoadSourceVertexRecord> sourceVertices;
+    // Editable control geometry: the polyline the fitter uses and the
+    // user manipulates via move/insert/delete. Starts as a copy of
+    // sourceVertices and may diverge through edits.
+    std::vector<RoadSourceVertexRecord> controlVertices;
     std::vector<RoadProtectedAnchorRecord> protectedAnchors;
     // Blocker 7: persisted fitting contract so control edits reuse the
     // same source-deviation tolerance the road was created/refit with,

@@ -848,6 +848,31 @@ std::vector<domain::road::RoadRecord> SqliteProjectStore::roadsImpl() const {
             }
         }
 
+        // Control vertices (editable geometry; separate from immutable
+        // source evidence). If the table has no rows for this road (e.g.
+        // an older project before migration 9), fall back to source
+        // vertices so the road remains editable.
+        {
+            SqliteStatement ctrlRows{*connection_,
+                "SELECT x, y, z FROM road_control_vertices "
+                "WHERE road_id = ? ORDER BY vertex_index"};
+            ctrlRows.bindText(1, roadRows.columnText(0));
+            std::uint64_t cIdx = 0;
+            while (ctrlRows.step()) {
+                domain::road::RoadSourceVertexRecord v;
+                v.index = cIdx++;
+                v.x = ctrlRows.columnDouble(0);
+                v.y = ctrlRows.columnDouble(1);
+                if (!ctrlRows.columnIsNull(2)) {
+                    v.z = ctrlRows.columnDouble(2);
+                }
+                road.controlVertices.push_back(v);
+            }
+            if (road.controlVertices.empty() && !road.sourceVertices.empty()) {
+                road.controlVertices = road.sourceVertices;
+            }
+        }
+
         // Protected anchors.
         SqliteStatement anchorRows{*connection_,
             "SELECT station, easting, northing, kind "
@@ -978,6 +1003,24 @@ domain::road::RoadRecord SqliteProjectStore::insertRoadImpl(
             }
         }
 
+        // Control vertices (editable geometry; separate from immutable
+        // source evidence). Always inserted for every road.
+        for (const auto& v : road.controlVertices) {
+            SqliteStatement insertCtrl{*connection_,
+                "INSERT INTO road_control_vertices "
+                "(road_id, vertex_index, x, y, z) VALUES (?, ?, ?, ?, ?)"};
+            insertCtrl.bindText(1, roadIdText);
+            insertCtrl.bindInt64(2, static_cast<std::int64_t>(v.index));
+            insertCtrl.bindDouble(3, v.x);
+            insertCtrl.bindDouble(4, v.y);
+            if (v.z.has_value()) {
+                insertCtrl.bindDouble(5, *v.z);
+            } else {
+                insertCtrl.bindNull(5);
+            }
+            (void)insertCtrl.step();
+        }
+
         // Protected anchors.
         for (const auto& a : road.protectedAnchors) {
             SqliteStatement insertAnchor{*connection_,
@@ -1032,6 +1075,11 @@ domain::road::RoadRecord SqliteProjectStore::updateRoadImpl(
             "DELETE FROM road_source_vertices WHERE road_id = ?"};
         delSrcVtx.bindText(1, roadIdText);
         (void)delSrcVtx.step();
+
+        SqliteStatement delCtrlVtx{*connection_,
+            "DELETE FROM road_control_vertices WHERE road_id = ?"};
+        delCtrlVtx.bindText(1, roadIdText);
+        (void)delCtrlVtx.step();
 
         SqliteStatement delSrc{*connection_,
             "DELETE FROM road_source WHERE road_id = ?"};
@@ -1152,6 +1200,24 @@ domain::road::RoadRecord SqliteProjectStore::updateRoadImpl(
                 }
                 (void)insertVtx.step();
             }
+        }
+
+        // Re-insert control vertices (editable geometry; separate from
+        // immutable source evidence).
+        for (const auto& v : road.controlVertices) {
+            SqliteStatement insertCtrl{*connection_,
+                "INSERT INTO road_control_vertices "
+                "(road_id, vertex_index, x, y, z) VALUES (?, ?, ?, ?, ?)"};
+            insertCtrl.bindText(1, roadIdText);
+            insertCtrl.bindInt64(2, static_cast<std::int64_t>(v.index));
+            insertCtrl.bindDouble(3, v.x);
+            insertCtrl.bindDouble(4, v.y);
+            if (v.z.has_value()) {
+                insertCtrl.bindDouble(5, *v.z);
+            } else {
+                insertCtrl.bindNull(5);
+            }
+            (void)insertCtrl.step();
         }
 
         // Re-insert protected anchors.

@@ -244,19 +244,18 @@ RoadSummary RoadService::insertControl(const InsertControlInput& input) {
     auto before = *found;
     auto record = before;
 
-    // Insert the new control point into the source vertices.
-    if (input.insertBeforeIndex > record.sourceVertices.size()) {
+    // Insert the new control point into the editable control vertices
+    // (not the immutable source evidence). Source vertices are preserved
+    // unchanged as the original imported/authored evidence (Blocker 6).
+    if (input.insertBeforeIndex > record.controlVertices.size()) {
         throw CommandFailure{CommandFailureCode::InvalidArgument,
             "insert index out of range"};
     }
 
-    // Blocker 4: check if the insert position would split a protected
-    // anchor's reference. Protected anchors at or after the insert index
-    // must be re-indexed to maintain their references.
-    // Re-index source vertices.
+    // Re-index control vertices.
     std::vector<RoadSourceVertexRecord> newVertices;
     for (std::size_t i = 0; i < input.insertBeforeIndex; ++i) {
-        newVertices.push_back(record.sourceVertices[i]);
+        newVertices.push_back(record.controlVertices[i]);
     }
     RoadSourceVertexRecord newVtx;
     newVtx.index = input.insertBeforeIndex;
@@ -264,12 +263,12 @@ RoadSummary RoadService::insertControl(const InsertControlInput& input) {
     newVtx.y = input.position.northing;
     newVtx.z = input.elevation;
     newVertices.push_back(newVtx);
-    for (std::size_t i = input.insertBeforeIndex; i < record.sourceVertices.size(); ++i) {
-        auto v = record.sourceVertices[i];
+    for (std::size_t i = input.insertBeforeIndex; i < record.controlVertices.size(); ++i) {
+        auto v = record.controlVertices[i];
         v.index = i + 1;
         newVertices.push_back(v);
     }
-    record.sourceVertices = newVertices;
+    record.controlVertices = newVertices;
 
     // Refit the road — preserves RoadId, profiles, provenance (Blocker 1+2).
     // Blocker 7: reuse the road's persisted fitting contract instead of a
@@ -308,7 +307,7 @@ RoadSummary RoadService::moveControl(const MoveControlInput& input) {
     auto before = *found;
     auto record = before;
 
-    if (input.controlIndex >= record.sourceVertices.size()) {
+    if (input.controlIndex >= record.controlVertices.size()) {
         throw CommandFailure{CommandFailureCode::InvalidArgument,
             "control index out of range"};
     }
@@ -319,8 +318,8 @@ RoadSummary RoadService::moveControl(const MoveControlInput& input) {
     for (const auto& anchor : record.protectedAnchors) {
         // Check if this control index corresponds to a protected anchor by
         // matching position. Protected anchors are reference data; moving
-        // the source vertex at the same position would displace the anchor.
-        const auto& vtx = record.sourceVertices[input.controlIndex];
+        // the control vertex at the same position would displace the anchor.
+        const auto& vtx = record.controlVertices[input.controlIndex];
         const double dx = vtx.x - anchor.position.easting;
         const double dy = vtx.y - anchor.position.northing;
         if (std::sqrt(dx * dx + dy * dy) < 1e-9) {
@@ -330,9 +329,9 @@ RoadSummary RoadService::moveControl(const MoveControlInput& input) {
         }
     }
 
-    record.sourceVertices[input.controlIndex].x = input.position.easting;
-    record.sourceVertices[input.controlIndex].y = input.position.northing;
-    record.sourceVertices[input.controlIndex].z = input.elevation;
+    record.controlVertices[input.controlIndex].x = input.position.easting;
+    record.controlVertices[input.controlIndex].y = input.position.northing;
+    record.controlVertices[input.controlIndex].z = input.elevation;
 
     // Refit the road — preserves RoadId, profiles, provenance (Blocker 1+2).
     // Blocker 7: reuse the road's persisted fitting contract.
@@ -369,18 +368,18 @@ RoadSummary RoadService::deleteControl(const DeleteControlInput& input) {
     auto before = *found;
     auto record = before;
 
-    if (record.sourceVertices.size() <= 2) {
+    if (record.controlVertices.size() <= 2) {
         throw CommandFailure{CommandFailureCode::InvalidArgument,
             "cannot delete control: road must have at least 2 control points"};
     }
-    if (input.controlIndex >= record.sourceVertices.size()) {
+    if (input.controlIndex >= record.controlVertices.size()) {
         throw CommandFailure{CommandFailureCode::InvalidArgument,
             "control index out of range"};
     }
 
     // Blocker 4: do not permit deleting a protected topology anchor.
     for (const auto& anchor : record.protectedAnchors) {
-        const auto& vtx = record.sourceVertices[input.controlIndex];
+        const auto& vtx = record.controlVertices[input.controlIndex];
         const double dx = vtx.x - anchor.position.easting;
         const double dy = vtx.y - anchor.position.northing;
         if (std::sqrt(dx * dx + dy * dy) < 1e-9) {
@@ -390,15 +389,16 @@ RoadSummary RoadService::deleteControl(const DeleteControlInput& input) {
         }
     }
 
-    // Remove the control point and re-index.
+    // Remove the control point from the editable control vertices (not
+    // the immutable source evidence) and re-index.
     std::vector<RoadSourceVertexRecord> newVertices;
-    for (std::size_t i = 0; i < record.sourceVertices.size(); ++i) {
+    for (std::size_t i = 0; i < record.controlVertices.size(); ++i) {
         if (i == input.controlIndex) continue;
-        auto v = record.sourceVertices[i];
+        auto v = record.controlVertices[i];
         v.index = newVertices.size();
         newVertices.push_back(v);
     }
-    record.sourceVertices = newVertices;
+    record.controlVertices = newVertices;
 
     // Refit the road — preserves RoadId, profiles, provenance (Blocker 1+2).
     // Blocker 7: reuse the road's persisted fitting contract.
@@ -1229,6 +1229,10 @@ RoadRecord RoadService::buildNewRoadRecord(
     }
 
     auto record = toRecord(*road);
+    // Blocker 6: control vertices are the editable geometry the fitter
+    // uses. They start as a copy of the source evidence; user edits may
+    // diverge them while sourceVertices remains immutable evidence.
+    record.controlVertices = record.sourceVertices;
     // Blocker 7: persist the fitting contract so future control edits
     // reuse the same tolerance/maxCurvature instead of a magic constant.
     record.positionTolerance = positionTolerance;
@@ -1247,9 +1251,13 @@ RoadRecord RoadService::refitRoad(
     // anchors. Only the canonical alignment is re-derived from the source
     // vertices. The road is NOT rebuilt as a fresh Authored road.
 
-    // Rebuild conditioned polyline from source vertices.
+    // Rebuild conditioned polyline from CONTROL vertices (the editable
+    // geometry the fitter uses). Source vertices remain immutable evidence
+    // and are preserved unchanged (Blocker 6).
+    const auto& fitVertices = existing.controlVertices.empty()
+        ? existing.sourceVertices : existing.controlVertices;
     std::vector<ConditionedVertex> polyline;
-    for (const auto& v : existing.sourceVertices) {
+    for (const auto& v : fitVertices) {
         ConditionedVertex cv;
         cv.position = AlignmentPoint{v.x, v.y};
         polyline.push_back(cv);
@@ -1316,6 +1324,10 @@ RoadRecord RoadService::refitRoad(
     }
 
     auto record = toRecord(*road);
+    // Blocker 6: preserve the editable control vertices (which the caller
+    // just modified). sourceVertices is repopulated from the Road's
+    // immutable source evidence by toRecord.
+    record.controlVertices = existing.controlVertices;
     // Blocker 7: preserve the fitting contract in the record so control
     // edits reuse the same tolerance/maxCurvature instead of a magic
     // constant. Update with the parameters used for this refit.

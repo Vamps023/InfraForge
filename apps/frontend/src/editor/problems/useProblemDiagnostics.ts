@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { useProjectStore } from '../../features/project/projectStore'
 import { useViewportStore } from '../../features/viewport/viewportStore'
+import { useRoadStore } from '../../features/road/roadStore'
 import { useProblemsStore } from '../problems/problemsStore'
 
 // Bridges real frontend-owned projections (project command failures, viewport
@@ -14,6 +15,8 @@ import { useProblemsStore } from '../problems/problemsStore'
 //     These are application-level command errors (e.g., save failed, open
 //     failed), NOT engine transport connection failures.
 //   - `viewport` source: viewport lifecycle failures from useViewportStore.
+//   - `road` source: road command failures from useRoadStore.lastError
+//     (Blocker 17: road diagnostics to Problems panel).
 //   - Engine transport connection status (useUiStore.engineStatus) is a
 //     separate surface and is NOT bridged here to avoid conflating transport
 //     connection state with project command failures.
@@ -25,10 +28,12 @@ import { useProblemsStore } from '../problems/problemsStore'
 
 const VIEWPORT_STATUS_ID = 'viewport:status'
 const PROJECT_COMMAND_ID = 'project-command:error'
+const ROAD_COMMAND_ID = 'road-command:error'
 
 export function useProblemDiagnostics(): void {
   const lastError = useProjectStore((state) => state.lastError)
   const viewportStatus = useViewportStore((state) => state.status)
+  const roadError = useRoadStore((state) => state.lastError)
   const upsert = useProblemsStore((state) => state.upsert)
   const remove = useProblemsStore((state) => state.remove)
 
@@ -64,10 +69,28 @@ export function useProblemDiagnostics(): void {
       remove(VIEWPORT_STATUS_ID)
     }
   }, [viewportStatus, upsert, remove])
+
+  // Road command failures: one current road diagnostic at most. Road
+  // command failures (e.g., fit failures, validation errors, control edit
+  // failures) surface here with source 'road' so they can be filtered
+  // separately from project command errors (Blocker 17).
+  useEffect(() => {
+    if (roadError) {
+      upsert({
+        id: ROAD_COMMAND_ID,
+        severity: 'error',
+        message: `Road: ${roadError}`,
+        source: 'road',
+      })
+    } else {
+      remove(ROAD_COMMAND_ID)
+    }
+  }, [roadError, upsert, remove])
 }
 
 // Exported for tests so they can assert the stable identity contract.
 export const PROBLEM_DIAGNOSTIC_IDS = {
   viewportStatus: VIEWPORT_STATUS_ID,
   projectCommand: PROJECT_COMMAND_ID,
+  roadCommand: ROAD_COMMAND_ID,
 } as const

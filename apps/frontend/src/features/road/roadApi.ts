@@ -60,29 +60,51 @@ export async function createRoad(
   })
   const outcome = await sendRoadCommand(client, { case: 'createRoad', value: command })
   if (outcome.case !== 'createRoadResult' || !outcome.value.road) {
-    throw expectFailure(outcome)
+    const failure = expectFailure(outcome)
+    useRoadStore.getState().setLastError(failure.message)
+    throw failure
   }
+  useRoadStore.getState().setLastError(null)
   useRoadStore.getState().upsertRoad(outcome.value.road)
   return outcome.value.road
+}
+
+// Wrap a road command so failures are surfaced to the road store as
+// diagnostics (source: 'road') before re-throwing. Successful commands
+// clear the road error.
+async function withRoadError<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    const result = await fn()
+    useRoadStore.getState().setLastError(null)
+    return result
+  } catch (error) {
+    const failure = error instanceof ProjectCommandFailure ? error : toFailure(error, 'Road command failed')
+    useRoadStore.getState().setLastError(failure.message)
+    throw failure
+  }
 }
 
 export async function deleteRoad(client: EngineClient, roadId: string): Promise<void> {
-  const command = create(DeleteRoadCommandSchema, { roadId })
-  const outcome = await sendRoadCommand(client, { case: 'deleteRoad', value: command })
-  if (outcome.case !== 'deleteRoadResult') {
-    throw expectFailure(outcome)
-  }
-  useRoadStore.getState().removeRoad(roadId)
+  await withRoadError(async () => {
+    const command = create(DeleteRoadCommandSchema, { roadId })
+    const outcome = await sendRoadCommand(client, { case: 'deleteRoad', value: command })
+    if (outcome.case !== 'deleteRoadResult') {
+      throw expectFailure(outcome)
+    }
+    useRoadStore.getState().removeRoad(roadId)
+  })
 }
 
 export async function renameRoad(client: EngineClient, roadId: string, name: string): Promise<RoadSummary> {
-  const command = create(RenameRoadCommandSchema, { roadId, name })
-  const outcome = await sendRoadCommand(client, { case: 'renameRoad', value: command })
-  if (outcome.case !== 'renameRoadResult' || !outcome.value.road) {
-    throw expectFailure(outcome)
-  }
-  useRoadStore.getState().upsertRoad(outcome.value.road)
-  return outcome.value.road
+  return withRoadError(async () => {
+    const command = create(RenameRoadCommandSchema, { roadId, name })
+    const outcome = await sendRoadCommand(client, { case: 'renameRoad', value: command })
+    if (outcome.case !== 'renameRoadResult' || !outcome.value.road) {
+      throw expectFailure(outcome)
+    }
+    useRoadStore.getState().upsertRoad(outcome.value.road)
+    return outcome.value.road
+  })
 }
 
 export async function insertRoadControl(
@@ -93,19 +115,21 @@ export async function insertRoadControl(
   northing: number,
   elevation?: number,
 ): Promise<RoadSummary> {
-  const command = create(InsertRoadControlCommandSchema, {
-    roadId,
-    insertBeforeIndex,
-    easting,
-    northing,
-    elevation,
+  return withRoadError(async () => {
+    const command = create(InsertRoadControlCommandSchema, {
+      roadId,
+      insertBeforeIndex,
+      easting,
+      northing,
+      elevation,
+    })
+    const outcome = await sendRoadCommand(client, { case: 'insertRoadControl', value: command })
+    if (outcome.case !== 'insertRoadControlResult' || !outcome.value.road) {
+      throw expectFailure(outcome)
+    }
+    useRoadStore.getState().upsertRoad(outcome.value.road)
+    return outcome.value.road
   })
-  const outcome = await sendRoadCommand(client, { case: 'insertRoadControl', value: command })
-  if (outcome.case !== 'insertRoadControlResult' || !outcome.value.road) {
-    throw expectFailure(outcome)
-  }
-  useRoadStore.getState().upsertRoad(outcome.value.road)
-  return outcome.value.road
 }
 
 export async function moveRoadControl(
@@ -116,19 +140,21 @@ export async function moveRoadControl(
   northing: number,
   elevation?: number,
 ): Promise<RoadSummary> {
-  const command = create(MoveRoadControlCommandSchema, {
-    roadId,
-    controlIndex,
-    easting,
-    northing,
-    elevation,
+  return withRoadError(async () => {
+    const command = create(MoveRoadControlCommandSchema, {
+      roadId,
+      controlIndex,
+      easting,
+      northing,
+      elevation,
+    })
+    const outcome = await sendRoadCommand(client, { case: 'moveRoadControl', value: command })
+    if (outcome.case !== 'moveRoadControlResult' || !outcome.value.road) {
+      throw expectFailure(outcome)
+    }
+    useRoadStore.getState().upsertRoad(outcome.value.road)
+    return outcome.value.road
   })
-  const outcome = await sendRoadCommand(client, { case: 'moveRoadControl', value: command })
-  if (outcome.case !== 'moveRoadControlResult' || !outcome.value.road) {
-    throw expectFailure(outcome)
-  }
-  useRoadStore.getState().upsertRoad(outcome.value.road)
-  return outcome.value.road
 }
 
 export async function deleteRoadControl(
@@ -136,13 +162,15 @@ export async function deleteRoadControl(
   roadId: string,
   controlIndex: number,
 ): Promise<RoadSummary> {
-  const command = create(DeleteRoadControlCommandSchema, { roadId, controlIndex })
-  const outcome = await sendRoadCommand(client, { case: 'deleteRoadControl', value: command })
-  if (outcome.case !== 'deleteRoadControlResult' || !outcome.value.road) {
-    throw expectFailure(outcome)
-  }
-  useRoadStore.getState().upsertRoad(outcome.value.road)
-  return outcome.value.road
+  return withRoadError(async () => {
+    const command = create(DeleteRoadControlCommandSchema, { roadId, controlIndex })
+    const outcome = await sendRoadCommand(client, { case: 'deleteRoadControl', value: command })
+    if (outcome.case !== 'deleteRoadControlResult' || !outcome.value.road) {
+      throw expectFailure(outcome)
+    }
+    useRoadStore.getState().upsertRoad(outcome.value.road)
+    return outcome.value.road
+  })
 }
 
 export async function fitRoadSource(
@@ -151,13 +179,15 @@ export async function fitRoadSource(
   positionTolerance: number,
   maxCurvature?: number,
 ): Promise<RoadSummary> {
-  const command = create(FitRoadSourceCommandSchema, { roadId, positionTolerance, maxCurvature })
-  const outcome = await sendRoadCommand(client, { case: 'fitRoadSource', value: command })
-  if (outcome.case !== 'fitRoadSourceResult' || !outcome.value.road) {
-    throw expectFailure(outcome)
-  }
-  useRoadStore.getState().upsertRoad(outcome.value.road)
-  return outcome.value.road
+  return withRoadError(async () => {
+    const command = create(FitRoadSourceCommandSchema, { roadId, positionTolerance, maxCurvature })
+    const outcome = await sendRoadCommand(client, { case: 'fitRoadSource', value: command })
+    if (outcome.case !== 'fitRoadSourceResult' || !outcome.value.road) {
+      throw expectFailure(outcome)
+    }
+    useRoadStore.getState().upsertRoad(outcome.value.road)
+    return outcome.value.road
+  })
 }
 
 export async function updateRoadElevation(
@@ -166,13 +196,15 @@ export async function updateRoadElevation(
   stations: number[],
   elevations: number[],
 ): Promise<RoadSummary> {
-  const command = create(UpdateRoadElevationCommandSchema, { roadId, stations, elevations })
-  const outcome = await sendRoadCommand(client, { case: 'updateRoadElevation', value: command })
-  if (outcome.case !== 'updateRoadElevationResult' || !outcome.value.road) {
-    throw expectFailure(outcome)
-  }
-  useRoadStore.getState().upsertRoad(outcome.value.road)
-  return outcome.value.road
+  return withRoadError(async () => {
+    const command = create(UpdateRoadElevationCommandSchema, { roadId, stations, elevations })
+    const outcome = await sendRoadCommand(client, { case: 'updateRoadElevation', value: command })
+    if (outcome.case !== 'updateRoadElevationResult' || !outcome.value.road) {
+      throw expectFailure(outcome)
+    }
+    useRoadStore.getState().upsertRoad(outcome.value.road)
+    return outcome.value.road
+  })
 }
 
 export async function updateRoadSuperelevation(
@@ -181,13 +213,15 @@ export async function updateRoadSuperelevation(
   stations: number[],
   superelevations: number[],
 ): Promise<RoadSummary> {
-  const command = create(UpdateRoadSuperelevationCommandSchema, { roadId, stations, superelevations })
-  const outcome = await sendRoadCommand(client, { case: 'updateRoadSuperelevation', value: command })
-  if (outcome.case !== 'updateRoadSuperelevationResult' || !outcome.value.road) {
-    throw expectFailure(outcome)
-  }
-  useRoadStore.getState().upsertRoad(outcome.value.road)
-  return outcome.value.road
+  return withRoadError(async () => {
+    const command = create(UpdateRoadSuperelevationCommandSchema, { roadId, stations, superelevations })
+    const outcome = await sendRoadCommand(client, { case: 'updateRoadSuperelevation', value: command })
+    if (outcome.case !== 'updateRoadSuperelevationResult' || !outcome.value.road) {
+      throw expectFailure(outcome)
+    }
+    useRoadStore.getState().upsertRoad(outcome.value.road)
+    return outcome.value.road
+  })
 }
 
 export async function listRoads(client: EngineClient): Promise<RoadSummary[]> {
@@ -235,32 +269,36 @@ export async function undoRoadEdit(
   client: EngineClient,
   roadId: string = '',
 ): Promise<RoadSummary | null> {
-  const command = create(UndoRoadCommandSchema, { roadId })
-  const outcome = await sendRoadCommand(client, { case: 'undoRoad', value: command })
-  if (outcome.case !== 'undoRoadResult') {
-    throw expectFailure(outcome)
-  }
-  if (outcome.value.road) {
-    useRoadStore.getState().upsertRoad(outcome.value.road)
-    return outcome.value.road
-  }
-  return null
+  return withRoadError(async () => {
+    const command = create(UndoRoadCommandSchema, { roadId })
+    const outcome = await sendRoadCommand(client, { case: 'undoRoad', value: command })
+    if (outcome.case !== 'undoRoadResult') {
+      throw expectFailure(outcome)
+    }
+    if (outcome.value.road) {
+      useRoadStore.getState().upsertRoad(outcome.value.road)
+      return outcome.value.road
+    }
+    return null
+  })
 }
 
 export async function redoRoadEdit(
   client: EngineClient,
   roadId: string = '',
 ): Promise<RoadSummary | null> {
-  const command = create(RedoRoadCommandSchema, { roadId })
-  const outcome = await sendRoadCommand(client, { case: 'redoRoad', value: command })
-  if (outcome.case !== 'redoRoadResult') {
-    throw expectFailure(outcome)
-  }
-  if (outcome.value.road) {
-    useRoadStore.getState().upsertRoad(outcome.value.road)
-    return outcome.value.road
-  }
-  return null
+  return withRoadError(async () => {
+    const command = create(RedoRoadCommandSchema, { roadId })
+    const outcome = await sendRoadCommand(client, { case: 'redoRoad', value: command })
+    if (outcome.case !== 'redoRoadResult') {
+      throw expectFailure(outcome)
+    }
+    if (outcome.value.road) {
+      useRoadStore.getState().upsertRoad(outcome.value.road)
+      return outcome.value.road
+    }
+    return null
+  })
 }
 
 export { toFailure }

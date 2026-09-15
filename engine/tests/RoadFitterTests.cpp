@@ -362,6 +362,118 @@ TEST_CASE("source deviation validation detects large deviation") {
     REQUIRE_FALSE(diags.empty());
 }
 
+// Blocker 9: finite-arc source-deviation validation.
+// A point on the parent circle but OUTSIDE the arc's angular span must NOT
+// produce zero deviation. The old code used |distFromCenter - radius| which
+// accepted any point on the infinite circle.
+TEST_CASE("finite arc: point on circle but outside arc span is not zero deviation") {
+    // Arc: start=(100,0), heading=+Y, curvature=+1/100 (CCW), sweeps 90 deg
+    // to end at (0,100). Center is at (0,0).
+    const double r = 100.0;
+    CircularArcSegment arc;
+    arc.start = {r, 0.0};
+    arc.startHeading = std::numbers::pi / 2.0;
+    arc.curvature = 1.0 / r;
+    arc.length = r * std::numbers::pi / 2.0;  // quarter circle
+
+    auto alignment = ReferenceAlignment::build({arc});
+    REQUIRE(alignment.has_value());
+
+    // Point (0,-100) is on the parent circle (radius 100) but at angle -pi/2,
+    // well outside the arc's [0, pi/2] angular range.
+    std::vector<ConditionedVertex> polyline(1);
+    polyline[0].position = {0.0, -r};
+
+    auto diags = validateSourceDeviation(*alignment, polyline, 1.0);
+    // Must NOT be zero deviation. Distance to nearest endpoint (100,0) is
+    // sqrt(100^2 + 100^2) ~ 141.4.
+    REQUIRE_FALSE(diags.empty());
+}
+
+TEST_CASE("finite arc: point on arc interior produces near-zero deviation") {
+    // Same arc as above.
+    const double r = 100.0;
+    CircularArcSegment arc;
+    arc.start = {r, 0.0};
+    arc.startHeading = std::numbers::pi / 2.0;
+    arc.curvature = 1.0 / r;
+    arc.length = r * std::numbers::pi / 2.0;
+
+    auto alignment = ReferenceAlignment::build({arc});
+    REQUIRE(alignment.has_value());
+
+    // Point at 45 degrees on the arc: (r*cos(45), r*sin(45)).
+    std::vector<ConditionedVertex> polyline(1);
+    polyline[0].position = {r * std::cos(std::numbers::pi / 4.0),
+                            r * std::sin(std::numbers::pi / 4.0)};
+
+    auto diags = validateSourceDeviation(*alignment, polyline, 0.01);
+    REQUIRE(diags.empty());
+}
+
+TEST_CASE("finite arc: point near arc start endpoint produces small deviation") {
+    const double r = 100.0;
+    CircularArcSegment arc;
+    arc.start = {r, 0.0};
+    arc.startHeading = std::numbers::pi / 2.0;
+    arc.curvature = 1.0 / r;
+    arc.length = r * std::numbers::pi / 2.0;
+
+    auto alignment = ReferenceAlignment::build({arc});
+    REQUIRE(alignment.has_value());
+
+    // Point just past the arc start (slightly before angle 0).
+    // At angle -0.001, the point is on the circle but outside the arc.
+    // The nearest point should be the arc start (100,0).
+    std::vector<ConditionedVertex> polyline(1);
+    polyline[0].position = {r * std::cos(-0.001), r * std::sin(-0.001)};
+
+    auto diags = validateSourceDeviation(*alignment, polyline, 1.0);
+    // The distance should be ~0.1 (arc gap), which is within tolerance 1.0.
+    REQUIRE(diags.empty());
+}
+
+TEST_CASE("finite arc: point far beyond arc end produces large deviation") {
+    const double r = 100.0;
+    CircularArcSegment arc;
+    arc.start = {r, 0.0};
+    arc.startHeading = std::numbers::pi / 2.0;
+    arc.curvature = 1.0 / r;
+    arc.length = r * std::numbers::pi / 2.0;
+
+    auto alignment = ReferenceAlignment::build({arc});
+    REQUIRE(alignment.has_value());
+
+    // Point at angle pi (i.e., (-100, 0)) on the parent circle, well past
+    // the arc's end at (0, 100). Nearest endpoint distance ~141.4.
+    std::vector<ConditionedVertex> polyline(1);
+    polyline[0].position = {-r, 0.0};
+
+    auto diags = validateSourceDeviation(*alignment, polyline, 1.0);
+    REQUIRE_FALSE(diags.empty());
+}
+
+TEST_CASE("finite arc: clockwise arc respects angular span") {
+    // Clockwise arc: start=(100,0), heading=-Y, curvature=-1/100, sweeps
+    // 90 deg to end at (0,-100). Center at (0,0).
+    const double r = 100.0;
+    CircularArcSegment arc;
+    arc.start = {r, 0.0};
+    arc.startHeading = -std::numbers::pi / 2.0;
+    arc.curvature = -1.0 / r;
+    arc.length = r * std::numbers::pi / 2.0;
+
+    auto alignment = ReferenceAlignment::build({arc});
+    REQUIRE(alignment.has_value());
+
+    // Point (0,100) is on the parent circle but outside the CW arc's range.
+    std::vector<ConditionedVertex> polyline(1);
+    polyline[0].position = {0.0, r};
+
+    auto diags = validateSourceDeviation(*alignment, polyline, 1.0);
+    REQUIRE_FALSE(diags.empty());
+}
+
 TEST_CASE("absent max curvature does not invent a constraint") {
     // Without maxCurvature, the fitter should not reject any curvature.
     auto polyline = makeArcPolyline(0.0, 0.0, 0.0, 0.1, 30.0, 15);

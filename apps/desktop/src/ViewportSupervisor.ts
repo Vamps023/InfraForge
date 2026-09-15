@@ -132,12 +132,14 @@ export class ViewportSupervisor {
     }
   }
 
-  // Blocker 10: Forwards the engine-derived road scene projection to the
-  // viewport as a separate narrow scene channel. Road scenes are NOT
-  // terrain scenes and must not be rejected by the terrain-only validation
-  // in the terrain scene path. The road scene is forwarded as a dedicated
-  // control message so the native viewport's RoadPass can update
-  // incrementally without a full terrain scene rebuild.
+  // Blocker 1: Forwards the engine-derived road scene projection to the
+  // viewport through the single coherent "scene" control message type.
+  // The native ControlProtocol's "scene" handler parses BOTH terrain
+  // (parseTerrainScene) and road (parseRoadScene) data from the same JSON.
+  // Road-only updates send a "scene" with a "roads" field and no "tiles"
+  // field, so the terrain scene is empty and only the road scene updates.
+  // This avoids a competing "roadScene" control type that the native
+  // protocol does not recognize.
   sendRoadScene(scene: Record<string, unknown>): void {
     // Validate the road scene payload is a bounded plain object with roads.
     if (typeof scene !== 'object' || scene === null || Array.isArray(scene)) {
@@ -147,21 +149,21 @@ export class ViewportSupervisor {
     if (!Array.isArray(record.meshes)) {
       return
     }
-    // Forward as a typed road scene control message. The native viewport
-    // parses the "roads" field and the "roadRevision" field.
-    const roadControl: Record<string, unknown> = {
-      type: 'roadScene',
+    // Forward as a "scene" type with "roads" field so the native viewport's
+    // single scene parser handles both terrain and road data coherently.
+    const sceneControl: Record<string, unknown> = {
+      type: 'scene',
       roads: record.meshes,
     }
     // Preserve revision as a string for lossless uint64 transport.
     if (typeof record.revision === 'bigint') {
-      roadControl.roadRevision = (record.revision as bigint).toString()
+      sceneControl.roadRevision = (record.revision as bigint).toString()
     } else if (typeof record.revision === 'number') {
-      roadControl.roadRevision = String(record.revision)
+      sceneControl.roadRevision = String(record.revision)
     } else if (typeof record.revision === 'string') {
-      roadControl.roadRevision = record.revision
+      sceneControl.roadRevision = record.revision
     }
-    this.sendControl(roadControl)
+    this.sendControl(sceneControl)
   }
 
   sendEmptyScene(): void {

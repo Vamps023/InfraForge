@@ -749,13 +749,19 @@ std::vector<domain::road::RoadRecord> SqliteProjectStore::roadsImpl() const {
     }
     std::vector<domain::road::RoadRecord> roads;
     SqliteStatement roadRows{*connection_,
-        "SELECT id, display_name, created_at, modified_at FROM roads ORDER BY created_at"};
+        "SELECT id, display_name, created_at, modified_at, position_tolerance, max_curvature "
+        "FROM roads ORDER BY created_at"};
     while (roadRows.step()) {
         domain::road::RoadRecord road;
         road.id = domain::road::roadIdFromUuidText(roadRows.columnText(0));
         road.displayName = std::string{roadRows.columnText(1)};
         road.createdAt = std::string{roadRows.columnText(2)};
         road.modifiedAt = std::string{roadRows.columnText(3)};
+        // Blocker 7: load the persisted fitting contract.
+        road.positionTolerance = roadRows.columnDouble(4);
+        if (!roadRows.columnIsNull(5)) {
+            road.maxCurvature = roadRows.columnDouble(5);
+        }
 
         // Segments.
         SqliteStatement segRows{*connection_,
@@ -876,11 +882,19 @@ domain::road::RoadRecord SqliteProjectStore::insertRoadImpl(
         SqliteTransaction transaction{*connection_};
 
         SqliteStatement insertRoad{*connection_,
-            "INSERT INTO roads (id, display_name, created_at, modified_at) VALUES (?, ?, ?, ?)"};
+            "INSERT INTO roads (id, display_name, created_at, modified_at, "
+            "position_tolerance, max_curvature) VALUES (?, ?, ?, ?, ?, ?)"};
         insertRoad.bindText(1, roadIdText);
         insertRoad.bindText(2, road.displayName);
         insertRoad.bindText(3, road.createdAt.empty() ? modifiedAt : road.createdAt);
         insertRoad.bindText(4, modifiedAt);
+        // Blocker 7: persist the fitting contract.
+        insertRoad.bindDouble(5, road.positionTolerance);
+        if (road.maxCurvature.has_value()) {
+            insertRoad.bindDouble(6, *road.maxCurvature);
+        } else {
+            insertRoad.bindNull(6);
+        }
         (void)insertRoad.step();
 
         // Segments.
@@ -1041,10 +1055,18 @@ domain::road::RoadRecord SqliteProjectStore::updateRoadImpl(
 
         // Update the road row itself.
         SqliteStatement updateRoadRow{*connection_,
-            "UPDATE roads SET display_name = ?, modified_at = ? WHERE id = ?"};
+            "UPDATE roads SET display_name = ?, modified_at = ?, "
+            "position_tolerance = ?, max_curvature = ? WHERE id = ?"};
         updateRoadRow.bindText(1, road.displayName);
         updateRoadRow.bindText(2, modifiedAt);
-        updateRoadRow.bindText(3, roadIdText);
+        // Blocker 7: persist the fitting contract on update.
+        updateRoadRow.bindDouble(3, road.positionTolerance);
+        if (road.maxCurvature.has_value()) {
+            updateRoadRow.bindDouble(4, *road.maxCurvature);
+        } else {
+            updateRoadRow.bindNull(4);
+        }
+        updateRoadRow.bindText(5, roadIdText);
         (void)updateRoadRow.step();
         if (connection_->lastChanges() != 1) {
             fail(ports::StoreErrorCategory::NotFound,

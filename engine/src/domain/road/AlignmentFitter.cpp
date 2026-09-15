@@ -233,17 +233,21 @@ struct PolylineSection {
     const double r = std::sqrt(r2);
     if (!std::isfinite(r) || r < 1e-12) return std::nullopt;
 
-    // Determine curvature sign from heading change direction.
-    // Use the full section range for the sign computation.
+    // Determine curvature sign from the fitted circle center position
+    // relative to the direction of travel (p0 -> pN). This is robust for
+    // nearly-collinear points where the edge cross product is ~0.
+    // If the center is to the LEFT of the travel direction, curvature is
+    // positive (CCW). If to the RIGHT, negative (CW).
     const AlignmentPoint& p0 = polyline[startIndex].position;
-    const AlignmentPoint& p1 = polyline[startIndex + 1].position;
     const AlignmentPoint& pN = polyline[endIndex].position;
-    const double dx1 = p1.easting - p0.easting;
-    const double dy1 = p1.northing - p0.northing;
-    const double dx2 = pN.easting - p0.easting;
-    const double dy2 = pN.northing - p0.northing;
-    const double cross = dx1 * dy2 - dy1 * dx2;
-    const double curvature = (cross >= 0.0 ? 1.0 : -1.0) / r;
+    const double travelDx = pN.easting - p0.easting;
+    const double travelDy = pN.northing - p0.northing;
+    const double centerDx = cx - p0.easting;
+    const double centerDy = cy - p0.northing;
+    // Cross product of travel direction and (center - p0).
+    // Positive = center is to the left = positive curvature (CCW).
+    const double centerCross = travelDx * centerDy - travelDy * centerDx;
+    const double curvature = (centerCross >= 0.0 ? 1.0 : -1.0) / r;
 
     // The arc segment starts at the section boundary (startIndex) and ends
     // at the section boundary (endIndex). The circle was fit using all
@@ -679,7 +683,11 @@ std::vector<RoadDiagnostic> validateSourceDeviation(
                     const double ddy = v.position.northing - py;
                     segBestDist = std::sqrt(ddx * ddx + ddy * ddy);
                 } else if constexpr (std::is_same_v<T, CircularArcSegment>) {
-                    // Radial projection onto the arc's circle.
+                    // Blocker 9: finite arc nearest-point validation.
+                    // The nearest point must be on the finite angular arc
+                    // interval, not merely anywhere on the parent circle.
+                    // A point on the same circle but outside the arc span
+                    // must NOT produce zero deviation.
                     if (std::abs(s.curvature) < 1e-15) {
                         // Degenerate: treat as line.
                         const double dirX = std::cos(s.startHeading);
@@ -696,7 +704,6 @@ std::vector<RoadDiagnostic> validateSourceDeviation(
                     } else {
                         // Center = start + radius * perpendicular to start heading.
                         const double r = 1.0 / std::abs(s.curvature);
-                        // Perpendicular direction (rotated 90° CCW for positive curvature).
                         const double perpX = (s.curvature > 0 ? -std::sin(s.startHeading) : std::sin(s.startHeading)) * r;
                         const double perpY = (s.curvature > 0 ? std::cos(s.startHeading) : -std::cos(s.startHeading)) * r;
                         const double cx = s.start.easting + perpX;
@@ -705,16 +712,48 @@ std::vector<RoadDiagnostic> validateSourceDeviation(
                         const double vdx = v.position.easting - cx;
                         const double vdy = v.position.northing - cy;
                         const double distFromCenter = std::sqrt(vdx * vdx + vdy * vdy);
-                        // Nearest point on circle is at radius r from center.
-                        // But we need to check if it's within the arc's angular range.
-                        // For a conservative bound, use |distFromCenter - r|.
-                        segBestDist = std::abs(distFromCenter - r);
-                        // Also check endpoints for short arcs.
-                        const auto startSample = s.evaluate(0.0);
-                        const auto endSample = s.evaluate(s.length);
-                        const double dStart = distance(startSample.position, v.position);
-                        const double dEnd = distance(endSample.position, v.position);
-                        segBestDist = std::min({segBestDist, dStart, dEnd});
+
+                        // Blocker 9: check if the vertex's angle from center
+                        // falls within the arc's finite angular interval.
+                        // The arc starts at the start point and sweeps by
+                        // sweepAngle = length * curvature (signed).
+                        const double sweepAngle = s.length * s.curvature;
+                        // Direction from center to start point.
+                        const double startDirX = s.start.easting - cx;
+                        const double startDirY = s.start.northing - cy;
+                        const double startAngle = std::atan2(startDirY, startDirX);
+                        // Direction from center to vertex.
+                        const double vertexAngle = std::atan2(vdy, vdx);
+                        // Angular offset from start to vertex, normalized
+                        // to the sweep direction.
+                        double offset = vertexAngle - startAngle;
+                        // Normalize offset to [-2π, 2π] range.
+                        while (offset > 2.0 * 3.14159265358979323846) offset -= 2.0 * 3.14159265358979323846;
+                        while (offset < -2.0 * 3.14159265358979323846) offset += 2.0 * 3.14159265358979323846;
+                        // Check if the offset is within the sweep range.
+                        // For positive sweep (CCW), offset must be in [0, sweep].
+                        // For negative sweep (CW), offset must be in [sweep, 0].
+                        bool withinArc = false;
+                        if (sweepAngle > 0.0) {
+                            withinArc = (offset >= -1e-9 && offset <= sweepAngle + 1e-9);
+                        } else {
+                            withinArc = (offset <= 1e-9 && offset >= sweepAngle - 1e-9);
+                        }
+
+                        if (withinArc && distFromCenter > 1e-12) {
+                            // The radial projection falls within the arc.
+                            // Nearest point is at radius r from center, at
+                            // the vertex's angle. Deviation is |distFromCenter - r|.
+                            segBestDist = std::abs(distFromCenter - r);
+                        } else {
+                            // The radial projection is outside the arc.
+                            // Nearest point is one of the arc endpoints.
+                            const auto startSample = s.evaluate(0.0);
+                            const auto endSample = s.evaluate(s.length);
+                            const double dStart = distance(startSample.position, v.position);
+                            const double dEnd = distance(endSample.position, v.position);
+                            segBestDist = std::min(dStart, dEnd);
+                        }
                     }
                 } else {
                     // Clothoid: bounded adaptive sampling within the segment.

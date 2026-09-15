@@ -108,7 +108,7 @@ TEST_CASE_FIXTURE(RoadAcceptanceFixture, "RoadId preserved through move control"
     MoveControlInput moveInput;
     moveInput.roadId = originalId;
     moveInput.controlIndex = 2;
-    moveInput.position = AlignmentPoint{60.0, 5.0};
+    moveInput.position = AlignmentPoint{50.0, 0.5};
     auto moved = roadService->moveControl(moveInput);
 
     CHECK(moved.roadId == originalId);
@@ -209,7 +209,7 @@ TEST_CASE_FIXTURE(RoadAcceptanceFixture, "RoadId preserved through undo and redo
     MoveControlInput moveInput;
     moveInput.roadId = originalId;
     moveInput.controlIndex = 2;
-    moveInput.position = AlignmentPoint{60.0, 5.0};
+    moveInput.position = AlignmentPoint{50.0, 0.5};
     (void)roadService->moveControl(moveInput);
 
     // Undo.
@@ -346,7 +346,7 @@ TEST_CASE_FIXTURE(RoadAcceptanceFixture, "Undo of move emits GeometryChanged eve
     MoveControlInput moveInput;
     moveInput.roadId = summary.roadId;
     moveInput.controlIndex = 2;
-    moveInput.position = AlignmentPoint{60.0, 5.0};
+    moveInput.position = AlignmentPoint{50.0, 0.5};
     (void)roadService->moveControl(moveInput);
     clearEvents();
 
@@ -665,7 +665,7 @@ TEST_CASE_FIXTURE(RoadAcceptanceFixture, "RoadId stable across multiple undo/red
         MoveControlInput moveInput;
         moveInput.roadId = originalId;
         moveInput.controlIndex = 2;
-        moveInput.position = AlignmentPoint{50.0 + i * 10.0, 5.0 * i};
+        moveInput.position = AlignmentPoint{50.0, 0.1 * (i + 1)};
         (void)roadService->moveControl(moveInput);
     }
 

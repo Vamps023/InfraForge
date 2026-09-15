@@ -14,7 +14,6 @@
 #include <functional>
 #include <optional>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 namespace infraforge::application {
@@ -203,7 +202,11 @@ public:
 
 private:
     // Undo/redo history entry: stores the full road record before/after.
+    // Blocker 10: each entry carries a monotonically increasing sequence
+    // number so global undo/redo is chronological, not based on per-road
+    // stack depth or unordered_map iteration order.
     struct HistoryEntry {
+        std::uint64_t sequence{0};
         std::string roadId;
         // The road record before the command (for undo).
         std::optional<domain::road::RoadRecord> before;
@@ -213,8 +216,21 @@ private:
         bool existedBefore{false};
     };
 
-    // Records a history entry for undo/redo.
+    // Records a history entry for undo/redo. Appends to the single global
+    // chronological undo history and clears the redo history.
     void recordHistory(HistoryEntry entry);
+
+    // Finds the most recent undo entry for a specific road (or the global
+    // most recent if roadId is empty). Returns the index into undoHistory_
+    // or nullopt if none exists.
+    [[nodiscard]] std::optional<std::size_t> findLastUndo(
+        const std::string& roadId) const;
+
+    // Finds the most recent redo entry for a specific road (or the global
+    // most recent if roadId is empty). Returns the index into redoHistory_
+    // or nullopt if none exists.
+    [[nodiscard]] std::optional<std::size_t> findLastRedo(
+        const std::string& roadId) const;
 
     // Computes the spatial bounds of a road from its alignment.
     [[nodiscard]] domain::world::SpatialBounds computeRoadBounds(
@@ -254,7 +270,9 @@ private:
         const std::vector<domain::road::ConditionedVertex>& polyline,
         const std::vector<domain::road::ProtectedAnchor>& anchors,
         const std::vector<std::optional<double>>& sourceElevations,
-        domain::road::SourceProvider provider) const;
+        domain::road::SourceProvider provider,
+        double positionTolerance,
+        std::optional<double> maxCurvature) const;
 
     // Refits an existing road from its source vertices with new parameters.
     // Preserves the existing RoadId, display name, elevation/superelevation
@@ -269,9 +287,13 @@ private:
     WorldState& world_;
     EventSink eventSink_;
 
-    // Per-road undo/redo stacks.
-    std::unordered_map<std::string, std::vector<HistoryEntry>> undoStacks_;
-    std::unordered_map<std::string, std::vector<HistoryEntry>> redoStacks_;
+    // Blocker 10: single global chronological undo/redo history. Each entry
+    // carries a monotonically increasing sequence number so global undo
+    // pops the most recent command across ALL roads, not the road with the
+    // deepest per-road stack. Per-road undo/redo filters by roadId.
+    std::uint64_t nextSequence_{1};
+    std::vector<HistoryEntry> undoHistory_;
+    std::vector<HistoryEntry> redoHistory_;
 };
 
 } // namespace infraforge::application

@@ -11,7 +11,7 @@
 namespace infraforge::persistence {
 namespace {
 
-constexpr std::array<MigrationDefinition, 7> kCanonicalMigrations{{
+constexpr std::array<MigrationDefinition, 8> kCanonicalMigrations{{
     {
         .id = 1,
         .name = "core project foundation",
@@ -193,6 +193,14 @@ CREATE TABLE road_protected_anchors (
     PRIMARY KEY (road_id, anchor_index),
     FOREIGN KEY (road_id) REFERENCES roads(id) ON DELETE CASCADE
 );
+)sql",
+    },
+    {
+        .id = 8,
+        .name = "road fitting contract",
+        .sql = R"sql(
+ALTER TABLE roads ADD COLUMN position_tolerance REAL NOT NULL DEFAULT 1.0;
+ALTER TABLE roads ADD COLUMN max_curvature REAL;
 )sql",
     },
 }};

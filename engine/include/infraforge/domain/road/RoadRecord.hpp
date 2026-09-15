@@ -74,6 +74,11 @@ struct RoadRecord {
     std::vector<RoadSourceTagRecord> sourceTags;
     std::vector<RoadSourceVertexRecord> sourceVertices;
     std::vector<RoadProtectedAnchorRecord> protectedAnchors;
+    // Blocker 7: persisted fitting contract so control edits reuse the
+    // same source-deviation tolerance the road was created/refit with,
+    // instead of a magic constant. maxCurvature is nullopt when unset.
+    double positionTolerance{1.0};
+    std::optional<double> maxCurvature;
     std::string createdAt;
     std::string modifiedAt;
 

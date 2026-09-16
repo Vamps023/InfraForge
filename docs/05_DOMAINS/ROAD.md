@@ -153,6 +153,10 @@ Road persistence integrates with the existing SQLite/project architecture:
 - **Migration 7** ("road canonical geometry") creates explicit tables for
   roads, segments, elevation/superelevation breakpoints, source data, source
   vertices, and protected anchors.
+- **Migration 8** persists the fitting contract, **migration 9** separates
+  editable control vertices from immutable source evidence, and **migration
+  10** persists protected-anchor alignment boundary indices so an intentional
+  curvature discontinuity reconstructs identically after reopen.
 - `ProjectStore` port gains `roads()`, `insertRoad()`, `removeRoad()`.
 - `SqliteProjectStore` implements these with transactional commits that advance
   the project revision.
@@ -176,10 +180,19 @@ Tests use explicit tolerances.
 - **World partition**: roads register with `WorldState` for spatial
   indexing and chunk invalidation. Road edits invalidate only affected
   chunks, not the full world.
-- **Renderer**: the viewport `RoadPass` consumes derived tessellation
-  through a dedicated road scene channel (separate from terrain scenes).
-  Road scene payloads are forwarded through the desktop IPC as a typed
-  `roadScene` control message.
+- **Authoring and editing**: the Roads workspace supports click placement with
+  a transient Vulkan ribbon preview, finish/cancel, viewport road picking,
+  and inspector actions to move, insert, or delete editable controls.
+  Screen coordinates are converted by the native camera to canonical project
+  coordinates; authoring does not fabricate an elevation.
+- **Renderer transport**: terrain and roads share one strictly validated
+  `scene` command with optional domain deltas. Applying one domain never clears
+  the other; a combined empty scene clears both at project close.
+- **Chunk/GPU derivation**: road ribbons are partitioned into stable
+  `RoadId + ChunkCoord` meshes with bit-identical shared boundary samples.
+  Unchanged road tessellations are cached, and `RoadPass` fingerprints keyed
+  meshes so edits upload only changed buffers. Replaced buffers retire after
+  in-flight frames without a normal-edit `vkDeviceWaitIdle` stall.
 - **Persistence**: roads persist through SQLite migration 7 with full
   provenance, profiles, and protected anchors.
 - **Undo/redo**: global road undo/redo with proper event semantics
@@ -195,6 +208,3 @@ Tests use explicit tolerances.
   convert conditioned source polylines into canonical alignments.
 - **Terrain integration**: terrain may provide elevation snapping, but the
   road domain functions independently.
-- **Incremental chunk-aware tessellation**: per-chunk road mesh derivation
-  with seam-safe boundary sampling is a future enhancement for large-world
-  operation.

@@ -20,10 +20,12 @@ constexpr std::uint64_t kAcquireTimeout = std::numeric_limits<std::uint64_t>::ma
 VulkanRenderer::VulkanRenderer(
     const std::uint64_t nativeWindowHandle,
     RendererStatusCallback statusCallback,
-    const bool validationEnabled)
+    const bool validationEnabled,
+    ViewportInteractionCallback interactionCallback)
     : nativeWindowHandle_(nativeWindowHandle),
       statusCallback_(std::move(statusCallback)),
-      validationEnabled_(validationEnabled) {}
+      validationEnabled_(validationEnabled),
+      interactionCallback_(std::move(interactionCallback)) {}
 
 VulkanRenderer::~VulkanRenderer() {
     stop();
@@ -278,7 +280,20 @@ void VulkanRenderer::runLoop(std::atomic_bool& running) {
                 events.swap(inputQueue_);
             }
             for (const SurfaceInputEvent& event : events) {
-                cameraController_.handleInput(event);
+                if (event.primaryClick) {
+                    const auto& camera = cameraController_.camera();
+                    const auto world = camera.screenToHorizontalPlane(
+                        event.screenX, event.screenY, camera.renderOrigin().z);
+                    if (world.has_value() && interactionCallback_) {
+                        interactionCallback_(ViewportInteraction{
+                            .easting = world->x,
+                            .northing = world->y,
+                            .height = world->z,
+                            .roadId = roadPass_.pickRoad(*world, camera.renderOrigin())});
+                    }
+                } else {
+                    cameraController_.handleInput(event);
+                }
             }
         }
 

@@ -34,6 +34,13 @@ struct RendererStatus {
 };
 
 using RendererStatusCallback = std::function<void(const RendererStatus&)>;
+struct ViewportInteraction {
+    double easting{0.0};
+    double northing{0.0};
+    double height{0.0};
+    std::string roadId;
+};
+using ViewportInteractionCallback = std::function<void(const ViewportInteraction&)>;
 
 // Owns the Vulkan 1.3 renderer for the native child surface: RAII core
 // objects, a dedicated render thread running the swapchain lifecycle state
@@ -41,7 +48,8 @@ using RendererStatusCallback = std::function<void(const RendererStatus&)>;
 // canonical project state lives here.
 class VulkanRenderer final {
 public:
-    VulkanRenderer(std::uint64_t nativeWindowHandle, RendererStatusCallback statusCallback, bool validationEnabled);
+    VulkanRenderer(std::uint64_t nativeWindowHandle, RendererStatusCallback statusCallback,
+        bool validationEnabled, ViewportInteractionCallback interactionCallback = {});
     ~VulkanRenderer();
 
     VulkanRenderer(const VulkanRenderer&) = delete;
@@ -85,6 +93,7 @@ private:
     std::uint64_t nativeWindowHandle_;
     RendererStatusCallback statusCallback_;
     bool validationEnabled_;
+    ViewportInteractionCallback interactionCallback_;
 
     VulkanInstance instance_;
     VulkanSurface surface_;

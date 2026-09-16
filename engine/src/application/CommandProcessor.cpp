@@ -1568,6 +1568,15 @@ void fillRoadDetails(protocol::v1::RoadDetails* out, const RoadDetails& d) {
         dOut->set_severity("error");
     }
     out->set_revision(d.revision);
+    out->set_position_tolerance(d.positionTolerance);
+    if (d.maxCurvature.has_value()) out->set_max_curvature(*d.maxCurvature);
+    for (const auto& control : d.controlPoints) {
+        auto* projected = out->add_control_points();
+        projected->set_easting(control.easting);
+        projected->set_northing(control.northing);
+        if (control.elevation.has_value()) projected->set_elevation(*control.elevation);
+        projected->set_protected_anchor(control.protectedAnchor);
+    }
 }
 
 } // namespace
@@ -1686,9 +1695,12 @@ void CommandProcessor::handleFitRoadSource(const std::string& connectionId, cons
     const auto& command = frame.command().fit_road_source();
     FitSourceInput input;
     input.roadId = command.road_id();
-    input.positionTolerance = command.position_tolerance();
+    if (command.has_position_tolerance()) {
+        input.positionTolerance = command.position_tolerance();
+    }
     if (command.has_max_curvature()) {
         input.maxCurvature = command.max_curvature();
+        input.replaceMaxCurvature = true;
     }
     auto summary = roadService_->fitSource(input);
 
@@ -1828,6 +1840,8 @@ void CommandProcessor::handleGetRoadScene(const std::string& connectionId, const
     for (const auto& mesh : projection.meshes) {
         auto* meshOut = scene->add_meshes();
         meshOut->set_road_id(mesh.roadId);
+        meshOut->set_chunk_x(mesh.chunkX);
+        meshOut->set_chunk_y(mesh.chunkY);
         for (const auto& v : mesh.vertices) {
             auto* vOut = meshOut->add_vertices();
             vOut->set_x(v.x);

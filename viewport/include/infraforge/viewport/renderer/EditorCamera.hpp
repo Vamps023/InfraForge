@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 
 namespace infraforge::viewport {
 
@@ -61,6 +62,8 @@ public:
     // Framebuffer Y is flipped in the projection because Vulkan's positive
     // viewport height maps positive NDC Y downward.
     [[nodiscard]] std::array<float, 16> viewProjection() const noexcept;
+    [[nodiscard]] std::optional<CameraPoint3d> screenToHorizontalPlane(
+        double screenX, double screenY, double elevation) const noexcept;
     void writeViewProjection(float* out16) const noexcept;
 
 private:

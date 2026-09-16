@@ -117,6 +117,18 @@ RoadScene parseRoadScene(const std::string_view json) {
         if (mesh.roadId.empty()) {
             failParse("road mesh 'roadId' must not be empty");
         }
+        const auto readChunk = [&](const char* name) -> std::int64_t {
+            if (!meshJson.contains(name)) return 0;
+            const auto& value = meshJson.at(name);
+            if (value.is_number_integer()) return value.get<std::int64_t>();
+            if (value.is_string()) {
+                try { return std::stoll(value.get<std::string>()); }
+                catch (...) { failParse(std::string(name) + " must be a valid int64"); }
+            }
+            failParse(std::string(name) + " must be an integer or integer string");
+        };
+        mesh.chunkX = readChunk("chunkX");
+        mesh.chunkY = readChunk("chunkY");
 
         if (!meshJson.contains("vertices") || !meshJson.at("vertices").is_array()) {
             failParse("road mesh requires array 'vertices'");

@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <limits>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -135,6 +136,9 @@ struct AlignmentFitResult {
     std::optional<ReferenceAlignment> alignment;
     // Diagnostics describing fit deviations, near-collinear cleanup, etc.
     std::vector<RoadDiagnostic> diagnostics;
+    // Segment indices whose start is a protected-anchor boundary. This is
+    // canonical continuity metadata and must survive persistence.
+    std::set<std::size_t> anchorBoundarySegments;
 };
 
 // Validates source geometry coordinates: x and y must be finite; z must

@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <map>
 #include <stdexcept>
 
 namespace infraforge::application {
@@ -51,6 +52,7 @@ RoadService::RoadService(ports::ProjectStore& store, WorldState& world, EventSin
     : store_(store), world_(world), eventSink_(std::move(eventSink)) {}
 
 void RoadService::onProjectOpened() {
+    sceneMeshCache_.clear();
     // Load existing roads into the world partition index.
     auto roads = store_.roads();
     for (const auto& road : roads) {
@@ -68,6 +70,7 @@ void RoadService::onProjectClosed() {
     undoHistory_.clear();
     redoHistory_.clear();
     nextSequence_ = 1;
+    sceneMeshCache_.clear();
 }
 
 RoadSummary RoadService::createRoad(const CreateRoadInput& input) {
@@ -152,7 +155,8 @@ RoadSummary RoadService::createRoad(const CreateRoadInput& input) {
     // Build the new road record (mints a new RoadId — the ONLY place that does).
     auto record = buildNewRoadRecord(input.name, *fitResult.alignment,
         polyline, anchors, input.sourceElevations, SourceProvider::Authored,
-        input.positionTolerance, input.maxCurvature);
+        input.positionTolerance, input.maxCurvature,
+        fitResult.anchorBoundarySegments);
 
     // Persist.
     record = store_.insertRoad(record);
@@ -433,7 +437,10 @@ RoadSummary RoadService::fitSource(const FitSourceInput& input) {
     }
 
     auto before = *found;
-    auto record = refitRoad(before, input.positionTolerance, input.maxCurvature);
+    const double positionTolerance = input.positionTolerance.value_or(before.positionTolerance);
+    const auto maxCurvature = input.positionTolerance.has_value() || input.replaceMaxCurvature
+        ? input.maxCurvature : before.maxCurvature;
+    auto record = refitRoad(before, positionTolerance, maxCurvature);
     record = store_.updateRoad(record);
 
     // Update world partition.
@@ -803,7 +810,16 @@ RoadSceneProjection RoadService::roadSceneProjection() const {
     projection.revision = record.revision;
 
     const auto roads = store_.roads();
+    std::set<std::string> liveRoadIds;
     for (const auto& roadRecord : roads) {
+        const auto roadId = uuidTextFromRoadId(roadRecord.id);
+        liveRoadIds.insert(roadId);
+        const auto cached = sceneMeshCache_.find(roadId);
+        if (cached != sceneMeshCache_.end() && cached->second.record == roadRecord) {
+            projection.meshes.insert(projection.meshes.end(), cached->second.meshes.begin(),
+                cached->second.meshes.end());
+            continue;
+        }
         auto road = rebuildRoad(roadRecord);
         auto tess = domain::road::tessellateRoad(
             road.alignment(), road.elevation(), road.superelevation(), {});
@@ -811,7 +827,7 @@ RoadSceneProjection RoadService::roadSceneProjection() const {
         if (tess.isEmpty()) continue;
 
         RoadSceneMesh mesh;
-        mesh.roadId = uuidTextFromRoadId(roadRecord.id);
+        mesh.roadId = roadId;
 
         // Build vertices: left and right edge of each cross-section.
         // Vertex layout: for cross-section i, left = 2*i, right = 2*i+1.
@@ -903,9 +919,43 @@ RoadSceneProjection RoadService::roadSceneProjection() const {
             mesh.vertices.push_back(right);
         }
 
-        mesh.indices = tess.indices;
-        projection.meshes.push_back(std::move(mesh));
+        // Partition the derived ribbon into deterministic road/chunk meshes.
+        // Each station interval is owned by the chunk containing its
+        // centerline midpoint. Adjacent chunk meshes duplicate only their
+        // shared boundary cross-section, so both sides use bit-identical
+        // canonical samples and cannot develop a positional crack.
+        std::map<ChunkCoord, RoadSceneMesh> chunks;
+        for (std::size_t i = 0; i + 1 < tess.crossSections.size(); ++i) {
+            const auto& a = tess.crossSections[i];
+            const auto& b = tess.crossSections[i + 1];
+            const auto chunk = world_.grid().chunkAt(
+                (a.center.easting + b.center.easting) * 0.5,
+                (a.center.northing + b.center.northing) * 0.5);
+            auto& chunkMesh = chunks[chunk];
+            chunkMesh.roadId = mesh.roadId;
+            chunkMesh.chunkX = chunk.x;
+            chunkMesh.chunkY = chunk.y;
+            const auto base = static_cast<std::uint32_t>(chunkMesh.vertices.size());
+            chunkMesh.vertices.push_back(mesh.vertices[i * 2]);
+            chunkMesh.vertices.push_back(mesh.vertices[i * 2 + 1]);
+            chunkMesh.vertices.push_back(mesh.vertices[(i + 1) * 2]);
+            chunkMesh.vertices.push_back(mesh.vertices[(i + 1) * 2 + 1]);
+            chunkMesh.indices.insert(chunkMesh.indices.end(),
+                {base, base + 1, base + 2, base + 1, base + 3, base + 2});
+        }
+        std::vector<RoadSceneMesh> derivedMeshes;
+        derivedMeshes.reserve(chunks.size());
+        for (auto& [chunk, chunkMesh] : chunks) {
+            (void)chunk;
+            derivedMeshes.push_back(std::move(chunkMesh));
+        }
+        projection.meshes.insert(projection.meshes.end(), derivedMeshes.begin(), derivedMeshes.end());
+        sceneMeshCache_[roadId] = CachedRoadMeshes{roadRecord, std::move(derivedMeshes)};
     }
+
+    std::erase_if(sceneMeshCache_, [&liveRoadIds](const auto& entry) {
+        return !liveRoadIds.contains(entry.first);
+    });
 
     return projection;
 }
@@ -1088,6 +1138,18 @@ RoadDetails RoadService::toDetails(const RoadRecord& road) const {
     d.sourceCrs = road.sourceCrs;
     d.protectedAnchorCount = static_cast<std::uint32_t>(road.protectedAnchors.size());
     d.revision = store_.current().revision;
+    d.positionTolerance = road.positionTolerance;
+    d.maxCurvature = road.maxCurvature;
+    d.controlPoints.reserve(road.controlVertices.size());
+    for (std::size_t i = 0; i < road.controlVertices.size(); ++i) {
+        const auto& vertex = road.controlVertices[i];
+        const bool protectedAnchor = std::any_of(road.protectedAnchors.begin(),
+            road.protectedAnchors.end(), [&vertex](const auto& anchor) {
+                return anchor.position.easting == vertex.x &&
+                    anchor.position.northing == vertex.y;
+            });
+        d.controlPoints.push_back({vertex.x, vertex.y, vertex.z, protectedAnchor});
+    }
 
     // Compute total length and segment info.
     double totalLength = 0.0;
@@ -1193,7 +1255,8 @@ RoadRecord RoadService::buildNewRoadRecord(
     const std::vector<std::optional<double>>& sourceElevations,
     SourceProvider provider,
     double positionTolerance,
-    std::optional<double> maxCurvature) const {
+    std::optional<double> maxCurvature,
+    const std::set<std::size_t>& anchorBoundarySegments) const {
 
     // Blocker 1: this is the ONLY place that mints a new RoadId.
     Road::BuildInput roadInput;
@@ -1278,6 +1341,7 @@ RoadRecord RoadService::buildNewRoadRecord(
     // reuse the same tolerance/maxCurvature instead of a magic constant.
     record.positionTolerance = positionTolerance;
     record.maxCurvature = maxCurvature;
+    record.anchorBoundarySegments = anchorBoundarySegments;
     return record;
 }
 
@@ -1374,6 +1438,7 @@ RoadRecord RoadService::refitRoad(
     // constant. Update with the parameters used for this refit.
     record.positionTolerance = positionTolerance;
     record.maxCurvature = maxCurvature;
+    record.anchorBoundarySegments = std::move(fitResult.anchorBoundarySegments);
     return record;
 }
 

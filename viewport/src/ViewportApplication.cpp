@@ -251,7 +251,11 @@ int runViewportApplication(const ApplicationArguments& arguments) {
             reportStatus(status.state, status.detail, status.gpuName, status.vulkanVersion,
                 status.validationEnabled);
         },
-        arguments.validationEnabled);
+        arguments.validationEnabled,
+        [](const ViewportInteraction& interaction) {
+            std::cout << formatInteractionRecord(interaction.easting,
+                interaction.northing, interaction.height, interaction.roadId) << std::endl;
+        });
     // Native mouse input (wheel zoom, drag pan) feeds the render thread's
     // camera through the bounded input queue; unregistered before teardown.
     setSurfaceInputHandler([&renderer](const SurfaceInputEvent& event) {
@@ -313,9 +317,12 @@ int runViewportApplication(const ApplicationArguments& arguments) {
                         report->vulkanVersion, report->validationEnabled);
                 }
             } else if (auto* scene = std::get_if<SceneCommand>(&command)) {
-                // Engine-derived terrain + road scene hand-off to the render thread.
-                renderer.setTerrainScene(scene->scene);
-                renderer.setRoadScene(scene->roads);
+                if (scene->terrain.has_value()) {
+                    renderer.setTerrainScene(*scene->terrain);
+                }
+                if (scene->roads.has_value()) {
+                    renderer.setRoadScene(*scene->roads);
+                }
             } else if (auto* camera = std::get_if<CameraCommand>(&command)) {
                 renderer.postCameraInput(SurfaceInputEvent{
                     .action = camera->action,

@@ -14,6 +14,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace infraforge::application {
@@ -68,6 +69,15 @@ struct RoadDetails {
     bool isValid{false};
     std::vector<domain::road::RoadDiagnostic> diagnostics;
     std::uint64_t revision{0};
+    struct ControlPoint {
+        double easting{0.0};
+        double northing{0.0};
+        std::optional<double> elevation;
+        bool protectedAnchor{false};
+    };
+    std::vector<ControlPoint> controlPoints;
+    double positionTolerance{1.0};
+    std::optional<double> maxCurvature;
 };
 
 // One vertex of a road scene mesh, in render-local float coordinates.
@@ -83,6 +93,8 @@ struct RoadSceneVertex {
 // One road mesh for the viewport: a triangle list with vertices and indices.
 struct RoadSceneMesh {
     std::string roadId;
+    std::int64_t chunkX{0};
+    std::int64_t chunkY{0};
     std::vector<RoadSceneVertex> vertices;
     std::vector<std::uint32_t> indices;
 };
@@ -131,8 +143,9 @@ struct DeleteControlInput {
 // Input for fitting/refitting a road.
 struct FitSourceInput {
     std::string roadId;
-    double positionTolerance{1.0};
+    std::optional<double> positionTolerance;
     std::optional<double> maxCurvature;
+    bool replaceMaxCurvature{false};
 };
 
 // Input for updating the elevation profile.
@@ -272,7 +285,8 @@ private:
         const std::vector<std::optional<double>>& sourceElevations,
         domain::road::SourceProvider provider,
         double positionTolerance,
-        std::optional<double> maxCurvature) const;
+        std::optional<double> maxCurvature,
+        const std::set<std::size_t>& anchorBoundarySegments) const;
 
     // Refits an existing road from its source vertices with new parameters.
     // Preserves the existing RoadId, display name, elevation/superelevation
@@ -294,6 +308,14 @@ private:
     std::uint64_t nextSequence_{1};
     std::vector<HistoryEntry> undoHistory_;
     std::vector<HistoryEntry> redoHistory_;
+
+    struct CachedRoadMeshes {
+        domain::road::RoadRecord record;
+        std::vector<RoadSceneMesh> meshes;
+    };
+    // Derived-only cache. Canonical road state remains in SQLite; unchanged
+    // roads retain their tessellation across scene publications.
+    mutable std::unordered_map<std::string, CachedRoadMeshes> sceneMeshCache_;
 };
 
 } // namespace infraforge::application

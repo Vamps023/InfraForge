@@ -49,6 +49,8 @@ public:
 
     [[nodiscard]] bool created() const noexcept { return device_ != VK_NULL_HANDLE; }
     [[nodiscard]] std::size_t meshCount() const noexcept { return meshes_.size(); }
+    [[nodiscard]] std::string pickRoad(
+        const CameraPoint3d& projectPoint, const CameraPoint3d& renderOrigin) const;
 
 private:
     struct MeshGpu {
@@ -62,10 +64,18 @@ private:
 
     struct MeshEntry {
         std::string roadId;
+        std::uint64_t fingerprint{0};
+        std::vector<RoadSceneVertex> vertices;
+        std::vector<std::uint32_t> indices;
         MeshGpu gpu;
     };
 
-    void uploadMesh(const RoadSceneMesh& mesh);
+    struct RetiredMesh {
+        MeshGpu gpu;
+        std::uint32_t framesRemaining{2};
+    };
+
+    [[nodiscard]] MeshEntry uploadMesh(const RoadSceneMesh& mesh);
     void releaseMesh(MeshGpu& gpu);
 
     VkPhysicalDevice physical_{VK_NULL_HANDLE};
@@ -77,7 +87,8 @@ private:
     UniqueVulkan<VkPipelineLayout> pipelineLayout_;
     UniqueVulkan<VkPipeline> pipeline_;
 
-    std::vector<MeshEntry> meshes_;
+    std::unordered_map<std::string, MeshEntry> meshes_;
+    std::vector<RetiredMesh> retiredMeshes_;
     std::mutex sceneMutex_;
     std::optional<RoadScene> pendingScene_;
 };

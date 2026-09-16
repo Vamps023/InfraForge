@@ -16,6 +16,19 @@ constexpr std::size_t kPosFloats = 3;
 constexpr std::size_t kNormalFloats = 3;
 constexpr std::size_t kVertexFloats = kPosFloats + kNormalFloats;
 
+std::uint64_t meshFingerprint(const RoadSceneMesh& mesh) {
+    constexpr std::uint64_t kOffset = 1469598103934665603ULL;
+    constexpr std::uint64_t kPrime = 1099511628211ULL;
+    std::uint64_t value = kOffset;
+    const auto hashBytes = [&](const void* data, const std::size_t size) {
+        const auto* bytes = static_cast<const unsigned char*>(data);
+        for (std::size_t i = 0; i < size; ++i) value = (value ^ bytes[i]) * kPrime;
+    };
+    hashBytes(mesh.vertices.data(), mesh.vertices.size() * sizeof(RoadSceneVertex));
+    hashBytes(mesh.indices.data(), mesh.indices.size() * sizeof(std::uint32_t));
+    return value;
+}
+
 std::vector<std::uint32_t> compileShader(
     const std::string_view source,
     const shaderc_shader_kind kind,
@@ -214,10 +227,13 @@ void RoadPass::create(
 void RoadPass::destroy() {
     if (device_ == VK_NULL_HANDLE) return;
     vkDeviceWaitIdle(device_);
-    for (auto& entry : meshes_) {
+    for (auto& [key, entry] : meshes_) {
+        (void)key;
         releaseMesh(entry.gpu);
     }
     meshes_.clear();
+    for (auto& retired : retiredMeshes_) releaseMesh(retired.gpu);
+    retiredMeshes_.clear();
     pipeline_.reset();
     pipelineLayout_.reset();
     device_ = VK_NULL_HANDLE;
@@ -230,6 +246,14 @@ void RoadPass::setScene(const RoadScene& scene) {
 
 void RoadPass::update(const EditorCamera& camera) {
     (void)camera;
+    for (auto it = retiredMeshes_.begin(); it != retiredMeshes_.end();) {
+        if (--it->framesRemaining == 0) {
+            releaseMesh(it->gpu);
+            it = retiredMeshes_.erase(it);
+        } else {
+            ++it;
+        }
+    }
     std::optional<RoadScene> adopted;
     {
         std::lock_guard lock{sceneMutex_};
@@ -240,24 +264,37 @@ void RoadPass::update(const EditorCamera& camera) {
     }
     if (!adopted.has_value()) return;
 
-    // Release all existing meshes.
-    for (auto& entry : meshes_) {
-        releaseMesh(entry.gpu);
-    }
-    meshes_.clear();
-
-    // Upload new meshes.
+    std::unordered_map<std::string, const RoadSceneMesh*> incoming;
     for (const auto& mesh : adopted->meshes) {
-        if (mesh.isEmpty()) continue;
-        uploadMesh(mesh);
+        if (!mesh.isEmpty()) incoming.emplace(mesh.key(), &mesh);
+    }
+    for (auto it = meshes_.begin(); it != meshes_.end();) {
+        if (!incoming.contains(it->first)) {
+            retiredMeshes_.push_back({.gpu = it->second.gpu});
+            it = meshes_.erase(it);
+        } else ++it;
+    }
+    for (const auto& [key, mesh] : incoming) {
+        const auto fingerprint = meshFingerprint(*mesh);
+        const auto existing = meshes_.find(key);
+        if (existing != meshes_.end() && existing->second.fingerprint == fingerprint) continue;
+        const auto replacement = uploadMesh(*mesh);
+        if (existing != meshes_.end()) {
+            retiredMeshes_.push_back({.gpu = existing->second.gpu});
+            existing->second = replacement;
+        } else {
+            meshes_.emplace(key, replacement);
+        }
     }
 }
 
-void RoadPass::uploadMesh(const RoadSceneMesh& mesh) {
-    if (mesh.vertices.empty() || mesh.indices.empty()) return;
+RoadPass::MeshEntry RoadPass::uploadMesh(const RoadSceneMesh& mesh) {
 
     MeshEntry entry;
     entry.roadId = mesh.roadId;
+    entry.fingerprint = meshFingerprint(mesh);
+    entry.vertices = mesh.vertices;
+    entry.indices = mesh.indices;
 
     // Build the vertex buffer data: pos(3) + normal(3) per vertex.
     std::vector<float> vertexData;
@@ -342,7 +379,7 @@ void RoadPass::uploadMesh(const RoadSceneMesh& mesh) {
     entry.gpu.indexMemory = indexMemory;
     entry.gpu.indexCount = static_cast<std::uint32_t>(mesh.indices.size());
 
-    meshes_.push_back(std::move(entry));
+    return entry;
 }
 
 void RoadPass::releaseMesh(MeshGpu& gpu) {
@@ -378,13 +415,42 @@ void RoadPass::record(VkCommandBuffer command, const EditorCamera& camera) const
         VK_SHADER_STAGE_VERTEX_BIT, 0,
         static_cast<std::uint32_t>(viewProj.size() * sizeof(float)), viewProj.data());
 
-    for (const auto& entry : meshes_) {
+    for (const auto& [key, entry] : meshes_) {
+        (void)key;
         if (entry.gpu.indexCount == 0) continue;
         VkDeviceSize offset = 0;
         vkCmdBindVertexBuffers(command, 0, 1, &entry.gpu.vertexBuffer, &offset);
         vkCmdBindIndexBuffer(command, entry.gpu.indexBuffer, 0, VK_INDEX_TYPE_UINT32);
         vkCmdDrawIndexed(command, entry.gpu.indexCount, 1, 0, 0, 0);
     }
+}
+
+std::string RoadPass::pickRoad(const CameraPoint3d& projectPoint,
+    const CameraPoint3d& renderOrigin) const {
+    const double px = projectPoint.x - renderOrigin.x;
+    const double py = projectPoint.y - renderOrigin.y;
+    const auto signedArea = [](const RoadSceneVertex& a, const RoadSceneVertex& b,
+        const double x, const double y) {
+        return (static_cast<double>(b.x) - a.x) * (y - a.y)
+            - (static_cast<double>(b.y) - a.y) * (x - a.x);
+    };
+    for (const auto& [key, entry] : meshes_) {
+        (void)key;
+        for (std::size_t i = 0; i + 2 < entry.indices.size(); i += 3) {
+            const auto& a = entry.vertices[entry.indices[i]];
+            const auto& b = entry.vertices[entry.indices[i + 1]];
+            const auto& c = entry.vertices[entry.indices[i + 2]];
+            const double ab = signedArea(a, b, px, py);
+            const double bc = signedArea(b, c, px, py);
+            const double ca = signedArea(c, a, px, py);
+            if ((ab >= 0.0 && bc >= 0.0 && ca >= 0.0) ||
+                (ab <= 0.0 && bc <= 0.0 && ca <= 0.0)) {
+                if (entry.roadId == "__authoring_preview__") continue;
+                return entry.roadId;
+            }
+        }
+    }
+    return {};
 }
 
 } // namespace infraforge::viewport

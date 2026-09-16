@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { X } from 'lucide-react'
 import type { EngineClient } from '../../lib/engineSession'
 import { createRoad, listRoads } from './roadApi'
+import { useRoadToolStore } from './roadToolStore'
 
 interface CreateRoadDialogProps {
   client: EngineClient
@@ -18,6 +19,17 @@ export function CreateRoadDialog({ client, onClose }: CreateRoadDialogProps) {
   const [tolerance, setTolerance] = useState('1.0')
   const [error, setError] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
+
+  const handleDraw = () => {
+    setError(null)
+    const tol = Number.parseFloat(tolerance)
+    if (!name.trim()) { setError('Road name is required.'); return }
+    if (!Number.isFinite(tol) || tol <= 0) {
+      setError('Position tolerance must be a positive number.'); return
+    }
+    useRoadToolStore.getState().begin(name.trim(), tol, null)
+    onClose()
+  }
 
   const handleCreate = async () => {
     setError(null)
@@ -118,8 +130,11 @@ export function CreateRoadDialog({ client, onClose }: CreateRoadDialogProps) {
           <button className="button secondary" type="button" onClick={onClose} disabled={creating}>
             Cancel
           </button>
-          <button className="button primary" type="button" onClick={() => void handleCreate()} disabled={creating}>
-            {creating ? 'Creating…' : 'Create Road'}
+          <button className="button secondary" type="button" onClick={() => void handleCreate()} disabled={creating}>
+            {creating ? 'Creating…' : 'Create from coordinates'}
+          </button>
+          <button className="button primary" type="button" onClick={handleDraw} disabled={creating}>
+            Draw in viewport
           </button>
         </div>
       </div>

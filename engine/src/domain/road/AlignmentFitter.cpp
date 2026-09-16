@@ -685,6 +685,7 @@ AlignmentFitResult fitAlignment(const AlignmentFitInput& input,
     }
 
     result.alignment = std::move(*alignment);
+    result.anchorBoundarySegments = std::move(state.anchorBoundarySegments);
     return result;
 }
 

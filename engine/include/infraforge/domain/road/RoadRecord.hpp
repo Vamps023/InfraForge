@@ -3,6 +3,7 @@
 #include "infraforge/domain/road/Road.hpp"
 
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -81,6 +82,7 @@ struct RoadRecord {
     // sourceVertices and may diverge through edits.
     std::vector<RoadSourceVertexRecord> controlVertices;
     std::vector<RoadProtectedAnchorRecord> protectedAnchors;
+    std::set<std::size_t> anchorBoundarySegments;
     // Blocker 7: persisted fitting contract so control edits reuse the
     // same source-deviation tolerance the road was created/refit with,
     // instead of a magic constant. maxCurvature is nullopt when unset.

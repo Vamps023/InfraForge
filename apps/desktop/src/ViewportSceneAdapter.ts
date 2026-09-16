@@ -56,21 +56,33 @@ export interface ViewportRoadSceneVertex {
 
 export interface ViewportRoadSceneMesh {
   roadId: string
+  chunkX: string
+  chunkY: string
   vertices: ViewportRoadSceneVertex[]
   indices: number[]
 }
 
 export interface ViewportSceneControl {
   type: 'scene'
+  terrain?: ViewportTerrainSceneControl
+  roads?: ViewportRoadSceneControl
+}
+
+export interface ViewportTerrainSceneControl {
   originEasting: number
   originNorthing: number
   originHeight: number
   tiles: ViewportSceneTile[]
   missingTiles: string
   revision: string
-  // Optional road scene data for the viewport renderer.
-  roads?: ViewportRoadSceneMesh[]
-  roadRevision?: string
+}
+
+export interface ViewportRoadSceneControl {
+  originEasting: number
+  originNorthing: number
+  originHeight: number
+  roads: ViewportRoadSceneMesh[]
+  roadRevision: string
 }
 
 function toBigIntString(value: bigint | string | number): string {
@@ -115,12 +127,14 @@ export function adaptTerrainScene(
   }
   return {
     type: 'scene' as const,
-    originEasting: s.originEasting,
-    originNorthing: s.originNorthing,
-    originHeight: s.originHeight ?? 0,
-    tiles: s.tiles.map(toTile),
-    missingTiles: toBigIntString(s.missingTiles ?? 0),
-    revision: toBigIntString(s.revision ?? 0),
+    terrain: {
+      originEasting: s.originEasting,
+      originNorthing: s.originNorthing,
+      originHeight: s.originHeight ?? 0,
+      tiles: s.tiles.map(toTile),
+      missingTiles: toBigIntString(s.missingTiles ?? 0),
+      revision: toBigIntString(s.revision ?? 0),
+    },
   }
 }
 
@@ -142,6 +156,8 @@ export function attachRoadScene(
     originHeight: number
     meshes: Array<{
       roadId: string
+      chunkX?: bigint | string | number
+      chunkY?: bigint | string | number
       vertices: Array<{ x: number; y: number; z: number; nx?: number; ny?: number; nz?: number }>
       indices: number[]
     }>
@@ -152,19 +168,21 @@ export function attachRoadScene(
   }
   return {
     ...control,
-    roads: rs.meshes.map((mesh) => ({
-      roadId: mesh.roadId,
-      vertices: mesh.vertices.map((v) => ({
-        x: v.x,
-        y: v.y,
-        z: v.z,
-        nx: v.nx,
-        ny: v.ny,
-        nz: v.nz,
+    roads: {
+      originEasting: rs.originEasting ?? 0,
+      originNorthing: rs.originNorthing ?? 0,
+      originHeight: rs.originHeight ?? 0,
+      roads: rs.meshes.map((mesh) => ({
+        roadId: mesh.roadId,
+        chunkX: toBigIntString(mesh.chunkX ?? 0),
+        chunkY: toBigIntString(mesh.chunkY ?? 0),
+        vertices: mesh.vertices.map((v) => ({
+          x: v.x, y: v.y, z: v.z, nx: v.nx, ny: v.ny, nz: v.nz,
+        })),
+        indices: mesh.indices,
       })),
-      indices: mesh.indices,
-    })),
-    roadRevision: toBigIntString(rs.revision ?? 0),
+      roadRevision: toBigIntString(rs.revision ?? 0),
+    },
   }
 }
 
@@ -175,13 +193,9 @@ export function attachRoadScene(
 export function emptyViewportScene(): ViewportSceneControl {
   return {
     type: 'scene',
-    originEasting: 0,
-    originNorthing: 0,
-    originHeight: 0,
-    tiles: [],
-    missingTiles: '0',
-    revision: '0',
-    roads: [],
-    roadRevision: '0',
+    terrain: { originEasting: 0, originNorthing: 0, originHeight: 0,
+      tiles: [], missingTiles: '0', revision: '0' },
+    roads: { originEasting: 0, originNorthing: 0, originHeight: 0,
+      roads: [], roadRevision: '0' },
   }
 }

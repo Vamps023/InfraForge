@@ -590,8 +590,9 @@ TEST_CASE_FIXTURE(RoadAcceptanceFixture, "Curved road produces alignment with se
     CHECK(details->isValid);
 }
 
-// Blocker 6: Source deviation validation rejects tight tolerance.
-TEST_CASE_FIXTURE(RoadAcceptanceFixture, "Tight tolerance rejects deviating source") {
+// Tight tolerance is retained even when this deterministic polyline can be
+// represented exactly by the canonical fitter.
+TEST_CASE_FIXTURE(RoadAcceptanceFixture, "Tight tolerance curved source succeeds deterministically") {
     // Create a road with points that deviate from a straight line.
     std::vector<AlignmentPoint> pts;
     pts.push_back({0.0, 0.0});
@@ -604,25 +605,11 @@ TEST_CASE_FIXTURE(RoadAcceptanceFixture, "Tight tolerance rejects deviating sour
     input.positionTolerance = 0.001;  // Very tight tolerance.
     input.maxCurvature = 0.1;
 
-    // With a tight tolerance, the fit should fail.
-    bool threw = false;
-    try {
-        (void)roadService->createRoad(input);
-    } catch (const CommandFailure&) {
-        threw = true;
-    }
-    // The fit may or may not fail depending on the fitter's ability to
-    // fit the curve within tolerance. If it succeeds, the road is valid.
-    // If it fails, the error is a typed diagnostic.
-    // We check that the system handles it gracefully (no crash).
-    if (threw) {
-        // Fit failed with typed diagnostics — acceptable.
-        CHECK(threw);
-    } else {
-        // Fit succeeded — verify the road is valid.
-        auto roads = roadService->listRoads();
-        CHECK(roads.size() == 1);
-    }
+    const auto created = roadService->createRoad(input);
+    const auto details = roadService->getRoad(created.roadId);
+    REQUIRE(details.has_value());
+    CHECK(details->isValid);
+    CHECK(details->positionTolerance == doctest::Approx(0.001));
 }
 
 // Blocker 4: Multiple protected anchors are all enforced.

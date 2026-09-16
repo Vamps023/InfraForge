@@ -269,9 +269,7 @@ TEST_CASE("deterministic: identical inputs produce identical results") {
     }
 }
 
-TEST_CASE("impossible fit with tight tolerance returns diagnostics") {
-    // A zigzag polyline that can't be fit with a smooth alignment
-    // within a very tight tolerance.
+TEST_CASE("impossible tight-tolerance zigzag fit fails deterministically") {
     std::vector<ConditionedVertex> polyline(6);
     polyline[0].position = {0.0, 0.0};
     polyline[1].position = {10.0, 10.0};
@@ -285,13 +283,15 @@ TEST_CASE("impossible fit with tight tolerance returns diagnostics") {
     input.positionTolerance = 0.001;  // very tight
 
     auto result = fitAlignment(input);
-    // With a tight tolerance, the fitter should either fail to fit
-    // or produce diagnostics about source deviation.
-    if (!result.alignment.has_value()) {
-        REQUIRE_FALSE(result.diagnostics.empty());
+    CHECK_FALSE(result.alignment.has_value());
+    REQUIRE_FALSE(result.diagnostics.empty());
+    const auto repeated = fitAlignment(input);
+    CHECK_FALSE(repeated.alignment.has_value());
+    REQUIRE(repeated.diagnostics.size() == result.diagnostics.size());
+    for (std::size_t i = 0; i < result.diagnostics.size(); ++i) {
+        CHECK(repeated.diagnostics[i].code == result.diagnostics[i].code);
+        CHECK(repeated.diagnostics[i].message == result.diagnostics[i].message);
     }
-    // If it did produce an alignment, the deviation check should have caught it.
-    // (Either outcome is acceptable as long as it's deterministic and typed.)
 }
 
 TEST_CASE("max curvature constraint is respected") {

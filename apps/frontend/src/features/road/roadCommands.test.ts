@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { commandRegistry } from '../../editor/commands/commandRegistry'
+import { commandRegistry, type CommandContext } from '../../editor/commands/commandRegistry'
 import { registerRoadCommands, unregisterRoadCommands } from './roadCommands'
 import { useSelectionStore } from '../../editor/selection/selectionStore'
 import type { EngineClient } from '../../lib/engineSession'
@@ -11,6 +11,11 @@ import type { EngineClient } from '../../lib/engineSession'
 
 describe('roadCommands', () => {
   const mockEngineClient = {} as EngineClient
+  const context: CommandContext = {
+    availability: {
+      engine: 'ready', engineMessage: 'ready', project: 'project-open', viewportActive: true,
+    },
+  }
 
   beforeEach(() => {
     for (const command of commandRegistry.all()) {
@@ -54,15 +59,15 @@ describe('roadCommands', () => {
     expect(cmd?.requiresProject).toBe(true)
 
     // Without a road selected, the command should be disabled.
-    expect(cmd?.enabled?.()).toBe(false)
+    expect(cmd?.enabled?.(context)).toBe(false)
 
     // With a road selected, it should be enabled.
     useSelectionStore.getState().select(['road:abc123'])
-    expect(cmd?.enabled?.()).toBe(true)
+    expect(cmd?.enabled?.(context)).toBe(true)
 
     // With a non-road selection, it should be disabled.
     useSelectionStore.getState().select(['terrain:xyz'])
-    expect(cmd?.enabled?.()).toBe(false)
+    expect(cmd?.enabled?.(context)).toBe(false)
   })
 
   it('road.rename requires a selected road', () => {
@@ -71,7 +76,7 @@ describe('roadCommands', () => {
     expect(cmd).toBeDefined()
 
     useSelectionStore.getState().select(['road:abc123'])
-    expect(cmd?.enabled?.()).toBe(true)
+    expect(cmd?.enabled?.(context)).toBe(true)
   })
 
   it('road.fit-source requires a selected road', () => {
@@ -80,7 +85,7 @@ describe('roadCommands', () => {
     expect(cmd).toBeDefined()
 
     useSelectionStore.getState().select(['road:abc123'])
-    expect(cmd?.enabled?.()).toBe(true)
+    expect(cmd?.enabled?.(context)).toBe(true)
   })
 
   it('unregisters all road commands', () => {

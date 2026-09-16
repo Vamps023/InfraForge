@@ -106,6 +106,50 @@ TEST_CASE_FIXTURE(RoadServiceTestFixture, "list roads returns created roads") {
     CHECK(roads.size() == 2);
 }
 
+TEST_CASE_FIXTURE(RoadServiceTestFixture, "normal refit reuses persisted fitting contract") {
+    for (const double tolerance : {0.2, 5.0}) {
+        CreateRoadInput input;
+        input.name = "Contract";
+        input.sourcePoints = makeStraightPolyline(tolerance * 100.0, 0.0, 0.0, 100.0, 10);
+        input.positionTolerance = tolerance;
+        input.maxCurvature = 0.05;
+        const auto created = roadService->createRoad(input);
+        FitSourceInput refit{.roadId = created.roadId};
+        const auto result = roadService->fitSource(refit);
+        CHECK(result.roadId == created.roadId);
+        const auto records = store.roads();
+        const auto found = std::find_if(records.begin(), records.end(), [&](const auto& record) {
+            return uuidTextFromRoadId(record.id) == created.roadId;
+        });
+        REQUIRE(found != records.end());
+        CHECK(found->positionTolerance == doctest::Approx(tolerance));
+        REQUIRE(found->maxCurvature.has_value());
+        CHECK(*found->maxCurvature == doctest::Approx(0.05));
+    }
+}
+
+TEST_CASE_FIXTURE(RoadServiceTestFixture, "explicit refit settings replace persisted fitting contract") {
+    CreateRoadInput input;
+    input.name = "Contract update";
+    input.sourcePoints = makeStraightPolyline(0.0, 0.0, 0.0, 100.0, 10);
+    input.positionTolerance = 0.2;
+    input.maxCurvature = 0.05;
+    const auto created = roadService->createRoad(input);
+
+    FitSourceInput refit{.roadId = created.roadId, .positionTolerance = 2.5,
+        .maxCurvature = 0.02, .replaceMaxCurvature = true};
+    (void)roadService->fitSource(refit);
+
+    const auto records = store.roads();
+    const auto found = std::find_if(records.begin(), records.end(), [&](const auto& record) {
+        return uuidTextFromRoadId(record.id) == created.roadId;
+    });
+    REQUIRE(found != records.end());
+    CHECK(found->positionTolerance == doctest::Approx(2.5));
+    REQUIRE(found->maxCurvature.has_value());
+    CHECK(*found->maxCurvature == doctest::Approx(0.02));
+}
+
 TEST_CASE_FIXTURE(RoadServiceTestFixture, "get road returns details") {
     CreateRoadInput input;
     input.name = "Detail Road";
@@ -116,6 +160,8 @@ TEST_CASE_FIXTURE(RoadServiceTestFixture, "get road returns details") {
     auto details = roadService->getRoad(summary.roadId);
     REQUIRE(details.has_value());
     CHECK(details->name == "Detail Road");
+    CHECK(details->controlPoints.size() == input.sourcePoints.size());
+    CHECK(details->positionTolerance == doctest::Approx(1.0));
     CHECK(details->alignmentSegmentCount >= 1);
     CHECK(details->isValid);
 }
@@ -327,10 +373,11 @@ TEST_CASE_FIXTURE(RoadServiceTestFixture, "road scene projection produces mesh d
     input.name = "Scene Road";
     input.sourcePoints = makeStraightPolyline(0.0, 0.0, 0.0, 100.0, 10);
     input.positionTolerance = 1.0;
-    (void)roadService->createRoad(input);
+    auto summary = roadService->createRoad(input);
 
     auto projection = roadService->roadSceneProjection();
-    CHECK(projection.meshes.size() == 1);
+    REQUIRE(projection.meshes.size() == 1);
+    CHECK(projection.meshes[0].roadId == summary.roadId);
     CHECK_FALSE(projection.meshes[0].vertices.empty());
     CHECK_FALSE(projection.meshes[0].indices.empty());
     CHECK_FALSE(projection.meshes[0].roadId.empty());
@@ -477,9 +524,23 @@ TEST_CASE_FIXTURE(RoadServiceTestFixture, "long road spans multiple chunks") {
 
     // Verify the scene projection produces valid mesh data for the long road.
     auto projection = roadService->roadSceneProjection();
-    CHECK(projection.meshes.size() == 1);
-    CHECK_FALSE(projection.meshes[0].vertices.empty());
-    CHECK_FALSE(projection.meshes[0].indices.empty());
+    REQUIRE(projection.meshes.size() > 1);
+    std::set<std::pair<std::int64_t, std::int64_t>> chunkKeys;
+    for (const auto& mesh : projection.meshes) {
+        CHECK(mesh.roadId == summary.roadId);
+        CHECK_FALSE(mesh.vertices.empty());
+        CHECK_FALSE(mesh.indices.empty());
+        CHECK(chunkKeys.emplace(mesh.chunkX, mesh.chunkY).second);
+    }
+    for (std::size_t i = 1; i < projection.meshes.size(); ++i) {
+        const auto& previous = projection.meshes[i - 1].vertices;
+        const auto& next = projection.meshes[i].vertices;
+        REQUIRE(previous.size() >= 2); REQUIRE(next.size() >= 2);
+        CHECK(previous[previous.size() - 2].x == next[0].x);
+        CHECK(previous[previous.size() - 2].y == next[0].y);
+        CHECK(previous.back().x == next[1].x);
+        CHECK(previous.back().y == next[1].y);
+    }
 
     // Verify tessellation produces a reasonable number of samples.
     auto tess = roadService->getRoadTessellation(summary.roadId);

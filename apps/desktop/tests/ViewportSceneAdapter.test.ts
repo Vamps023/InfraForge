@@ -1,7 +1,23 @@
 import { describe, it, expect } from 'vitest'
-import { adaptTerrainScene, emptyViewportScene } from '../src/ViewportSceneAdapter'
+import { readFileSync } from 'node:fs'
+import { adaptTerrainScene, attachRoadScene, emptyViewportScene } from '../src/ViewportSceneAdapter'
 
 describe('ViewportSceneAdapter', () => {
+  it('matches the shared native road-only serialized fixture', () => {
+    const fixture = JSON.parse(readFileSync(
+      new URL('../../../contracts/testdata/road-scene-control.json', import.meta.url), 'utf8'))
+    const result = attachRoadScene({ type: 'scene' }, {
+      originEasting: 500000, originNorthing: 4650000, originHeight: 120,
+      meshes: [{
+        roadId: '123e4567-e89b-42d3-a456-426614174000', chunkX: 12n, chunkY: -4n,
+        vertices: [{ x: 0, y: 0, z: 0, nx: 0, ny: 0, nz: 1 },
+          { x: 1, y: 0, z: 0, nx: 0, ny: 0, nz: 1 },
+          { x: 0, y: 1, z: 0, nx: 0, ny: 0, nz: 1 }],
+        indices: [0, 1, 2],
+      }], revision: 9007199254740993n,
+    })
+    expect(result).toEqual(fixture)
+  })
   describe('adaptTerrainScene', () => {
     it('maps protobuf camelCase fields to viewport expected field names', () => {
       const engineScene = {
@@ -28,13 +44,13 @@ describe('ViewportSceneAdapter', () => {
       const result = adaptTerrainScene(engineScene)
       expect(result).not.toBeNull()
       expect(result!.type).toBe('scene')
-      expect(result!.originEasting).toBe(500000)
-      expect(result!.originNorthing).toBe(4650000)
-      expect(result!.originHeight).toBe(100)
-      expect(result!.missingTiles).toBe('3')
-      expect(result!.revision).toBe('7')
-      expect(result!.tiles).toHaveLength(1)
-      const tile = result!.tiles[0]!
+      expect(result!.terrain!.originEasting).toBe(500000)
+      expect(result!.terrain!.originNorthing).toBe(4650000)
+      expect(result!.terrain!.originHeight).toBe(100)
+      expect(result!.terrain!.missingTiles).toBe('3')
+      expect(result!.terrain!.revision).toBe('7')
+      expect(result!.terrain!.tiles).toHaveLength(1)
+      const tile = result!.terrain!.tiles[0]!
       expect(tile.datasetUuid).toBe('ds-1')
       expect(tile.datasetRevision).toBe('42')
       expect(tile.chunkX).toBe('10')
@@ -88,9 +104,9 @@ describe('ViewportSceneAdapter', () => {
 
       const result = adaptTerrainScene(engineScene)
       expect(result).not.toBeNull()
-      expect(result!.tiles).toHaveLength(2)
-      expect(result!.tiles[0]!.path).toBe('/a.tif')
-      expect(result!.tiles[1]!.path).toBe('/b.tif')
+      expect(result!.terrain!.tiles).toHaveLength(2)
+      expect(result!.terrain!.tiles[0]!.path).toBe('/a.tif')
+      expect(result!.terrain!.tiles[1]!.path).toBe('/b.tif')
     })
 
     it('handles string-valued BigInt fields', () => {
@@ -117,9 +133,9 @@ describe('ViewportSceneAdapter', () => {
 
       const result = adaptTerrainScene(engineScene)
       expect(result).not.toBeNull()
-      expect(result!.tiles[0]!.datasetRevision).toBe('999')
-      expect(result!.tiles[0]!.chunkX).toBe('-100')
-      expect(result!.tiles[0]!.chunkY).toBe('200')
+      expect(result!.terrain!.tiles[0]!.datasetRevision).toBe('999')
+      expect(result!.terrain!.tiles[0]!.chunkX).toBe('-100')
+      expect(result!.terrain!.tiles[0]!.chunkY).toBe('200')
     })
 
     it('returns null for malformed input', () => {
@@ -161,11 +177,11 @@ describe('ViewportSceneAdapter', () => {
       const result = adaptTerrainScene(engineScene)
       expect(result).not.toBeNull()
       const expected = huge.toString()
-      expect(result!.tiles[0]!.datasetRevision).toBe(expected)
-      expect(result!.tiles[0]!.chunkX).toBe(expected)
-      expect(result!.tiles[0]!.chunkY).toBe('-' + expected)
-      expect(result!.missingTiles).toBe(expected)
-      expect(result!.revision).toBe(expected)
+      expect(result!.terrain!.tiles[0]!.datasetRevision).toBe(expected)
+      expect(result!.terrain!.tiles[0]!.chunkX).toBe(expected)
+      expect(result!.terrain!.tiles[0]!.chunkY).toBe('-' + expected)
+      expect(result!.terrain!.missingTiles).toBe(expected)
+      expect(result!.terrain!.revision).toBe(expected)
     })
   })
 
@@ -173,13 +189,13 @@ describe('ViewportSceneAdapter', () => {
     it('produces a complete valid empty scene with all required fields', () => {
       const scene = emptyViewportScene()
       expect(scene.type).toBe('scene')
-      expect(scene.originEasting).toBe(0)
-      expect(scene.originNorthing).toBe(0)
-      expect(scene.originHeight).toBe(0)
-      expect(scene.tiles).toEqual([])
+      expect(scene.terrain!.originEasting).toBe(0)
+      expect(scene.terrain!.originNorthing).toBe(0)
+      expect(scene.terrain!.originHeight).toBe(0)
+      expect(scene.terrain!.tiles).toEqual([])
       // BLOCKER 7: missingTiles and revision must be present
-      expect(scene.missingTiles).toBe('0')
-      expect(scene.revision).toBe('0')
+      expect(scene.terrain!.missingTiles).toBe('0')
+      expect(scene.terrain!.revision).toBe('0')
     })
 
     it('produces a scene that can be JSON serialized without loss', () => {
@@ -187,12 +203,12 @@ describe('ViewportSceneAdapter', () => {
       const json = JSON.stringify(scene)
       const parsed = JSON.parse(json)
       expect(parsed.type).toBe('scene')
-      expect(parsed.originEasting).toBe(0)
-      expect(parsed.originNorthing).toBe(0)
-      expect(parsed.originHeight).toBe(0)
-      expect(parsed.tiles).toEqual([])
-      expect(parsed.missingTiles).toBe('0')
-      expect(parsed.revision).toBe('0')
+      expect(parsed.terrain.originEasting).toBe(0)
+      expect(parsed.terrain.originNorthing).toBe(0)
+      expect(parsed.terrain.originHeight).toBe(0)
+      expect(parsed.terrain.tiles).toEqual([])
+      expect(parsed.terrain.missingTiles).toBe('0')
+      expect(parsed.terrain.revision).toBe('0')
     })
   })
 
@@ -243,14 +259,14 @@ describe('ViewportSceneAdapter', () => {
 
       // Verify the exact field names the native viewport parser expects.
       expect(parsed.type).toBe('scene')
-      expect(parsed.originEasting).toBe(500000)
-      expect(parsed.originNorthing).toBe(4650000)
-      expect(parsed.originHeight).toBe(100)
-      expect(parsed.missingTiles).toBe('3')
-      expect(parsed.revision).toBe('42')
+      expect(parsed.terrain.originEasting).toBe(500000)
+      expect(parsed.terrain.originNorthing).toBe(4650000)
+      expect(parsed.terrain.originHeight).toBe(100)
+      expect(parsed.terrain.missingTiles).toBe('3')
+      expect(parsed.terrain.revision).toBe('42')
 
       // Tile 0: verify all viewport-expected field names.
-      const tile0 = parsed.tiles[0]
+      const tile0 = parsed.terrain.tiles[0]
       expect(tile0.datasetUuid).toBe('ds-001')
       expect(tile0.datasetRevision).toBe('12345')
       expect(tile0.chunkX).toBe('10')
@@ -269,7 +285,7 @@ describe('ViewportSceneAdapter', () => {
       expect(tile0.maxNorthing).toBeUndefined()
 
       // Tile 1: verify signed chunk coordinates.
-      const tile1 = parsed.tiles[1]
+      const tile1 = parsed.terrain.tiles[1]
       expect(tile1.chunkX).toBe('-100')
       expect(tile1.chunkY).toBe('200')
       expect(tile1.path).toBe('C:/projects/test/.iforge/terrain/tiles/ds-002_-100_200.iforgetile')
@@ -282,13 +298,13 @@ describe('ViewportSceneAdapter', () => {
 
       // The native parser must handle an empty scene with all fields.
       expect(parsed.type).toBe('scene')
-      expect(parsed.originEasting).toBe(0)
-      expect(parsed.originNorthing).toBe(0)
-      expect(parsed.originHeight).toBe(0)
-      expect(Array.isArray(parsed.tiles)).toBe(true)
-      expect(parsed.tiles).toHaveLength(0)
-      expect(parsed.missingTiles).toBe('0')
-      expect(parsed.revision).toBe('0')
+      expect(parsed.terrain.originEasting).toBe(0)
+      expect(parsed.terrain.originNorthing).toBe(0)
+      expect(parsed.terrain.originHeight).toBe(0)
+      expect(Array.isArray(parsed.terrain.tiles)).toBe(true)
+      expect(parsed.terrain.tiles).toHaveLength(0)
+      expect(parsed.terrain.missingTiles).toBe('0')
+      expect(parsed.terrain.revision).toBe('0')
     })
 
     it('preserves BigInt values beyond MAX_SAFE_INTEGER in JSON', () => {
@@ -320,11 +336,11 @@ describe('ViewportSceneAdapter', () => {
 
       // BigInt values must survive JSON round-trip as decimal strings.
       const expected = huge.toString()
-      expect(parsed.tiles[0].datasetRevision).toBe(expected)
-      expect(parsed.tiles[0].chunkX).toBe(expected)
-      expect(parsed.tiles[0].chunkY).toBe('-' + expected)
-      expect(parsed.missingTiles).toBe(expected)
-      expect(parsed.revision).toBe(expected)
+      expect(parsed.terrain.tiles[0].datasetRevision).toBe(expected)
+      expect(parsed.terrain.tiles[0].chunkX).toBe(expected)
+      expect(parsed.terrain.tiles[0].chunkY).toBe('-' + expected)
+      expect(parsed.terrain.missingTiles).toBe(expected)
+      expect(parsed.terrain.revision).toBe(expected)
     })
   })
 })

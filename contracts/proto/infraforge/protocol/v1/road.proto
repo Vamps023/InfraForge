@@ -53,6 +53,18 @@ message RoadDetails {
   bool is_valid = 14;
   repeated RoadDiagnostic diagnostics = 15;
   uint64 revision = 16;
+  repeated RoadControlPoint control_points = 17;
+  double position_tolerance = 18;
+  optional double max_curvature = 19;
+}
+
+// Editable fitting control projected for the inspector. This is not the
+// immutable source evidence and does not make the frontend authoritative.
+message RoadControlPoint {
+  double easting = 1;
+  double northing = 2;
+  optional double elevation = 3;
+  bool protected_anchor = 4;
 }
 
 // Road diagnostic projection.
@@ -122,7 +134,9 @@ message DeleteRoadControlCommand {
 // Fit/refit a road from its source polyline with new parameters.
 message FitRoadSourceCommand {
   string road_id = 1;
-  double position_tolerance = 2;
+  // Omitted for a normal refit, which reuses the persisted fitting contract.
+  // Present only when the user explicitly changes the fitting settings.
+  optional double position_tolerance = 2;
   optional double max_curvature = 3;
 }
 
@@ -230,6 +244,8 @@ message RoadSceneMesh {
   string road_id = 1;
   repeated RoadSceneVertex vertices = 2;
   repeated uint32 indices = 3;
+  int64 chunk_x = 4;
+  int64 chunk_y = 5;
 }
 
 // Road scene projection: all road meshes for the viewport, in render-local

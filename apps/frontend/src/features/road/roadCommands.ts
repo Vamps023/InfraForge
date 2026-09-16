@@ -4,6 +4,8 @@ import { useSelectionStore } from '../../editor/selection/selectionStore'
 import type { EngineClient } from '../../lib/engineSession'
 import { deleteRoad, fitRoadSource, undoRoadEdit, redoRoadEdit } from './roadApi'
 import { useRoadStore } from './roadStore'
+import { useRoadToolStore } from './roadToolStore'
+import { createRoad } from './roadApi'
 
 // Road commands registered through the Issue #5 command registry. Each
 // command issues real engine commands through the canonical roadApi; no
@@ -29,6 +31,29 @@ export function registerRoadCommands(deps: RoadCommandDeps): void {
       execute: () => {
         useShellUiStore.getState().openDialogCommand('create-road')
       },
+    },
+    {
+      id: 'road.finish-drawing',
+      label: 'Finish Road',
+      category: 'Road', group: 'road', surfaces: ['toolbar', 'palette'],
+      requiresEngine: true, requiresProject: true,
+      enabled: () => useRoadToolStore.getState().mode === 'drawing' &&
+        useRoadToolStore.getState().points.length >= 2,
+      execute: async () => {
+        const client = deps.getEngineClient(); if (!client) return
+        const draft = useRoadToolStore.getState()
+        if (draft.mode !== 'drawing' || draft.points.length < 2 || draft.positionTolerance === null) return
+        await createRoad(client, draft.name, draft.points.map((p) => p.easting),
+          draft.points.map((p) => p.northing), draft.positionTolerance, [], [],
+          draft.maxCurvature ?? undefined)
+        draft.cancel()
+      },
+    },
+    {
+      id: 'road.cancel-drawing', label: 'Cancel Road Drawing', category: 'Road', group: 'road',
+      surfaces: ['toolbar', 'palette'], requiresProject: true,
+      enabled: () => useRoadToolStore.getState().mode === 'drawing',
+      execute: () => useRoadToolStore.getState().cancel(),
     },
     {
       id: 'road.delete',
@@ -128,7 +153,7 @@ export function registerRoadCommands(deps: RoadCommandDeps): void {
         if (!id || !id.startsWith('road:')) return
         const roadId = id.slice('road:'.length)
         // Blocker 18: use canonical roadApi; no redundant listRoads call.
-        await fitRoadSource(client, roadId, 1.0)
+        await fitRoadSource(client, roadId)
       },
     },
   ]
@@ -145,4 +170,6 @@ export function unregisterRoadCommands(): void {
   commandRegistry.unregister('road.undo')
   commandRegistry.unregister('road.redo')
   commandRegistry.unregister('road.fit-source')
+  commandRegistry.unregister('road.finish-drawing')
+  commandRegistry.unregister('road.cancel-drawing')
 }

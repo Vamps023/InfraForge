@@ -1,6 +1,8 @@
 import { inspectorSectionRegistry, type InspectorSectionContext } from '../../editor/inspector/inspectorRegistry'
 import { useRoadStore } from './roadStore'
 import { getRoad } from './roadApi'
+import { deleteRoadControl } from './roadApi'
+import { useRoadToolStore } from './roadToolStore'
 import type { EngineClient } from '../../lib/engineSession'
 
 // Road inspector section: shows real canonical road metadata for the
@@ -69,6 +71,37 @@ export function registerRoadInspectorSection(deps: RoadInspectorDeps): void {
             ) : null}
             <dt>Revision</dt>
             <dd>{road.revision.toString()}</dd>
+            {details ? (
+              <>
+                <dt>Fitting tolerance</dt>
+                <dd>{details.positionTolerance}</dd>
+                <dt>Editable controls</dt>
+                <dd>
+                  <ol className="road-controls">
+                    {details.controlPoints.map((control, index) => (
+                      <li key={index}>
+                        <span className="mono">
+                          {control.easting.toFixed(3)}, {control.northing.toFixed(3)}
+                        </span>
+                        {control.protectedAnchor ? <strong> Protected</strong> : (
+                          <>
+                            <button type="button" onClick={() =>
+                              useRoadToolStore.getState().beginMove(roadId, index)}>Move in viewport</button>
+                            <button type="button" onClick={() => {
+                              if (!client) return
+                              void deleteRoadControl(client, roadId, index)
+                                .then(() => getRoad(client, roadId))
+                            }}>Delete</button>
+                          </>
+                        )}
+                        <button type="button" onClick={() =>
+                          useRoadToolStore.getState().beginInsert(roadId, index + 1)}>Insert after</button>
+                      </li>
+                    ))}
+                  </ol>
+                </dd>
+              </>
+            ) : null}
             {details && details.diagnostics.length > 0 ? (
               <>
                 <dt>Diagnostics</dt>

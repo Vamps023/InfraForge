@@ -9,6 +9,7 @@
 
 #include <filesystem>
 #include <string>
+#include <set>
 
 namespace {
 
@@ -153,6 +154,39 @@ TEST_CASE("road save and reopen reconstructs identical parameters") {
         CHECK(origSample.position.northing == doctest::Approx(rebuiltSample.position.northing).epsilon(1e-9));
     }
     (void)store.close();
+}
+
+TEST_CASE("protected-anchor curvature boundary survives SQLite reopen") {
+    CircularArcSegment first{.start={0.0,0.0}, .startHeading=0.0,
+        .curvature=0.01, .length=20.0};
+    const auto boundary = first.endSample();
+    CircularArcSegment second{.start=boundary.position, .startHeading=boundary.heading,
+        .curvature=0.02, .length=20.0};
+    auto alignment = ReferenceAlignment::build({first, second}, 1e-6, 1e-6, 1e-9, {1});
+    REQUIRE(alignment.has_value());
+    Road::BuildInput input{.id=makeRoadId("99999999-2222-3333-4444-555555555555"),
+        .displayName="Anchored", .alignment=*alignment};
+    input.source.protectedAnchors.push_back({20.0, boundary.position, AnchorKind::Junction});
+    auto road = Road::build(std::move(input));
+    REQUIRE(road.has_value());
+    auto record = toRecord(*road);
+    record.anchorBoundarySegments.insert(1);
+
+    infraforge::testhelpers::ScratchDirectory scratch;
+    infraforge::persistence::SqliteProjectStore store;
+    (void)store.create(infraforge::testhelpers::sampleCreateSpec(scratch.path()));
+    (void)store.insertRoad(record); (void)store.save(); (void)store.close();
+    (void)store.open(scratch.path() / "Test Project.iforge");
+    const auto records = store.roads();
+    REQUIRE(records.size() == 1);
+    CHECK(records[0].id == record.id);
+    CHECK(records[0].anchorBoundarySegments == std::set<std::size_t>{1});
+    REQUIRE(records[0].protectedAnchors.size() == 1);
+    CHECK(records[0].protectedAnchors[0].position == boundary.position);
+    const auto restored = fromRecord(records[0]);
+    REQUIRE(restored.has_value());
+    CHECK(restored->alignment().evaluate(20.0).position == boundary.position);
+    CHECK(restored->alignment().evaluate(20.001).position.easting != boundary.position.easting);
 }
 
 TEST_CASE("multiple roads persist and reopen in order") {

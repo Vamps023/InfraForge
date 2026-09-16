@@ -1,10 +1,11 @@
-import { Download, FolderOpen, MapPin, Plus, Trash2, Undo2, Redo2, RefreshCw } from 'lucide-react'
+import { Download, FolderOpen, MapPin, Plus, Trash2, Undo2, Redo2, RefreshCw, Check, X } from 'lucide-react'
 import { useWorkspaceStore } from './workspaceStore'
 import { Tooltip } from '../../ui/Tooltip'
 import {
   useCommandExecutor,
   type CommandContext,
 } from '../commands/useCommands'
+import { useRoadToolStore } from '../../features/road/roadToolStore'
 
 // ContextToolbar — context-aware toolbar that shows workspace-specific
 // actions. Only renders actions for the active workspace that have real
@@ -85,11 +86,23 @@ function RoadsContextToolbar({ context }: { context: CommandContext }) {
   const refitRoad = useCommandExecutor('road.fit-source', context)
   const undoRoad = useCommandExecutor('road.undo', context)
   const redoRoad = useCommandExecutor('road.redo', context)
+  const finishDrawing = useCommandExecutor('road.finish-drawing', context)
+  const cancelDrawing = useCommandExecutor('road.cancel-drawing', context)
+  const drawing = useRoadToolStore((state) => state.mode === 'drawing')
+  const pointCount = useRoadToolStore((state) => state.points.length)
 
   return (
     <div className="context-toolbar" aria-label="Roads workspace actions">
       <span className="context-toolbar-label">Roads</span>
       <div className="context-toolbar-divider" />
+      {drawing ? <>
+        <span className="context-toolbar-label">{pointCount} control points</span>
+        <button type="button" className="tool-button" disabled={!finishDrawing.availability.enabled}
+          onClick={() => void finishDrawing.run()}><Check size={14} /> Finish</button>
+        <button type="button" className="tool-button" disabled={!cancelDrawing.availability.enabled}
+          onClick={() => void cancelDrawing.run()}><X size={14} /> Cancel</button>
+        <div className="context-toolbar-divider" />
+      </> : null}
       <Tooltip label={createRoad.availability.disabledReason ?? 'Create a new road from a source polyline'}>
         <button
           type="button"

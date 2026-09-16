@@ -39,9 +39,13 @@ import { registerRoadCommands, unregisterRoadCommands } from './features/road/ro
 import { registerRoadOutlinerProjection, unregisterRoadOutlinerProjection } from './features/road/roadOutlinerProjection'
 import { registerRoadInspectorSection, unregisterRoadInspectorSection } from './features/road/roadInspectorSection'
 import { subscribeRoadEvents, setRoadScenePublisher } from './features/road/roadEvents'
-import { listRoads, fetchRoadScene } from './features/road/roadApi'
+import { listRoads, fetchRoadScene, moveRoadControl, insertRoadControl } from './features/road/roadApi'
 import { CreateRoadDialog } from './features/road/CreateRoadDialog'
 import { RenameRoadDialog } from './features/road/RenameRoadDialog'
+import { useRoadToolStore } from './features/road/roadToolStore'
+import { useSelectionStore } from './editor/selection/selectionStore'
+import { useRoadStore } from './features/road/roadStore'
+import { getRoad } from './features/road/roadApi'
 
 export function App() {
   const engineStatus = useUiStore((state) => state.engineStatus)
@@ -49,6 +53,14 @@ export function App() {
   const [engineSession, setEngineSession] = useState<EngineSession | null>(null)
   const disposersRef = useRef<(() => void) | null>(null)
   const viewportHostRef = useRef<HTMLDivElement | null>(null)
+  const roadToolMode = useRoadToolStore((state) => state.mode)
+  const roadDraftPoints = useRoadToolStore((state) => state.points)
+
+  useEffect(() => {
+    window.infraforgeDesktop?.setRoadPreview?.(
+      roadToolMode === 'drawing' ? roadDraftPoints : [],
+    )
+  }, [roadToolMode, roadDraftPoints])
 
   const openDialog = useShellUiStore((state) => state.openDialog)
   const closeDialog = useShellUiStore((state) => state.closeDialog)
@@ -89,6 +101,33 @@ export function App() {
   const commandContext = useCommandContext(engineStatus, engineSession)
   useCommandShortcuts(commandContext)
   useProblemDiagnostics()
+
+  useEffect(() => window.infraforgeDesktop?.onViewportInteraction?.((interaction) => {
+    const tool = useRoadToolStore.getState()
+    if (interaction.kind === 'primary-click' && tool.mode === 'drawing') {
+      useRoadToolStore.getState().append({
+        easting: interaction.easting, northing: interaction.northing,
+      })
+    } else if (interaction.kind === 'primary-click' &&
+      (tool.mode === 'move-control' || tool.mode === 'insert-control')) {
+      const client = engineSessionRef.current?.client
+      if (!client || !tool.editRoadId || tool.controlIndex === null) return
+      const operation = tool.mode === 'move-control'
+        ? moveRoadControl(client, tool.editRoadId, tool.controlIndex,
+            interaction.easting, interaction.northing)
+        : insertRoadControl(client, tool.editRoadId, tool.controlIndex,
+            interaction.easting, interaction.northing)
+      void operation.then(() => getRoad(client, tool.editRoadId!))
+        .finally(() => useRoadToolStore.getState().cancel())
+    } else if (interaction.kind === 'primary-click') {
+      const selectionId = interaction.roadId ? `road:${interaction.roadId}` : null
+      useSelectionStore.getState().select(selectionId ? [selectionId] : [])
+      useRoadStore.getState().selectRoad(interaction.roadId ?? null)
+      const client = engineSessionRef.current?.client
+      if (client && interaction.roadId) void getRoad(client, interaction.roadId)
+      else useRoadStore.getState().setDetails(null)
+    }
+  }), [])
 
   // Help menu → Diagnostics: the desktop shell sends menu:diagnostics when
   // the user clicks Help → Diagnostics or Help → About. Open the same dialog

@@ -109,6 +109,18 @@ TEST_CASE("large UTM coordinates equal origin-local math") {
     for (std::size_t i=0;i<a.size();++i) CHECK(a[i] == doctest::Approx(b[i]).epsilon(1e-6));
 }
 
+TEST_CASE("screen center maps to canonical horizontal plane") {
+    EditorCamera camera; camera.setViewport(1000, 800);
+    camera.setTarget({500000.0, 4650000.0, 100.0});
+    camera.setDistance(500.0); camera.setOrientation(0.0, -0.7);
+    const auto point = camera.screenToHorizontalPlane(500.0, 400.0, 100.0);
+    REQUIRE(point.has_value());
+    CHECK(point->x == doctest::Approx(500000.0));
+    CHECK(point->y == doctest::Approx(4650000.0));
+    CHECK(point->z == doctest::Approx(100.0));
+    CHECK_FALSE(camera.screenToHorizontalPlane(-1.0, 0.0, 100.0).has_value());
+}
+
 TEST_CASE("scene refresh and resize preserve an established user camera") {
     EditorCameraController controller;
     controller.camera().setViewport(1200,800);

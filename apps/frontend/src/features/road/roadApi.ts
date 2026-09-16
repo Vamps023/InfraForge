@@ -176,7 +176,7 @@ export async function deleteRoadControl(
 export async function fitRoadSource(
   client: EngineClient,
   roadId: string,
-  positionTolerance: number,
+  positionTolerance?: number,
   maxCurvature?: number,
 ): Promise<RoadSummary> {
   return withRoadError(async () => {

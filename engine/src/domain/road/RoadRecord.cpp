@@ -81,7 +81,10 @@ std::expected<Road, std::vector<RoadDiagnostic>> fromRecord(const RoadRecord& re
         }
     }
 
-    auto alignment = ReferenceAlignment::build(std::move(segments));
+    auto alignment = ReferenceAlignment::build(
+        std::move(segments), kDefaultPositionTolerance,
+        kDefaultHeadingTolerance, kDefaultCurvatureTolerance,
+        record.anchorBoundarySegments);
     if (!alignment.has_value()) {
         return std::unexpected(std::move(alignment.error()));
     }

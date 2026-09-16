@@ -22,10 +22,15 @@ struct RoadSceneVertex {
 // One road mesh in the scene: a triangle list with vertices and indices.
 struct RoadSceneMesh {
     std::string roadId;
+    std::int64_t chunkX{0};
+    std::int64_t chunkY{0};
     std::vector<RoadSceneVertex> vertices;
     std::vector<std::uint32_t> indices;
 
     [[nodiscard]] bool isEmpty() const noexcept { return vertices.empty() || indices.empty(); }
+    [[nodiscard]] std::string key() const {
+        return roadId + ":" + std::to_string(chunkX) + ":" + std::to_string(chunkY);
+    }
 };
 
 // Road portion of the scene control command. The viewport uploads and

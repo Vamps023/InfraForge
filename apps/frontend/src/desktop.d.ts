@@ -64,10 +64,14 @@ declare global {
       pickDirectory: (options: Readonly<{ title: string; buttonLabel?: string }>) => Promise<string | null>
       pickFile: (options: Readonly<{ title: string; filters?: ReadonlyArray<FileFilter> }>) => Promise<string | null>
       setViewportScene: (scene: Record<string, unknown>) => void
+      setRoadPreview?: (points: Array<{ easting: number; northing: number }>) => void
       setViewportCamera: (action: 'focus-terrain' | 'frame-all' | 'perspective' | 'top', datasetUuid?: string) => void
       setViewportBounds: (rect: ViewportRect, dpiScale: number) => void
       setViewportVisible: (visible: boolean) => void
       onViewportStatus: (listener: (status: ViewportStatusPayload) => void) => () => void
+      onViewportInteraction: (listener: (interaction: Readonly<{
+        kind: 'primary-click'; easting: number; northing: number; height: number; roadId?: string
+      }>) => void) => () => void
       onMapTileDiagnostic: (listener: (diagnostic: Readonly<{
         state: 'started' | 'completed' | 'failed'
         url: string

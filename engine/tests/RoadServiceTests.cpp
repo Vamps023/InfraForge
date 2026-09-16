@@ -114,7 +114,8 @@ TEST_CASE_FIXTURE(RoadServiceTestFixture, "normal refit reuses persisted fitting
         input.positionTolerance = tolerance;
         input.maxCurvature = 0.05;
         const auto created = roadService->createRoad(input);
-        FitSourceInput refit{.roadId = created.roadId};
+        FitSourceInput refit{.roadId = created.roadId, .positionTolerance = std::nullopt,
+            .maxCurvature = std::nullopt, .replaceMaxCurvature = false};
         const auto result = roadService->fitSource(refit);
         CHECK(result.roadId == created.roadId);
         const auto records = store.roads();

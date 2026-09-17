@@ -159,8 +159,10 @@ TEST_CASE_FIXTURE(RoadServiceTestFixture, "refit changes tolerance without clear
     input.maxCurvature = 0.05;
     const auto created = roadService->createRoad(input);
 
-    (void)roadService->fitSource(FitSourceInput{
-        .roadId = created.roadId, .positionTolerance = 2.0});
+    FitSourceInput fitInput;
+    fitInput.roadId = created.roadId;
+    fitInput.positionTolerance = 2.0;
+    (void)roadService->fitSource(fitInput);
 
     const auto details = roadService->getRoad(created.roadId);
     REQUIRE(details.has_value());
@@ -177,16 +179,21 @@ TEST_CASE_FIXTURE(RoadServiceTestFixture, "refit can replace or explicitly clear
     input.maxCurvature = 0.05;
     const auto created = roadService->createRoad(input);
 
-    (void)roadService->fitSource(FitSourceInput{
-        .roadId = created.roadId, .maxCurvature = 0.02, .replaceMaxCurvature = true});
+    FitSourceInput fitInput1;
+    fitInput1.roadId = created.roadId;
+    fitInput1.maxCurvature = 0.02;
+    fitInput1.replaceMaxCurvature = true;
+    (void)roadService->fitSource(fitInput1);
     auto details = roadService->getRoad(created.roadId);
     REQUIRE(details.has_value());
     CHECK(details->positionTolerance == doctest::Approx(1.0));
     REQUIRE(details->maxCurvature.has_value());
     CHECK(*details->maxCurvature == doctest::Approx(0.02));
 
-    (void)roadService->fitSource(FitSourceInput{
-        .roadId = created.roadId, .replaceMaxCurvature = true});
+    FitSourceInput fitInput2;
+    fitInput2.roadId = created.roadId;
+    fitInput2.replaceMaxCurvature = true;
+    (void)roadService->fitSource(fitInput2);
     details = roadService->getRoad(created.roadId);
     REQUIRE(details.has_value());
     CHECK(details->positionTolerance == doctest::Approx(1.0));

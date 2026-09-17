@@ -118,41 +118,41 @@ struct RoadSceneProjection {
 
 // Input for creating a road from a source polyline.
 struct CreateRoadInput {
-    std::string name;
-    std::vector<domain::road::AlignmentPoint> sourcePoints;
-    std::vector<std::optional<double>> sourceElevations;
+    std::string name{};
+    std::vector<domain::road::AlignmentPoint> sourcePoints{};
+    std::vector<std::optional<double>> sourceElevations{};
     double positionTolerance{1.0};
-    std::optional<double> maxCurvature;
-    std::vector<std::uint32_t> protectedAnchorIndices;
+    std::optional<double> maxCurvature{};
+    std::vector<std::uint32_t> protectedAnchorIndices{};
 };
 
 // Input for inserting a control point.
 struct InsertControlInput {
-    std::string roadId;
+    std::string roadId{};
     std::uint32_t insertBeforeIndex{0};
-    domain::road::AlignmentPoint position;
-    std::optional<double> elevation;
+    domain::road::AlignmentPoint position{};
+    std::optional<double> elevation{};
 };
 
 // Input for moving a control point.
 struct MoveControlInput {
-    std::string roadId;
+    std::string roadId{};
     std::uint32_t controlIndex{0};
-    domain::road::AlignmentPoint position;
-    std::optional<double> elevation;
+    domain::road::AlignmentPoint position{};
+    std::optional<double> elevation{};
 };
 
 // Input for deleting a control point.
 struct DeleteControlInput {
-    std::string roadId;
+    std::string roadId{};
     std::uint32_t controlIndex{0};
 };
 
 // Input for fitting/refitting a road.
 struct FitSourceInput {
-    std::string roadId;
-    std::optional<double> positionTolerance;
-    std::optional<double> maxCurvature;
+    std::string roadId{};
+    std::optional<double> positionTolerance{};
+    std::optional<double> maxCurvature{};
     bool replaceMaxCurvature{false};
 };
 
@@ -166,27 +166,27 @@ struct RoadHistoryResult {
 
 // Input for updating the elevation profile.
 struct UpdateElevationInput {
-    std::string roadId;
-    std::vector<double> stations;
-    std::vector<double> elevations;
+    std::string roadId{};
+    std::vector<double> stations{};
+    std::vector<double> elevations{};
 };
 
 // Input for updating the superelevation profile.
 struct UpdateSuperelevationInput {
-    std::string roadId;
-    std::vector<double> stations;
-    std::vector<double> superelevations;
+    std::string roadId{};
+    std::vector<double> stations{};
+    std::vector<double> superelevations{};
 };
 
 struct UpdateWidthInput {
-    std::string roadId;
-    std::vector<double> stations;
-    std::vector<double> leftWidths;
-    std::vector<double> rightWidths;
+    std::string roadId{};
+    std::vector<double> stations{};
+    std::vector<double> leftWidths{};
+    std::vector<double> rightWidths{};
 };
 
 struct ConformRoadToTerrainInput {
-    std::string roadId;
+    std::string roadId{};
     double stationInterval{10.0};
     double verticalOffset{0.1};
 };

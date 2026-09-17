@@ -707,33 +707,48 @@ RoadSummary RoadService::conformToTerrain(
         throw CommandFailure{CommandFailureCode::NotFound, "road not found: " + input.roadId};
     }
     const auto road = rebuildRoad(*found);
-    domain::road::RoadTessellationParams params;
-    params.stationInterval = input.stationInterval;
-    const auto tessellation = domain::road::tessellateRoad(
-        road.alignment(), road.elevation(), road.superelevation(), road.width(), params);
-    if (tessellation.isEmpty()) {
+    const auto& alignment = road.alignment();
+    if (alignment.isEmpty() || alignment.totalLength() <= 0.0) {
         throw CommandFailure{CommandFailureCode::InvalidArgument,
-            "road terrain conformance could not produce sampling stations"};
+            "road alignment is empty or degenerate"};
     }
+
+    // Generate conformance stations independently from the data being replaced:
+    // canonical centerline/alignment boundaries + the requested sampling interval.
+    std::set<double> uniqueStations;
+    uniqueStations.insert(0.0);
+    double segStation = 0.0;
+    for (const auto& seg : alignment.segments()) {
+        const double segStart = segStation;
+        const double segEnd = segStation + segmentLength(seg.segment);
+        segStation = segEnd;
+        uniqueStations.insert(segEnd);
+
+        for (double s = segStart + input.stationInterval; s < segEnd - 1e-4; s += input.stationInterval) {
+            uniqueStations.insert(s);
+        }
+    }
+    uniqueStations.insert(alignment.totalLength());
 
     UpdateElevationInput elevation;
     elevation.roadId = input.roadId;
-    elevation.stations.reserve(tessellation.crossSections.size());
-    elevation.elevations.reserve(tessellation.crossSections.size());
-    for (const auto& section : tessellation.crossSections) {
-        auto sampled = sampleHeight(section.center);
+    elevation.stations.reserve(uniqueStations.size());
+    elevation.elevations.reserve(uniqueStations.size());
+    for (const double station : uniqueStations) {
+        const auto sample = alignment.evaluate(station);
+        auto sampled = sampleHeight(sample.position);
         if (!sampled.has_value()) {
             throw CommandFailure{CommandFailureCode::InvalidArgument,
-                "terrain conformance failed at station " + std::to_string(section.station)
+                "terrain conformance failed at station " + std::to_string(station)
                     + ": " + sampled.error()};
         }
         const double conformedHeight = *sampled + input.verticalOffset;
         if (!std::isfinite(conformedHeight)) {
             throw CommandFailure{CommandFailureCode::InvalidArgument,
                 "terrain conformance produced a non-finite height at station "
-                    + std::to_string(section.station)};
+                    + std::to_string(station)};
         }
-        elevation.stations.push_back(section.station);
+        elevation.stations.push_back(station);
         elevation.elevations.push_back(conformedHeight);
     }
     return updateElevation(elevation);
@@ -1428,14 +1443,14 @@ RoadRecord RoadService::buildNewRoadRecord(
 
         double cumulativeStation = 0.0;
         for (std::size_t i = 0; i < polyline.size(); ++i) {
+            if (i > 0) {
+                const double dx = polyline[i].position.easting -
+                    polyline[i - 1].position.easting;
+                const double dy = polyline[i].position.northing -
+                    polyline[i - 1].position.northing;
+                cumulativeStation += std::sqrt(dx * dx + dy * dy);
+            }
             if (i < sourceElevations.size() && sourceElevations[i].has_value()) {
-                if (i > 0) {
-                    const double dx = polyline[i].position.easting -
-                        polyline[i - 1].position.easting;
-                    const double dy = polyline[i].position.northing -
-                        polyline[i - 1].position.northing;
-                    cumulativeStation += std::sqrt(dx * dx + dy * dy);
-                }
                 // Map source station to alignment station.
                 const double alignmentStation = cumulativeStation * stationScale;
                 elevBreakpoints.push_back(
@@ -1471,6 +1486,59 @@ RoadRecord RoadService::buildNewRoadRecord(
     record.anchorBoundarySegments = anchorBoundarySegments;
     return record;
 }
+
+namespace {
+
+std::vector<ProfileBreakpoint> clampProfileBreakpoints(
+    const std::vector<ProfileBreakpoint>& breakpoints, double newLength) {
+    if (breakpoints.empty() || newLength <= 0.0) return {};
+    auto profile = buildElevationProfile(breakpoints);
+    std::vector<ProfileBreakpoint> result;
+    bool hasBeyond = false;
+    for (const auto& bp : breakpoints) {
+        if (bp.station < newLength - 1e-4) {
+            result.push_back(bp);
+        } else if (std::abs(bp.station - newLength) <= 1e-4) {
+            result.push_back({newLength, bp.value});
+            hasBeyond = false;
+            break;
+        } else {
+            hasBeyond = true;
+            break;
+        }
+    }
+    if (hasBeyond && profile.has_value()) {
+        result.push_back({newLength, profile->evaluate(newLength)});
+    }
+    return result;
+}
+
+std::vector<RoadWidthBreakpoint> clampWidthBreakpoints(
+    const std::vector<RoadWidthBreakpoint>& breakpoints, double newLength) {
+    if (breakpoints.empty() || newLength <= 0.0) return {};
+    auto profile = buildRoadWidthProfile(breakpoints);
+    std::vector<RoadWidthBreakpoint> result;
+    bool hasBeyond = false;
+    for (const auto& bp : breakpoints) {
+        if (bp.station < newLength - 1e-4) {
+            result.push_back(bp);
+        } else if (std::abs(bp.station - newLength) <= 1e-4) {
+            result.push_back({newLength, bp.leftWidth, bp.rightWidth});
+            hasBeyond = false;
+            break;
+        } else {
+            hasBeyond = true;
+            break;
+        }
+    }
+    if (hasBeyond && profile.has_value()) {
+        auto evaluated = profile->evaluate(newLength);
+        result.push_back({newLength, evaluated.left, evaluated.right});
+    }
+    return result;
+}
+
+} // namespace
 
 RoadRecord RoadService::refitRoad(
     const RoadRecord& existing,
@@ -1535,17 +1603,24 @@ RoadRecord RoadService::refitRoad(
     }
     roadInput.source.protectedAnchors = anchors;
 
-    // Blocker 2: preserve elevation and superelevation profiles.
-    auto elevProfile = buildElevationProfile(existing.elevationBreakpoints);
+    // Blocker 2 + Correctness: preserve elevation, superelevation, and width
+    // profiles, clamping stations to the new alignment length so control edits
+    // that shorten or lengthen the road never leave impossible stations beyond
+    // the road endpoint.
+    const double newLength = roadInput.alignment.totalLength();
+    auto clampedElev = clampProfileBreakpoints(existing.elevationBreakpoints, newLength);
+    auto elevProfile = buildElevationProfile(clampedElev);
     if (elevProfile.has_value()) {
         roadInput.elevation = std::move(*elevProfile);
     }
-    auto superelevProfile = buildSuperelevationProfile(
-        existing.superelevationBreakpoints);
+    auto clampedSuperelev = clampProfileBreakpoints(
+        existing.superelevationBreakpoints, newLength);
+    auto superelevProfile = buildSuperelevationProfile(clampedSuperelev);
     if (superelevProfile.has_value()) {
         roadInput.superelevation = std::move(*superelevProfile);
     }
-    auto widthProfile = buildRoadWidthProfile(existing.widthBreakpoints);
+    auto clampedWidth = clampWidthBreakpoints(existing.widthBreakpoints, newLength);
+    auto widthProfile = buildRoadWidthProfile(clampedWidth);
     if (widthProfile.has_value()) {
         roadInput.width = std::move(*widthProfile);
     }

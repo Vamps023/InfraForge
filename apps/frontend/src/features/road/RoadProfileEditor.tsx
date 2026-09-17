@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useRoadStore } from './roadStore'
+import { useTerrainStore } from '../terrain/terrainStore'
 import { useSelectionStore } from '../../editor/selection/selectionStore'
 import { conformRoadToTerrain, getRoad, updateRoadElevation, updateRoadSuperelevation, updateRoadWidth } from './roadApi'
 import { contextEditorRegistry } from '../../editor/contextEditor/contextEditorRegistry'
@@ -44,6 +45,9 @@ export function RoadProfileEditor({ getEngineClient }: RoadProfileEditorProps) {
   const [feedback, setFeedback] = useState<string | null>(null)
   const [terrainInterval, setTerrainInterval] = useState('10')
   const [terrainOffset, setTerrainOffset] = useState('0.1')
+  const datasets = useTerrainStore((state) => state.datasets)
+  const selectedDatasetUuid = useTerrainStore((state) => state.selectedDatasetUuid)
+  const [selectedDatasetId, setSelectedDatasetId] = useState<string>('')
 
   useEffect(() => {
     setRows(matchingDetails ? projectedRows(kind, matchingDetails) : [])
@@ -57,13 +61,51 @@ export function RoadProfileEditor({ getEngineClient }: RoadProfileEditorProps) {
   }
 
   const addRow = () => {
+    if (rows.length === 0) {
+      setRows([{
+        station: '0',
+        value: kind === 'width' ? '5' : '0',
+        ...(kind === 'width' ? { rightValue: '5' } : {}),
+      }])
+      return
+    }
+
     const lastStation = Number(rows.at(-1)?.station ?? 0)
-    const nextStation = rows.length === 0 ? 0 : Math.min(road.length, lastStation + 10)
-    setRows((current) => [...current, {
+    let nextStation: number
+    if (lastStation < road.length - 0.01) {
+      nextStation = Math.min(road.length, Number((lastStation + 10).toFixed(2)))
+    } else {
+      const sorted = rows
+        .map((r) => Number(r.station))
+        .filter((s) => Number.isFinite(s))
+        .sort((a, b) => a - b)
+
+      let maxGap = -1
+      let bestMidpoint = road.length / 2
+      if (sorted.length < 2) {
+        bestMidpoint = sorted.length === 1 && sorted[0]! > 0 ? sorted[0]! / 2 : Math.min(road.length, 10)
+      } else {
+        for (let i = 0; i < sorted.length - 1; i++) {
+          const gap = sorted[i + 1]! - sorted[i]!
+          if (gap > maxGap) {
+            maxGap = gap
+            bestMidpoint = sorted[i]! + gap / 2
+          }
+        }
+      }
+      nextStation = Number(bestMidpoint.toFixed(2))
+    }
+
+    const newRow: DraftBreakpoint = {
       station: String(nextStation),
       value: kind === 'width' ? '5' : '0',
       ...(kind === 'width' ? { rightValue: '5' } : {}),
-    }])
+    }
+
+    setRows((current) => {
+      const updated = [...current, newRow]
+      return updated.sort((a, b) => Number(a.station) - Number(b.station))
+    })
   }
 
   const save = async () => {
@@ -109,7 +151,8 @@ export function RoadProfileEditor({ getEngineClient }: RoadProfileEditorProps) {
     }
     setSubmitting(true); setFeedback(null)
     try {
-      await conformRoadToTerrain(client, roadId, interval, offset)
+      const targetDatasetId = selectedDatasetId || selectedDatasetUuid || ''
+      await conformRoadToTerrain(client, roadId, interval, offset, targetDatasetId)
       if (useSelectionStore.getState().primaryId === `road:${roadId}`) {
         await getRoad(client, roadId)
         setKind('elevation')
@@ -131,6 +174,23 @@ export function RoadProfileEditor({ getEngineClient }: RoadProfileEditorProps) {
       <button type="button" role="tab" aria-selected={kind === 'width'} onClick={() => setKind('width')}>Width</button>
       <button type="button" className="button secondary" onClick={addRow} disabled={submitting || !matchingDetails}>Add breakpoint</button>
       <button type="button" className="button primary" onClick={() => void save()} disabled={submitting || !matchingDetails}>{submitting ? 'Saving…' : !matchingDetails ? 'Loading details…' : 'Save profile'}</button>
+      {datasets.length > 0 ? (
+        <label>
+          Terrain dataset{' '}
+          <select
+            aria-label="Terrain dataset"
+            value={selectedDatasetId || selectedDatasetUuid || ''}
+            onChange={(event) => setSelectedDatasetId(event.target.value)}
+          >
+            <option value="">Default dataset</option>
+            {datasets.map((dataset) => (
+              <option key={dataset.datasetUuid} value={dataset.datasetUuid}>
+                {dataset.displayName || dataset.datasetUuid.slice(0, 8)}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : null}
       <label>Terrain interval <input aria-label="Terrain conformance interval" type="number" min="0.01" step="1" value={terrainInterval} onChange={(event) => setTerrainInterval(event.target.value)} /></label>
       <label>Surface offset <input aria-label="Terrain conformance offset" type="number" step="0.1" value={terrainOffset} onChange={(event) => setTerrainOffset(event.target.value)} /></label>
       <button type="button" className="button secondary" onClick={() => void applyTerrainConformance()} disabled={submitting || !matchingDetails}>Conform to terrain</button>

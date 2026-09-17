@@ -81,6 +81,23 @@ describe('useViewportHost visibility', () => {
     rerender({ blocked: false })
     expect(mock.setViewportVisible).toHaveBeenLastCalledWith(true)
   })
+
+  it('reports viewport hidden on document hide and restores when unhidden', () => {
+    const mock = installDesktopBridge()
+    const hostRef = { current: null } as React.RefObject<HTMLDivElement | null>
+    renderHook(() => useViewportHost(hostRef, { blockedByOverlay: false }))
+    expect(mock.setViewportVisible).toHaveBeenLastCalledWith(true)
+
+    // Simulate document becoming hidden (e.g. window minimized or backgrounded)
+    Object.defineProperty(document, 'hidden', { configurable: true, value: true })
+    document.dispatchEvent(new Event('visibilitychange'))
+    expect(mock.setViewportVisible).toHaveBeenLastCalledWith(false)
+
+    // Restore document visibility
+    Object.defineProperty(document, 'hidden', { configurable: true, value: false })
+    document.dispatchEvent(new Event('visibilitychange'))
+    expect(mock.setViewportVisible).toHaveBeenLastCalledWith(true)
+  })
 })
 
 // Integration-style test: a host element with a real ref receives bounds.

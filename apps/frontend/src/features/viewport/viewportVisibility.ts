@@ -21,14 +21,15 @@ export function computeShowHomeScreen(
   return !projectOpen || activeWorkspace === 'home'
 }
 
-// A blocking overlay is active when a modal dialog is open OR when the
-// home screen is shown. The native child-HWND viewport cannot be occluded
-// by CSS z-index, so the page reports this centrally and the desktop shell
-// hides/restores the native viewport (with a placement refresh) through
-// its visibility policy.
+// A blocking overlay is active when a modal dialog is open, when the
+// home screen is shown, OR when an application menu dropdown is open.
+// The native child-HWND viewport cannot be occluded by CSS z-index, so
+// the page reports this centrally and the desktop shell hides/restores the
+// native viewport (with a placement refresh) through its visibility policy.
 export function computeBlockedByOverlay(
   openDialog: ShellDialog,
   showHomeScreen: boolean,
+  menuOpen: boolean = false,
 ): boolean {
-  return openDialog !== null || showHomeScreen
+  return openDialog !== null || showHomeScreen || menuOpen
 }

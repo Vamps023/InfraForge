@@ -68,6 +68,7 @@ export function App() {
   }, [roadToolMode, roadDraftPoints])
 
   const openDialog = useShellUiStore((state) => state.openDialog)
+  const menuOpen = useShellUiStore((state) => state.menuOpen)
   const closeDialog = useShellUiStore((state) => state.closeDialog)
 
   // Register builtin commands and the project-overview inspector section
@@ -202,7 +203,7 @@ export function App() {
   // before the renderer's `setViewportVisible(false)` IPC round-trip
   // lands, which would briefly show the native surface over the home
   // screen.
-  const blockingOverlayActive = computeBlockedByOverlay(openDialog, showHomeScreen)
+  const blockingOverlayActive = computeBlockedByOverlay(openDialog, showHomeScreen, menuOpen)
   useViewportHost(viewportHostRef, { blockedByOverlay: blockingOverlayActive })
 
   useEffect(() => {

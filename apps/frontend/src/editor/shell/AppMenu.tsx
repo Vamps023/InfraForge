@@ -9,6 +9,7 @@ import {
   type CommandContext,
   type CommandDefinition,
 } from '../commands/useCommands'
+import { useShellUiStore } from './shellUiStore'
 
 // Application menu. References registered commands by ID; execution goes
 // through the central executeCommand path so gating is consistent with
@@ -188,13 +189,14 @@ export function AppMenu({ context }: { context: CommandContext }) {
     }
   }, [openCategory])
 
-  // The Vulkan surface is a native child window and therefore cannot be
-  // covered by Chromium z-index. Hide it while a menu is open so dropdowns
-  // remain fully visible even when they extend into the viewport rectangle.
+  // Sync menu open state to the centralized shell UI store so the occlusion
+  // policy (useViewportHost) knows to hide the native child viewport while
+  // dropdowns are open, without bypassing the centralized visibility owner.
   useEffect(() => {
-    const desktop = window.infraforgeDesktop
-    if (!desktop?.setViewportVisible) return
-    desktop.setViewportVisible(openCategory === null && !document.hidden)
+    useShellUiStore.getState().setMenuOpen(openCategory !== null)
+    return () => {
+      useShellUiStore.getState().setMenuOpen(false)
+    }
   }, [openCategory])
 
   return (

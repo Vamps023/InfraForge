@@ -9,6 +9,7 @@ import {
   type CommandDefinition,
 } from '../commands/commandRegistry'
 import { registerBuiltinCommands, unregisterBuiltinCommands } from '../commands/builtinCommands'
+import { useShellUiStore } from './shellUiStore'
 import type { AvailabilityContext } from '../availability'
 
 function readyContext(): AvailabilityContext {
@@ -302,5 +303,30 @@ describe('Toolbar reactivity', () => {
     render(<Toolbar context={ctx(readyContext())} />)
     await userEvent.click(screen.getByText('TB Exec'))
     expect(execute).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('AppMenu shellUiStore menuOpen synchronization and teardown', () => {
+  it('syncs menuOpen state when opened, closed, and on teardown', async () => {
+    commandRegistry.register(makeCommand({ id: 'proj.new', category: 'File', label: 'New Project' }))
+    const { unmount } = render(<AppMenu context={ctx(readyContext())} />)
+
+    expect(useShellUiStore.getState().menuOpen).toBe(false)
+
+    // Open File menu
+    await userEvent.click(screen.getByText('File'))
+    expect(useShellUiStore.getState().menuOpen).toBe(true)
+
+    // Close menu by clicking outside or Escape
+    await userEvent.keyboard('{Escape}')
+    expect(useShellUiStore.getState().menuOpen).toBe(false)
+
+    // Open File menu again
+    await userEvent.click(screen.getByText('File'))
+    expect(useShellUiStore.getState().menuOpen).toBe(true)
+
+    // Teardown component while menu is open
+    unmount()
+    expect(useShellUiStore.getState().menuOpen).toBe(false)
   })
 })

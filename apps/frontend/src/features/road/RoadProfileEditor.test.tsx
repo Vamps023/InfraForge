@@ -3,9 +3,10 @@ import { cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { RoadProfileEditor } from './RoadProfileEditor'
 import { useRoadStore } from './roadStore'
+import { useTerrainStore } from '../terrain/terrainStore'
 import { useSelectionStore } from '../../editor/selection/selectionStore'
 import { create } from '@bufbuild/protobuf'
-import { RoadDetailsSchema, RoadSummarySchema } from '@infraforge/protocol'
+import { RoadDetailsSchema, RoadSummarySchema, TerrainDatasetInfoSchema } from '@infraforge/protocol'
 import * as roadApi from './roadApi'
 
 describe('RoadProfileEditor stale details protection & selection sync', () => {
@@ -65,6 +66,7 @@ describe('RoadProfileEditor stale details protection & selection sync', () => {
   beforeEach(() => {
     useRoadStore.getState().reset()
     useSelectionStore.getState().clear()
+    useTerrainStore.getState().reset()
     useRoadStore.getState().setRoads([roadA, roadB])
   })
 
@@ -171,7 +173,7 @@ describe('RoadProfileEditor stale details protection & selection sync', () => {
     expect(updateSpy).toHaveBeenCalledWith(expect.anything(), 'road-A', [0, 100], [3, 7], [4, 2])
   })
 
-  it('conforms the selected road to terrain with explicit sampling controls', async () => {
+  it('conforms the selected road to terrain with explicit sampling controls and default dataset', async () => {
     const conformSpy = vi.spyOn(roadApi, 'conformRoadToTerrain').mockResolvedValue(undefined as any)
     vi.spyOn(roadApi, 'getRoad').mockResolvedValue(undefined as any)
     useSelectionStore.getState().select(['road:road-A'])
@@ -186,6 +188,56 @@ describe('RoadProfileEditor stale details protection & selection sync', () => {
     await userEvent.type(offset, '0.2')
     await userEvent.click(screen.getByRole('button', { name: 'Conform to terrain' }))
 
-    expect(conformSpy).toHaveBeenCalledWith(expect.anything(), 'road-A', 5, 0.2)
+    expect(conformSpy).toHaveBeenCalledWith(expect.anything(), 'road-A', 5, 0.2, '')
+  })
+
+  it('inserts breakpoint at largest gap midpoint when profile already ends at road length', async () => {
+    const updateSpy = vi.spyOn(roadApi, 'updateRoadElevation').mockResolvedValue(undefined as any)
+    vi.spyOn(roadApi, 'getRoad').mockResolvedValue(undefined as any)
+    useSelectionStore.getState().select(['road:road-A'])
+    useRoadStore.getState().setDetails(detailsA) // detailsA has breakpoints at 0 and 100 (road length = 100)
+    render(<RoadProfileEditor getEngineClient={() => ({} as any)} />)
+
+    // Initially 2 rows: station 0 and 100
+    expect(screen.getByLabelText('Breakpoint 1 station')).toHaveValue(0)
+    expect(screen.getByLabelText('Breakpoint 2 station')).toHaveValue(100)
+
+    // Click "Add breakpoint" — should insert at midpoint of gap [0, 100], station 50
+    await userEvent.click(screen.getByRole('button', { name: 'Add breakpoint' }))
+
+    // Now 3 rows sorted by station: 0, 50, 100
+    expect(screen.getByLabelText('Breakpoint 1 station')).toHaveValue(0)
+    expect(screen.getByLabelText('Breakpoint 2 station')).toHaveValue(50)
+    expect(screen.getByLabelText('Breakpoint 3 station')).toHaveValue(100)
+
+    // Save profile should succeed without duplicate station or validation errors
+    await userEvent.click(screen.getByRole('button', { name: 'Save profile' }))
+    expect(updateSpy).toHaveBeenCalledWith(expect.anything(), 'road-A', [0, 50, 100], [10, 0, 15])
+  })
+
+  it('conforms to terrain using user-selected terrain dataset', async () => {
+    const conformSpy = vi.spyOn(roadApi, 'conformRoadToTerrain').mockResolvedValue(undefined as any)
+    vi.spyOn(roadApi, 'getRoad').mockResolvedValue(undefined as any)
+    useSelectionStore.getState().select(['road:road-A'])
+    useRoadStore.getState().setDetails(detailsA)
+
+    const dataset1 = create(TerrainDatasetInfoSchema, {
+      datasetUuid: 'dataset-uuid-1',
+      displayName: 'LIDAR Survey 2026',
+    })
+    const dataset2 = create(TerrainDatasetInfoSchema, {
+      datasetUuid: 'dataset-uuid-2',
+      displayName: 'Photogrammetry DEM',
+    })
+    useTerrainStore.getState().setDatasets([dataset1, dataset2])
+
+    render(<RoadProfileEditor getEngineClient={() => ({} as any)} />)
+
+    const selector = screen.getByLabelText('Terrain dataset')
+    expect(selector).toBeInTheDocument()
+    await userEvent.selectOptions(selector, 'dataset-uuid-2')
+
+    await userEvent.click(screen.getByRole('button', { name: 'Conform to terrain' }))
+    expect(conformSpy).toHaveBeenCalledWith(expect.anything(), 'road-A', 10, 0.1, 'dataset-uuid-2')
   })
 })

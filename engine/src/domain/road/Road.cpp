@@ -23,6 +23,30 @@ std::expected<Road, std::vector<RoadDiagnostic>> Road::build(BuildInput input) {
     if (auto d = input.width.validate()) {
         diagnostics.push_back(*d);
     }
+    if (!input.alignment.isEmpty()) {
+        const double totalLength = input.alignment.totalLength();
+        for (const auto& bp : input.elevation.breakpoints()) {
+            if (bp.station > totalLength + 1e-4) {
+                diagnostics.push_back({RoadErrorCode::InvalidProfile,
+                    "elevation breakpoint station (" + std::to_string(bp.station) +
+                    ") exceeds alignment length (" + std::to_string(totalLength) + ")"});
+            }
+        }
+        for (const auto& bp : input.superelevation.breakpoints()) {
+            if (bp.station > totalLength + 1e-4) {
+                diagnostics.push_back({RoadErrorCode::InvalidProfile,
+                    "superelevation breakpoint station (" + std::to_string(bp.station) +
+                    ") exceeds alignment length (" + std::to_string(totalLength) + ")"});
+            }
+        }
+        for (const auto& bp : input.width.breakpoints()) {
+            if (bp.station > totalLength + 1e-4) {
+                diagnostics.push_back({RoadErrorCode::InvalidProfile,
+                    "width breakpoint station (" + std::to_string(bp.station) +
+                    ") exceeds alignment length (" + std::to_string(totalLength) + ")"});
+            }
+        }
+    }
     if (input.id.isNull()) {
         diagnostics.push_back({RoadErrorCode::InvalidArgument, "road id must not be null"});
     }

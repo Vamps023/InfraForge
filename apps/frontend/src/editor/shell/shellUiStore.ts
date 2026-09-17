@@ -16,15 +16,19 @@ export type TerrainImportMode = 'local-file' | 'download-area'
 interface ShellUiState {
   openDialog: ShellDialog
   terrainImportMode: TerrainImportMode
+  menuOpen: boolean
   openDialogCommand: (dialog: ShellDialog) => void
   openTerrainImport: (mode: TerrainImportMode) => void
   closeDialog: () => void
+  setMenuOpen: (open: boolean) => void
 }
 
 export const useShellUiStore = create<ShellUiState>((set) => ({
   openDialog: null,
   terrainImportMode: 'local-file',
+  menuOpen: false,
   openDialogCommand: (openDialog) => set({ openDialog }),
   openTerrainImport: (terrainImportMode) => set({ openDialog: 'import-terrain', terrainImportMode }),
   closeDialog: () => set({ openDialog: null }),
+  setMenuOpen: (menuOpen) => set({ menuOpen }),
 }))

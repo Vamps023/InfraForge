@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { WorkspaceSwitcher } from './WorkspaceSwitcher'
 import { WorkspaceRail } from './WorkspaceRail'
-import { useWorkspaceStore, WORKSPACES } from './workspaceStore'
+import { useWorkspaceStore } from './workspaceStore'
+import { workspaceRegistry } from '../workspaces/workspaceRegistry'
 
 beforeEach(() => {
   useWorkspaceStore.getState().setWorkspace('terrain')
@@ -12,16 +14,27 @@ afterEach(() => {
   useWorkspaceStore.getState().setWorkspace('terrain')
 })
 
-describe('WorkspaceRail', () => {
-  it('renders all workspace buttons', () => {
-    render(<WorkspaceRail />)
-    for (const ws of WORKSPACES) {
+describe('WorkspaceSwitcher (and WorkspaceRail alias)', () => {
+  it('renders enabled production workspaces in release mode', () => {
+    render(<WorkspaceSwitcher />)
+    const visible = workspaceRegistry.getVisible()
+    for (const ws of visible) {
       expect(screen.getByLabelText(ws.label)).toBeInTheDocument()
     }
+    // Future unreleased workspaces should not be rendered
+    expect(screen.queryByLabelText('Rail')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Simulation')).not.toBeInTheDocument()
+  })
+
+  it('renders all workspaces when includeFeatureGated is true', () => {
+    render(<WorkspaceSwitcher includeFeatureGated />)
+    expect(screen.getByLabelText('Rail')).toBeInTheDocument()
+    expect(screen.getByLabelText('Simulation')).toBeInTheDocument()
+    expect(screen.getByLabelText('Rail')).toBeDisabled()
   })
 
   it('marks the active workspace with aria-current', () => {
-    render(<WorkspaceRail />)
+    render(<WorkspaceSwitcher />)
     const terrainBtn = screen.getByLabelText('Terrain')
     expect(terrainBtn).toHaveAttribute('aria-current', 'page')
     const homeBtn = screen.getByLabelText('Home')
@@ -29,37 +42,35 @@ describe('WorkspaceRail', () => {
   })
 
   it('switches workspace when clicking a functional workspace', async () => {
-    render(<WorkspaceRail />)
+    render(<WorkspaceSwitcher />)
     const homeBtn = screen.getByLabelText('Home')
     await userEvent.click(homeBtn)
     expect(useWorkspaceStore.getState().activeWorkspace).toBe('home')
   })
 
-  it('does not switch when clicking a disabled workspace', async () => {
-    render(<WorkspaceRail />)
-    const railBtn = screen.getByLabelText('Rail')
-    expect(railBtn).toBeDisabled()
-    await userEvent.click(railBtn)
-    expect(useWorkspaceStore.getState().activeWorkspace).toBe('terrain')
-  })
+  it('switches to World and Roads workspaces when clicked', async () => {
+    render(<WorkspaceSwitcher />)
+    const worldBtn = screen.getByLabelText('World')
+    await userEvent.click(worldBtn)
+    expect(useWorkspaceStore.getState().activeWorkspace).toBe('world')
 
-  it('switches to the roads workspace when clicked', async () => {
-    render(<WorkspaceRail />)
     const roadsBtn = screen.getByLabelText('Roads')
-    expect(roadsBtn).not.toBeDisabled()
     await userEvent.click(roadsBtn)
     expect(useWorkspaceStore.getState().activeWorkspace).toBe('roads')
   })
 
-  it('disabled workspaces have aria-disabled', () => {
-    render(<WorkspaceRail />)
+  it('does not switch when clicking a disabled workspace', async () => {
+    render(<WorkspaceSwitcher includeFeatureGated />)
     const railBtn = screen.getByLabelText('Rail')
+    expect(railBtn).toBeDisabled()
     expect(railBtn).toHaveAttribute('aria-disabled', 'true')
+    await userEvent.click(railBtn)
+    expect(useWorkspaceStore.getState().activeWorkspace).toBe('terrain')
   })
 
-  it('functional workspaces do not have aria-disabled', () => {
+  it('WorkspaceRail alias works identically', () => {
     render(<WorkspaceRail />)
-    const terrainBtn = screen.getByLabelText('Terrain')
-    expect(terrainBtn).not.toHaveAttribute('aria-disabled')
+    expect(screen.getByLabelText('Terrain')).toBeInTheDocument()
+    expect(screen.getByLabelText('Roads')).toBeInTheDocument()
   })
 })

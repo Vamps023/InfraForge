@@ -20,7 +20,8 @@ export function registerRoadInspectorSection(deps: RoadInspectorDeps): void {
   const section = {
     id: 'road',
     label: 'Road',
-    order: 60,
+    category: 'geometry' as const,
+    order: 0,
     applies: (context: InspectorSectionContext) => {
       const id = context.primaryId
       return id !== null && id.startsWith('road:')

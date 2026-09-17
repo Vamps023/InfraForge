@@ -69,12 +69,14 @@ describe('inspectorSectionRegistry', () => {
     ).toEqual(['zero', 'default'])
   })
 
-  it('returns an empty list for an unsupported selection', () => {
-    inspectorSectionRegistry.register(
-      makeSection('only-roads', { applies: (ctx) => ctx.selectedIds.length === 1 && ctx.selectedIds[0] === 'road:1' }),
-    )
+  it('orders sections by standard 8-tier category order', () => {
+    inspectorSectionRegistry.register(makeSection('diag', { category: 'diagnostics' }))
+    inspectorSectionRegistry.register(makeSection('geom', { category: 'geometry' }))
+    inspectorSectionRegistry.register(makeSection('ident', { category: 'identity' }))
+    inspectorSectionRegistry.register(makeSection('src', { category: 'source' }))
     expect(
-      inspectorSectionRegistry.resolve({ selectedIds: ['terrain:1'], primaryId: 'terrain:1' }),
-    ).toEqual([])
+      inspectorSectionRegistry.resolve({ selectedIds: [], primaryId: null }).map((s) => s.id),
+    ).toEqual(['ident', 'geom', 'src', 'diag'])
   })
 })
+

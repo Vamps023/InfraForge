@@ -26,6 +26,8 @@ export {
 import { deriveAvailability } from '../availability'
 import { useProjectStore } from '../../features/project/projectStore'
 import { useViewportStore } from '../../features/viewport/viewportStore'
+import { useToolStore } from '../tools/toolStore'
+import { useSelectionStore } from '../selection/selectionStore'
 import type { EngineSession, EngineSessionStatus } from '../../lib/engineSession'
 
 // Subscribes to the engine/project/viewport projections reactively (via
@@ -101,6 +103,23 @@ export function useCommandShortcuts(context: CommandContext): void {
       ) {
         return
       }
+
+      // Shared interaction invariant:
+      // First Esc cancels active preview/tool transaction if one exists.
+      // Second Esc clears selection when appropriate.
+      if (event.key === 'Escape' && !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) {
+        const cancelled = useToolStore.getState().cancelActiveTool()
+        if (cancelled) {
+          event.preventDefault()
+          return
+        }
+        if (useSelectionStore.getState().selectedIds.length > 0) {
+          useSelectionStore.getState().clear()
+          event.preventDefault()
+          return
+        }
+      }
+
       for (const command of commands) {
         const shortcut = command.shortcut
         if (!shortcut) {

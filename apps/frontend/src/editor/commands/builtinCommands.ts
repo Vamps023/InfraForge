@@ -144,14 +144,26 @@ export function registerBuiltinCommands(deps: BuiltinCommandDeps): void {
     },
     {
       id: 'panel.toggle-outliner',
-      label: 'Toggle Outliner',
-      description: 'Show or hide the outliner panel.',
+      label: 'Toggle Navigator',
+      description: 'Show or hide the navigator panel.',
       category: 'View',
       group: 'panels',
       surfaces: ['menu', 'palette'],
       execute: () => {
         const store = useLayoutStore.getState()
         store.setPanelVisible('left', !store.panels.left.visible)
+      },
+    },
+    {
+      id: 'panel.toggle-context-editor',
+      label: 'Toggle Context Editor',
+      description: 'Show or hide the secondary context editor dock.',
+      category: 'View',
+      group: 'panels',
+      surfaces: ['menu', 'palette'],
+      execute: () => {
+        const store = useLayoutStore.getState()
+        store.setPanelVisible('contextEditor', !store.panels.contextEditor.visible)
       },
     },
     {
@@ -205,6 +217,7 @@ export function unregisterBuiltinCommands(): void {
     'project.close',
     'project.georeference',
     'panel.toggle-outliner',
+    'panel.toggle-context-editor',
     'panel.toggle-inspector',
     'panel.toggle-bottom',
     'help.diagnostics',

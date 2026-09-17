@@ -2,14 +2,30 @@ import type { ReactNode } from 'react'
 import type { CanonicalId } from '../selection/selectionStore'
 
 // Inspector section registry. Inspector sections are supplied based on
-// selected canonical IDs/object projections. The shell does not hard-code
-// every future domain into one giant inspector component; domains register
-// sections and the inspector composes the ones that apply to the current
-// selection.
-//
-// The registry is observable: the Inspector subscribes via
-// useSyncExternalStore and re-renders when sections are registered or
-// unregistered after mount — no stale caches.
+// selected canonical IDs/object projections.
+// Standard order conforming to docs/06_UI_UX/DESIGN_SYSTEM.md and UX_SPEC.md:
+// Identity -> Geometry -> Semantics -> Appearance -> Connections -> Source/Provenance -> Export -> Diagnostics
+
+export type InspectorSectionCategory =
+  | 'identity'
+  | 'geometry'
+  | 'semantics'
+  | 'appearance'
+  | 'connections'
+  | 'source'
+  | 'export'
+  | 'diagnostics'
+
+export const SECTION_CATEGORY_ORDER: Record<InspectorSectionCategory, number> = {
+  identity: 10,
+  geometry: 20,
+  semantics: 30,
+  appearance: 40,
+  connections: 50,
+  source: 60,
+  export: 70,
+  diagnostics: 80,
+}
 
 export interface InspectorSectionContext {
   // All currently selected canonical IDs.
@@ -19,19 +35,23 @@ export interface InspectorSectionContext {
 }
 
 export interface InspectorSection {
-  // Unique section id, e.g. 'project-overview', 'road-properties'.
+  // Unique section id, e.g. 'project-overview', 'road-geometry'.
   id: string
   // Display label for the section header.
   label: string
-  // Optional ordering hint; lower renders first. Defaults to 100.
+  // Category mapping to the standard 8-tier inspector order.
+  category?: InspectorSectionCategory
+  // Optional ordering hint within the category; lower renders first. Defaults to 0.
   order?: number
   // Returns true when this section should render for the current selection.
-  // Sections that apply to no selection (e.g. project-level overview) return
-  // true when selectedIds is empty.
   applies: (context: InspectorSectionContext) => boolean
-  // Renders the section body. Receives the selection context so the body
-  // can read projections for the selected canonical IDs.
+  // Renders the section body. Receives the selection context.
   render: (context: InspectorSectionContext) => ReactNode
+}
+
+function resolveOrder(section: InspectorSection): number {
+  const baseOrder = section.category ? SECTION_CATEGORY_ORDER[section.category] : 100
+  return baseOrder + (section.order ?? 0)
 }
 
 const sections = new Map<string, InspectorSection>()
@@ -48,6 +68,7 @@ function notify(): void {
 export interface InspectorSectionRegistry {
   register: (section: InspectorSection) => void
   unregister: (id: string) => void
+  get: (id: string) => InspectorSection | undefined
   all: () => InspectorSection[]
   resolve: (context: InspectorSectionContext) => InspectorSection[]
   subscribe: (listener: () => void) => () => void
@@ -67,9 +88,12 @@ export const inspectorSectionRegistry: InspectorSectionRegistry = {
       notify()
     }
   },
+  get(id) {
+    return sections.get(id)
+  },
   all() {
     return Array.from(sections.values()).sort(
-      (a, b) => (a.order ?? 100) - (b.order ?? 100),
+      (a, b) => resolveOrder(a) - resolveOrder(b),
     )
   },
   resolve(context) {
@@ -84,7 +108,7 @@ export const inspectorSectionRegistry: InspectorSectionRegistry = {
   getSnapshot() {
     if (snapshot === null) {
       snapshot = Array.from(sections.values()).sort(
-        (a, b) => (a.order ?? 100) - (b.order ?? 100),
+        (a, b) => resolveOrder(a) - resolveOrder(b),
       )
     }
     return snapshot

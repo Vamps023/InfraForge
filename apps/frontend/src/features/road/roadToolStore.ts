@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { useToolStore } from '../../editor/tools/toolStore'
 
 export interface RoadDraftPoint { easting: number; northing: number }
 
@@ -22,11 +23,39 @@ const initial = { mode: 'idle' as const, name: '', positionTolerance: null,
 
 export const useRoadToolStore = create<RoadToolState>((set) => ({
   ...initial,
-  begin: (name, positionTolerance, maxCurvature) =>
-    set({ mode: 'drawing', name, positionTolerance, maxCurvature, points: [] }),
+  begin: (name, positionTolerance, maxCurvature) => {
+    useToolStore.getState().activateTool({
+      id: 'road.drawing',
+      workspaceId: 'roads',
+      statusHint: 'Click in viewport to place alignment control points. Finish or Cancel in toolbar.',
+      cancel: () => useRoadToolStore.getState().cancel(),
+    })
+    set({ mode: 'drawing', name, positionTolerance, maxCurvature, points: [] })
+  },
   append: (point) => set((state) => state.mode === 'drawing'
     ? { points: [...state.points, point] } : state),
-  beginMove: (editRoadId, controlIndex) => set({ ...initial, mode: 'move-control', editRoadId, controlIndex }),
-  beginInsert: (editRoadId, controlIndex) => set({ ...initial, mode: 'insert-control', editRoadId, controlIndex }),
-  cancel: () => set(initial),
+  beginMove: (editRoadId, controlIndex) => {
+    useToolStore.getState().activateTool({
+      id: 'road.move-control',
+      workspaceId: 'roads',
+      statusHint: 'Click in viewport to place selected control point.',
+      cancel: () => useRoadToolStore.getState().cancel(),
+    })
+    set({ ...initial, mode: 'move-control', editRoadId, controlIndex })
+  },
+  beginInsert: (editRoadId, controlIndex) => {
+    useToolStore.getState().activateTool({
+      id: 'road.insert-control',
+      workspaceId: 'roads',
+      statusHint: 'Click in viewport to insert new control point.',
+      cancel: () => useRoadToolStore.getState().cancel(),
+    })
+    set({ ...initial, mode: 'insert-control', editRoadId, controlIndex })
+  },
+  cancel: () => {
+    if (useToolStore.getState().activeToolId?.startsWith('road.')) {
+      useToolStore.getState().clearTool()
+    }
+    set(initial)
+  },
 }))

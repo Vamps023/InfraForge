@@ -78,6 +78,12 @@ struct RoadDetails {
     std::vector<ControlPoint> controlPoints;
     double positionTolerance{1.0};
     std::optional<double> maxCurvature;
+    struct ProfileBreakpoint {
+        double station{0.0};
+        double value{0.0};
+    };
+    std::vector<ProfileBreakpoint> elevationBreakpoints;
+    std::vector<ProfileBreakpoint> superelevationBreakpoints;
 };
 
 // One vertex of a road scene mesh, in render-local float coordinates.

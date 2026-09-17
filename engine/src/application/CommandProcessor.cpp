@@ -1636,6 +1636,16 @@ void fillRoadDetails(protocol::v1::RoadDetails* out, const RoadDetails& d) {
     out->set_revision(d.revision);
     out->set_position_tolerance(d.positionTolerance);
     if (d.maxCurvature.has_value()) out->set_max_curvature(*d.maxCurvature);
+    for (const auto& breakpoint : d.elevationBreakpoints) {
+        auto* projected = out->add_elevation_breakpoints();
+        projected->set_station(breakpoint.station);
+        projected->set_value(breakpoint.value);
+    }
+    for (const auto& breakpoint : d.superelevationBreakpoints) {
+        auto* projected = out->add_superelevation_breakpoints();
+        projected->set_station(breakpoint.station);
+        projected->set_value(breakpoint.value);
+    }
     for (const auto& control : d.controlPoints) {
         auto* projected = out->add_control_points();
         projected->set_easting(control.easting);

@@ -31,6 +31,14 @@ describe('RoadProfileEditor stale details protection & selection sync', () => {
     roadId: 'road-A',
     hasElevationProfile: true,
     elevationBreakpointCount: 4,
+    elevationBreakpoints: [
+      { station: 0, value: 10 },
+      { station: 100, value: 15 },
+    ],
+    superelevationBreakpoints: [
+      { station: 0, value: 0 },
+      { station: 100, value: 0.02 },
+    ],
     controlPoints: [
       { easting: 0, northing: 0, elevation: 10, protectedAnchor: false },
       { easting: 50, northing: 0, elevation: 12, protectedAnchor: false },
@@ -68,9 +76,9 @@ describe('RoadProfileEditor stale details protection & selection sync', () => {
     render(<RoadProfileEditor getEngineClient={() => null} />)
 
     expect(screen.getByText('Road Alpha')).toBeInTheDocument()
-    expect(screen.getByText('100.00 m')).toBeInTheDocument()
-    expect(screen.getByText('Authored')).toBeInTheDocument()
-    expect(screen.getByText('4')).toBeInTheDocument()
+    expect(screen.getByText('100.00 project units')).toBeInTheDocument()
+    expect(screen.getByDisplayValue('10')).toBeInTheDocument()
+    expect(screen.getByDisplayValue('15')).toBeInTheDocument()
   })
 
   it('protects against using Road A details when Road B is selected', async () => {
@@ -91,32 +99,59 @@ describe('RoadProfileEditor stale details protection & selection sync', () => {
 
     // Road B name should be shown, but details should show loading/stale protection
     expect(screen.getByText('Road Beta')).toBeInTheDocument()
-    expect(screen.getByText('Loading…')).toBeInTheDocument()
+    expect(screen.getByText('Loading canonical road profile…')).toBeInTheDocument()
 
     // Apply button must be disabled while details do not match selected road
-    const applyButton = screen.getByRole('button', { name: /Loading details…/ })
-    expect(applyButton).toBeDisabled()
+    const saveButton = screen.getByRole('button', { name: /Loading details…/ })
+    expect(saveButton).toBeDisabled()
 
     // Even if somehow clicked, updateRoadElevation must not be invoked
-    await userEvent.click(applyButton)
+    await userEvent.click(saveButton)
     expect(updateRoadElevationSpy).not.toHaveBeenCalled()
 
     // 3. Hydrate Road B details
     useRoadStore.getState().setDetails(detailsB)
     rerender(<RoadProfileEditor getEngineClient={() => ({} as any)} />)
 
-    expect(screen.getByText('Default flat')).toBeInTheDocument()
-    const activeApplyBtn = screen.getByRole('button', { name: 'Apply to Alignment' })
-    expect(activeApplyBtn).not.toBeDisabled()
+    expect(screen.getByText(/No authored breakpoints/)).toBeInTheDocument()
+    const activeSaveButton = screen.getByRole('button', { name: 'Save profile' })
+    expect(activeSaveButton).not.toBeDisabled()
 
     // 4. Click Apply — must target Road B with Road B's 4 control points
-    await userEvent.click(activeApplyBtn)
+    await userEvent.click(activeSaveButton)
     expect(updateRoadElevationSpy).toHaveBeenCalledTimes(1)
     expect(updateRoadElevationSpy).toHaveBeenCalledWith(
       expect.anything(),
       'road-B',
-      expect.arrayContaining([0, 250]), // stations across road B length
-      expect.arrayContaining([0, 0, 0, 0]), // 4 elevation points matching detailsB.controlPoints.length
+      [],
+      [],
     )
+  })
+
+  it('edits and saves exact canonical elevation breakpoints', async () => {
+    const updateSpy = vi.spyOn(roadApi, 'updateRoadElevation').mockResolvedValue(undefined as any)
+    vi.spyOn(roadApi, 'getRoad').mockResolvedValue(undefined as any)
+    useSelectionStore.getState().select(['road:road-A'])
+    useRoadStore.getState().setDetails(detailsA)
+    render(<RoadProfileEditor getEngineClient={() => ({} as any)} />)
+
+    const firstValue = screen.getByLabelText('Breakpoint 1 value')
+    await userEvent.clear(firstValue)
+    await userEvent.type(firstValue, '12.5')
+    await userEvent.click(screen.getByRole('button', { name: 'Save profile' }))
+
+    expect(updateSpy).toHaveBeenCalledWith(expect.anything(), 'road-A', [0, 100], [12.5, 15])
+  })
+
+  it('switches to and saves superelevation breakpoints', async () => {
+    const updateSpy = vi.spyOn(roadApi, 'updateRoadSuperelevation').mockResolvedValue(undefined as any)
+    vi.spyOn(roadApi, 'getRoad').mockResolvedValue(undefined as any)
+    useSelectionStore.getState().select(['road:road-A'])
+    useRoadStore.getState().setDetails(detailsA)
+    render(<RoadProfileEditor getEngineClient={() => ({} as any)} />)
+
+    await userEvent.click(screen.getByRole('tab', { name: 'Superelevation' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Save profile' }))
+    expect(updateSpy).toHaveBeenCalledWith(expect.anything(), 'road-A', [0, 100], [0, 0.02])
   })
 })

@@ -358,6 +358,11 @@ TEST_CASE_FIXTURE(RoadServiceTestFixture, "update elevation profile") {
     REQUIRE(details.has_value());
     CHECK(details->hasElevationProfile);
     CHECK(details->elevationBreakpointCount == 3);
+    REQUIRE(details->elevationBreakpoints.size() == 3);
+    CHECK(details->elevationBreakpoints[0].station == doctest::Approx(0.0));
+    CHECK(details->elevationBreakpoints[1].value == doctest::Approx(5.0));
+    CHECK(details->elevationBreakpoints[2].station == doctest::Approx(100.0));
+    CHECK(details->elevationBreakpoints[2].value == doctest::Approx(10.0));
 }
 
 TEST_CASE_FIXTURE(RoadServiceTestFixture, "update superelevation profile") {
@@ -377,6 +382,10 @@ TEST_CASE_FIXTURE(RoadServiceTestFixture, "update superelevation profile") {
     REQUIRE(details.has_value());
     CHECK(details->hasSuperelevationProfile);
     CHECK(details->superelevationBreakpointCount == 3);
+    REQUIRE(details->superelevationBreakpoints.size() == 3);
+    CHECK(details->superelevationBreakpoints[0].station == doctest::Approx(0.0));
+    CHECK(details->superelevationBreakpoints[1].value == doctest::Approx(0.02));
+    CHECK(details->superelevationBreakpoints[2].station == doctest::Approx(100.0));
 }
 
 TEST_CASE_FIXTURE(RoadServiceTestFixture, "save and reopen preserves road") {

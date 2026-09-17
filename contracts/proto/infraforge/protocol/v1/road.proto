@@ -35,6 +35,13 @@ message RoadAlignmentSegmentInfo {
   double end_curvature = 5;
 }
 
+// Exact canonical breakpoint projected for profile inspection and editing.
+// Value is project height for elevation and radians for superelevation.
+message RoadProfileBreakpoint {
+  double station = 1;
+  double value = 2;
+}
+
 // Detailed road projection for the inspector.
 message RoadDetails {
   string road_id = 1;
@@ -56,6 +63,8 @@ message RoadDetails {
   repeated RoadControlPoint control_points = 17;
   double position_tolerance = 18;
   optional double max_curvature = 19;
+  repeated RoadProfileBreakpoint elevation_breakpoints = 20;
+  repeated RoadProfileBreakpoint superelevation_breakpoints = 21;
 }
 
 // Editable fitting control projected for the inspector. This is not the

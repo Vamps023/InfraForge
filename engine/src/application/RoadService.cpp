@@ -1142,6 +1142,14 @@ RoadDetails RoadService::toDetails(const RoadRecord& road) const {
     d.revision = store_.current().revision;
     d.positionTolerance = road.positionTolerance;
     d.maxCurvature = road.maxCurvature;
+    d.elevationBreakpoints.reserve(road.elevationBreakpoints.size());
+    for (const auto& breakpoint : road.elevationBreakpoints) {
+        d.elevationBreakpoints.push_back({breakpoint.station, breakpoint.value});
+    }
+    d.superelevationBreakpoints.reserve(road.superelevationBreakpoints.size());
+    for (const auto& breakpoint : road.superelevationBreakpoints) {
+        d.superelevationBreakpoints.push_back({breakpoint.station, breakpoint.value});
+    }
     d.controlPoints.reserve(road.controlVertices.size());
     for (std::size_t i = 0; i < road.controlVertices.size(); ++i) {
         const auto& vertex = road.controlVertices[i];

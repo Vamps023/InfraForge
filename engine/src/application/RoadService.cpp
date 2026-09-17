@@ -438,7 +438,7 @@ RoadSummary RoadService::fitSource(const FitSourceInput& input) {
 
     auto before = *found;
     const double positionTolerance = input.positionTolerance.value_or(before.positionTolerance);
-    const auto maxCurvature = input.positionTolerance.has_value() || input.replaceMaxCurvature
+    const auto maxCurvature = input.replaceMaxCurvature
         ? input.maxCurvature : before.maxCurvature;
     auto record = refitRoad(before, positionTolerance, maxCurvature);
     record = store_.updateRoad(record);
@@ -624,14 +624,14 @@ RoadSummary RoadService::updateSuperelevation(const UpdateSuperelevationInput& i
     return toSummary(record);
 }
 
-bool RoadService::undo(const std::string& roadId) {
+RoadHistoryResult RoadService::undo(const std::string& roadId) {
     // Blocker 10: global chronological undo. An empty road ID means undo the
     // most recent road command across ALL roads, determined by sequence
     // number — NOT by per-road stack depth or unordered_map iteration order.
     // A non-empty road ID undoes the most recent command for that specific
     // road, still using the global chronological history.
     auto undoIdx = findLastUndo(roadId);
-    if (!undoIdx.has_value()) return false;
+    if (!undoIdx.has_value()) return {};
 
     auto entry = std::move(undoHistory_[*undoIdx]);
     undoHistory_.erase(undoHistory_.begin() + *undoIdx);
@@ -691,13 +691,14 @@ bool RoadService::undo(const std::string& roadId) {
             store_.current().revision, affectedChunks});
     }
 
-    return true;
+    auto summary = getRoadSummary(effectiveRoadId);
+    return RoadHistoryResult{effectiveRoadId, summary, summary.has_value()};
 }
 
-bool RoadService::redo(const std::string& roadId) {
+RoadHistoryResult RoadService::redo(const std::string& roadId) {
     // Blocker 10: global chronological redo, mirroring the undo contract.
     auto redoIdx = findLastRedo(roadId);
-    if (!redoIdx.has_value()) return false;
+    if (!redoIdx.has_value()) return {};
 
     auto entry = std::move(redoHistory_[*redoIdx]);
     redoHistory_.erase(redoHistory_.begin() + *redoIdx);
@@ -757,7 +758,8 @@ bool RoadService::redo(const std::string& roadId) {
             store_.current().revision, affectedChunks});
     }
 
-    return true;
+    auto summary = getRoadSummary(effectiveRoadId);
+    return RoadHistoryResult{effectiveRoadId, summary, summary.has_value()};
 }
 
 bool RoadService::canUndo(const std::string& roadId) const {

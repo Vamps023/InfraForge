@@ -138,6 +138,11 @@ message FitRoadSourceCommand {
   // Present only when the user explicitly changes the fitting settings.
   optional double position_tolerance = 2;
   optional double max_curvature = 3;
+  // Explicitly replaces the persisted max-curvature constraint with no
+  // constraint. Omission preserves the existing constraint. This is kept
+  // distinct from optional-field presence so all three operations are
+  // representable: preserve, replace, and clear.
+  bool clear_max_curvature = 4;
 }
 
 // Update the elevation profile of a road.
@@ -213,10 +218,14 @@ message UpdateRoadSuperelevationResult {
 
 message UndoRoadResult {
   RoadSummary road = 1;
+  string road_id = 2;
+  bool exists_after_operation = 3;
 }
 
 message RedoRoadResult {
   RoadSummary road = 1;
+  string road_id = 2;
+  bool exists_after_operation = 3;
 }
 
 message ListRoadsResult {
@@ -225,6 +234,8 @@ message ListRoadsResult {
 
 message GetRoadResult {
   RoadDetails road = 1;
+  // Canonical outliner/list projection for the same record as road.
+  RoadSummary summary = 2;
 }
 
 // ---- Road Scene Projection (for viewport rendering) ----

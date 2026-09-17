@@ -151,6 +151,48 @@ TEST_CASE_FIXTURE(RoadServiceTestFixture, "explicit refit settings replace persi
     CHECK(*found->maxCurvature == doctest::Approx(0.02));
 }
 
+TEST_CASE_FIXTURE(RoadServiceTestFixture, "refit changes tolerance without clearing max curvature") {
+    CreateRoadInput input;
+    input.name = "Independent fitting constraints";
+    input.sourcePoints = makeStraightPolyline(0.0, 0.0, 0.0, 100.0, 10);
+    input.positionTolerance = 1.0;
+    input.maxCurvature = 0.05;
+    const auto created = roadService->createRoad(input);
+
+    (void)roadService->fitSource(FitSourceInput{
+        .roadId = created.roadId, .positionTolerance = 2.0});
+
+    const auto details = roadService->getRoad(created.roadId);
+    REQUIRE(details.has_value());
+    CHECK(details->positionTolerance == doctest::Approx(2.0));
+    REQUIRE(details->maxCurvature.has_value());
+    CHECK(*details->maxCurvature == doctest::Approx(0.05));
+}
+
+TEST_CASE_FIXTURE(RoadServiceTestFixture, "refit can replace or explicitly clear max curvature independently") {
+    CreateRoadInput input;
+    input.name = "Independent curvature operations";
+    input.sourcePoints = makeStraightPolyline(0.0, 0.0, 0.0, 100.0, 10);
+    input.positionTolerance = 1.0;
+    input.maxCurvature = 0.05;
+    const auto created = roadService->createRoad(input);
+
+    (void)roadService->fitSource(FitSourceInput{
+        .roadId = created.roadId, .maxCurvature = 0.02, .replaceMaxCurvature = true});
+    auto details = roadService->getRoad(created.roadId);
+    REQUIRE(details.has_value());
+    CHECK(details->positionTolerance == doctest::Approx(1.0));
+    REQUIRE(details->maxCurvature.has_value());
+    CHECK(*details->maxCurvature == doctest::Approx(0.02));
+
+    (void)roadService->fitSource(FitSourceInput{
+        .roadId = created.roadId, .replaceMaxCurvature = true});
+    details = roadService->getRoad(created.roadId);
+    REQUIRE(details.has_value());
+    CHECK(details->positionTolerance == doctest::Approx(1.0));
+    CHECK_FALSE(details->maxCurvature.has_value());
+}
+
 TEST_CASE_FIXTURE(RoadServiceTestFixture, "get road returns details") {
     CreateRoadInput input;
     input.name = "Detail Road";

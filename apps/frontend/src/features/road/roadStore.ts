@@ -18,6 +18,7 @@ interface RoadState {
   setRoads(roads: RoadSummary[]): void
   selectRoad(roadId: string | null): void
   setDetails(details: RoadDetails | null): void
+  applyRoadProjection(details: RoadDetails, summary: RoadSummary): void
   upsertRoad(road: RoadSummary): void
   removeRoad(roadId: string): void
   setLastError(error: string | null): void
@@ -40,6 +41,23 @@ export const useRoadStore = create<RoadState>((set) => ({
     })),
   selectRoad: (roadId) => set({ selectedRoadId: roadId }),
   setDetails: (details) => set({ details }),
+  applyRoadProjection: (details, summary) =>
+    set((state) => {
+      const currentSummary = state.roads.find((road) => road.roadId === summary.roadId)
+      const currentDetails = state.details?.roadId === details.roadId ? state.details : null
+      if ((currentSummary && currentSummary.revision > summary.revision) ||
+          (currentDetails && currentDetails.revision > details.revision)) {
+        return {}
+      }
+      const index = state.roads.findIndex((road) => road.roadId === summary.roadId)
+      const roads = index === -1
+        ? [...state.roads, summary]
+        : state.roads.map((road, i) => (i === index ? summary : road))
+      return {
+        roads,
+        details: state.selectedRoadId === details.roadId || currentDetails ? details : state.details,
+      }
+    }),
   upsertRoad: (road) =>
     set((state) => {
       const index = state.roads.findIndex((r) => r.roadId === road.roadId)

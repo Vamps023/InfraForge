@@ -384,7 +384,10 @@ TEST_CASE_FIXTURE(RoadAcceptanceFixture, "Global undo with empty road ID") {
     auto summaryB = roadService->createRoad(input);
 
     // Global undo should undo the last command (create Road B).
-    REQUIRE(roadService->undo(""));
+    const auto undo = roadService->undo("");
+    REQUIRE(undo);
+    CHECK(undo.roadId == summaryB.roadId);
+    CHECK_FALSE(undo.existsAfterOperation);
 
     // Road B should be removed.
     auto roads = roadService->listRoads();

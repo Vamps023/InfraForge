@@ -148,6 +148,14 @@ struct FitSourceInput {
     bool replaceMaxCurvature{false};
 };
 
+struct RoadHistoryResult {
+    std::string roadId;
+    std::optional<RoadSummary> road;
+    bool existsAfterOperation{false};
+
+    explicit operator bool() const { return !roadId.empty(); }
+};
+
 // Input for updating the elevation profile.
 struct UpdateElevationInput {
     std::string roadId;
@@ -189,8 +197,8 @@ public:
 
     // ---- Undo/Redo ----
 
-    [[nodiscard]] bool undo(const std::string& roadId);
-    [[nodiscard]] bool redo(const std::string& roadId);
+    [[nodiscard]] RoadHistoryResult undo(const std::string& roadId);
+    [[nodiscard]] RoadHistoryResult redo(const std::string& roadId);
     [[nodiscard]] bool canUndo(const std::string& roadId) const;
     [[nodiscard]] bool canRedo(const std::string& roadId) const;
 

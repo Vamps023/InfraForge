@@ -173,14 +173,29 @@ export async function deleteRoadControl(
   })
 }
 
+export type MaxCurvatureChange =
+  | { kind: 'preserve' }
+  | { kind: 'replace'; value: number }
+  | { kind: 'clear' }
+
+export interface FitRoadSourceOptions {
+  positionTolerance?: number
+  maxCurvature?: MaxCurvatureChange
+}
+
 export async function fitRoadSource(
   client: EngineClient,
   roadId: string,
-  positionTolerance?: number,
-  maxCurvature?: number,
+  options: FitRoadSourceOptions = {},
 ): Promise<RoadSummary> {
   return withRoadError(async () => {
-    const command = create(FitRoadSourceCommandSchema, { roadId, positionTolerance, maxCurvature })
+    const maxCurvature = options.maxCurvature ?? { kind: 'preserve' as const }
+    const command = create(FitRoadSourceCommandSchema, {
+      roadId,
+      positionTolerance: options.positionTolerance,
+      maxCurvature: maxCurvature.kind === 'replace' ? maxCurvature.value : undefined,
+      clearMaxCurvature: maxCurvature.kind === 'clear',
+    })
     const outcome = await sendRoadCommand(client, { case: 'fitRoadSource', value: command })
     if (outcome.case !== 'fitRoadSourceResult' || !outcome.value.road) {
       throw expectFailure(outcome)
@@ -244,7 +259,10 @@ export async function getRoad(client: EngineClient, roadId: string): Promise<Roa
   if (outcome.case !== 'getRoadResult' || !outcome.value.road) {
     throw expectFailure(outcome)
   }
-  useRoadStore.getState().setDetails(outcome.value.road)
+  if (!outcome.value.summary) {
+    throw new ProjectCommandFailure(CommandErrorCode.INTERNAL, 'Engine returned road details without a summary projection')
+  }
+  useRoadStore.getState().applyRoadProjection(outcome.value.road, outcome.value.summary)
   return outcome.value.road
 }
 
@@ -279,6 +297,9 @@ export async function undoRoadEdit(
       useRoadStore.getState().upsertRoad(outcome.value.road)
       return outcome.value.road
     }
+    if (outcome.value.roadId && !outcome.value.existsAfterOperation) {
+      useRoadStore.getState().removeRoad(outcome.value.roadId)
+    }
     return null
   })
 }
@@ -296,6 +317,9 @@ export async function redoRoadEdit(
     if (outcome.value.road) {
       useRoadStore.getState().upsertRoad(outcome.value.road)
       return outcome.value.road
+    }
+    if (outcome.value.roadId && !outcome.value.existsAfterOperation) {
+      useRoadStore.getState().removeRoad(outcome.value.roadId)
     }
     return null
   })

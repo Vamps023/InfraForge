@@ -1702,6 +1702,13 @@ void CommandProcessor::handleFitRoadSource(const std::string& connectionId, cons
         input.maxCurvature = command.max_curvature();
         input.replaceMaxCurvature = true;
     }
+    if (command.clear_max_curvature()) {
+        if (input.replaceMaxCurvature) {
+            throw CommandFailure{CommandFailureCode::InvalidArgument,
+                "max curvature cannot be replaced and cleared together"};
+        }
+        input.replaceMaxCurvature = true;
+    }
     auto summary = roadService_->fitSource(input);
 
     ProtocolFrame response;
@@ -1756,47 +1763,38 @@ void CommandProcessor::handleUpdateRoadSuperelevation(const std::string& connect
 
 void CommandProcessor::handleUndoRoad(const std::string& connectionId, const ProtocolFrame& frame) {
     const auto& command = frame.command().undo_road();
-    if (!roadService_->undo(command.road_id())) {
+    const auto history = roadService_->undo(command.road_id());
+    if (!history) {
         throw CommandFailure{CommandFailureCode::InvalidArgument,
             "nothing to undo for road: " + command.road_id()};
     }
 
     ProtocolFrame response;
     response.set_request_id(frame.request_id());
-    // Blocker 14: return a meaningful optional summary when the road still
-    // exists after undo, rather than always returning an empty result.
     auto* result = response.mutable_result()->mutable_undo_road_result();
-    std::string effectiveId = command.road_id();
-    // If the roadId was empty (global undo), the service resolved it
-    // internally; we cannot easily recover the resolved id here, so we
-    // leave the summary unset for the global-undo case.
-    if (!effectiveId.empty()) {
-        auto summary = roadService_->getRoadSummary(effectiveId);
-        if (summary.has_value()) {
-            fillRoadSummary(result->mutable_road(), *summary);
-        }
+    result->set_road_id(history.roadId);
+    result->set_exists_after_operation(history.existsAfterOperation);
+    if (history.road.has_value()) {
+        fillRoadSummary(result->mutable_road(), *history.road);
     }
     sink_.sendToConnection(connectionId, response);
 }
 
 void CommandProcessor::handleRedoRoad(const std::string& connectionId, const ProtocolFrame& frame) {
     const auto& command = frame.command().redo_road();
-    if (!roadService_->redo(command.road_id())) {
+    const auto history = roadService_->redo(command.road_id());
+    if (!history) {
         throw CommandFailure{CommandFailureCode::InvalidArgument,
             "nothing to redo for road: " + command.road_id()};
     }
 
     ProtocolFrame response;
     response.set_request_id(frame.request_id());
-    // Blocker 14: return a meaningful optional summary when the road still
-    // exists after redo.
     auto* result = response.mutable_result()->mutable_redo_road_result();
-    std::string effectiveId = command.road_id();
-    if (!effectiveId.empty()) {
-        auto summary = roadService_->getRoadSummary(effectiveId);
-        if (summary.has_value()) {
-            fillRoadSummary(result->mutable_road(), *summary);
-        }
+    result->set_road_id(history.roadId);
+    result->set_exists_after_operation(history.existsAfterOperation);
+    if (history.road.has_value()) {
+        fillRoadSummary(result->mutable_road(), *history.road);
     }
     sink_.sendToConnection(connectionId, response);
 }
@@ -1823,7 +1821,14 @@ void CommandProcessor::handleGetRoad(const std::string& connectionId, const Prot
 
     ProtocolFrame response;
     response.set_request_id(frame.request_id());
-    fillRoadDetails(response.mutable_result()->mutable_get_road_result()->mutable_road(), *details);
+    auto* result = response.mutable_result()->mutable_get_road_result();
+    fillRoadDetails(result->mutable_road(), *details);
+    const auto summary = roadService_->getRoadSummary(command.road_id());
+    if (!summary.has_value()) {
+        throw CommandFailure{CommandFailureCode::NotFound,
+            "road disappeared while constructing projection: " + command.road_id()};
+    }
+    fillRoadSummary(result->mutable_summary(), *summary);
     sink_.sendToConnection(connectionId, response);
 }
 

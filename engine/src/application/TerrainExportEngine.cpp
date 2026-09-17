@@ -185,10 +185,14 @@ TerrainExportOutput TerrainExportEngine::executeExport(
                         fElevations[i] = static_cast<float>(elevations[i]);
                     }
                     GDALRasterBand* b = outDs->GetRasterBand(1);
-                    b->RasterIO(GF_Write, 0, 0, outWidth, outHeight, fElevations.data(), outWidth, outHeight, GDT_Float32, 0, 0);
-                    if (hasNodata) b->SetNoDataValue(nodataVal);
+                    if (b) {
+                        const CPLErr writeErr = b->RasterIO(GF_Write, 0, 0, outWidth, outHeight, fElevations.data(), outWidth, outHeight, GDT_Float32, 0, 0);
+                        if (writeErr == CE_None) {
+                            if (hasNodata) b->SetNoDataValue(nodataVal);
+                            output.exportedFiles.push_back(filePath);
+                        }
+                    }
                     GDALClose(outDs);
-                    output.exportedFiles.push_back(filePath);
                 }
             }
             break;
@@ -206,10 +210,14 @@ TerrainExportOutput TerrainExportEngine::executeExport(
                         iElevations[i] = static_cast<std::int16_t>(std::round(elevations[i]));
                     }
                     GDALRasterBand* b = outDs->GetRasterBand(1);
-                    b->RasterIO(GF_Write, 0, 0, outWidth, outHeight, iElevations.data(), outWidth, outHeight, GDT_Int16, 0, 0);
-                    if (hasNodata) b->SetNoDataValue(static_cast<std::int16_t>(nodataVal));
+                    if (b) {
+                        const CPLErr writeErr = b->RasterIO(GF_Write, 0, 0, outWidth, outHeight, iElevations.data(), outWidth, outHeight, GDT_Int16, 0, 0);
+                        if (writeErr == CE_None) {
+                            if (hasNodata) b->SetNoDataValue(static_cast<std::int16_t>(nodataVal));
+                            output.exportedFiles.push_back(filePath);
+                        }
+                    }
                     GDALClose(outDs);
-                    output.exportedFiles.push_back(filePath);
                 }
             }
             break;
@@ -228,9 +236,13 @@ TerrainExportOutput TerrainExportEngine::executeExport(
                         uElevations[i] = static_cast<std::uint16_t>(std::round(norm * 65535.0));
                     }
                     GDALRasterBand* b = outDs->GetRasterBand(1);
-                    b->RasterIO(GF_Write, 0, 0, outWidth, outHeight, uElevations.data(), outWidth, outHeight, GDT_UInt16, 0, 0);
+                    if (b) {
+                        const CPLErr writeErr = b->RasterIO(GF_Write, 0, 0, outWidth, outHeight, uElevations.data(), outWidth, outHeight, GDT_UInt16, 0, 0);
+                        if (writeErr == CE_None) {
+                            output.exportedFiles.push_back(filePath);
+                        }
+                    }
                     GDALClose(outDs);
-                    output.exportedFiles.push_back(filePath);
                 }
             }
             break;

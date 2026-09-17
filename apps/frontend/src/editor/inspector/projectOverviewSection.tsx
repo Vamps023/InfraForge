@@ -12,7 +12,8 @@ export function registerProjectOverviewSection(): void {
   inspectorSectionRegistry.register({
     id: 'project-overview',
     label: 'Project',
-    order: 10,
+    category: 'identity',
+    order: 0,
     applies: (context) => isProjectOverviewContext(context),
     render: () => <ProjectOverviewBody />,
   })

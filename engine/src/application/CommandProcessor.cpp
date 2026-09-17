@@ -173,6 +173,8 @@ std::string_view commandName(const ProtocolFrame& frame) {
         return "terrain.plan_download";
     case protocol::v1::CommandEnvelope::kTerrainDownloadSelected:
         return "terrain.download_selected";
+    case protocol::v1::CommandEnvelope::kTerrainExport:
+        return "terrain.export";
     case protocol::v1::CommandEnvelope::kJobCancel:
         return "job.cancel";
     case protocol::v1::CommandEnvelope::kJobList:

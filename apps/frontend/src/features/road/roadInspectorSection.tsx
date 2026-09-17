@@ -1,7 +1,6 @@
 import { inspectorSectionRegistry, type InspectorSectionContext } from '../../editor/inspector/inspectorRegistry'
 import { useRoadStore } from './roadStore'
-import { getRoad } from './roadApi'
-import { deleteRoadControl } from './roadApi'
+import { getRoad, deleteRoadControl, moveRoadControl, insertRoadControl } from './roadApi'
 import { useRoadToolStore } from './roadToolStore'
 import type { EngineClient } from '../../lib/engineSession'
 
@@ -20,7 +19,8 @@ export function registerRoadInspectorSection(deps: RoadInspectorDeps): void {
   const section = {
     id: 'road',
     label: 'Road',
-    order: 60,
+    category: 'geometry' as const,
+    order: 0,
     applies: (context: InspectorSectionContext) => {
       const id = context.primaryId
       return id !== null && id.startsWith('road:')
@@ -36,9 +36,6 @@ export function registerRoadInspectorSection(deps: RoadInspectorDeps): void {
       const details = useRoadStore.getState().details
 
       const client = deps.getEngineClient()
-      if (client && (!details || details.roadId !== roadId)) {
-        void getRoad(client, roadId).catch(() => undefined)
-      }
 
       if (!road) {
         return null
@@ -71,11 +68,9 @@ export function registerRoadInspectorSection(deps: RoadInspectorDeps): void {
             ) : null}
             <dt>Revision</dt>
             <dd>{road.revision.toString()}</dd>
-            {details ? (
+            {details && details.roadId === roadId && details.controlPoints.length > 0 ? (
               <>
-                <dt>Fitting tolerance</dt>
-                <dd>{details.positionTolerance}</dd>
-                <dt>Editable controls</dt>
+                <dt>Control Points ({details.controlPoints.length})</dt>
                 <dd>
                   <ol className="road-controls">
                     {details.controlPoints.map((control, index) => (
@@ -86,7 +81,11 @@ export function registerRoadInspectorSection(deps: RoadInspectorDeps): void {
                         {control.protectedAnchor ? <strong> Protected</strong> : (
                           <>
                             <button type="button" onClick={() =>
-                              useRoadToolStore.getState().beginMove(roadId, index)}>Move in viewport</button>
+                              useRoadToolStore.getState().beginMove(roadId, index, async (easting, northing) => {
+                                if (!client) return
+                                await moveRoadControl(client, roadId, index, easting, northing)
+                                await getRoad(client, roadId)
+                              })}>Move in viewport</button>
                             <button type="button" onClick={() => {
                               if (!client) return
                               void deleteRoadControl(client, roadId, index)
@@ -95,7 +94,11 @@ export function registerRoadInspectorSection(deps: RoadInspectorDeps): void {
                           </>
                         )}
                         <button type="button" onClick={() =>
-                          useRoadToolStore.getState().beginInsert(roadId, index + 1)}>Insert after</button>
+                          useRoadToolStore.getState().beginInsert(roadId, index + 1, async (easting, northing) => {
+                            if (!client) return
+                            await insertRoadControl(client, roadId, index + 1, easting, northing)
+                            await getRoad(client, roadId)
+                          })}>Insert after</button>
                       </li>
                     ))}
                   </ol>

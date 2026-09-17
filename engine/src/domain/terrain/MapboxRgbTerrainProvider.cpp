@@ -6,6 +6,7 @@
 #include <png.h>
 
 #include <cmath>
+#include <cstring>
 #include <fstream>
 #include <sstream>
 

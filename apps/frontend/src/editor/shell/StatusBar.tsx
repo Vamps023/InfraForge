@@ -1,6 +1,7 @@
 import type { EngineSessionStatus } from '../../lib/engineSession'
 import { useProjectStore } from '../../features/project/projectStore'
 import { useViewportStore } from '../../features/viewport/viewportStore'
+import { useToolStore } from '../tools/toolStore'
 import { StatusDot, type StatusDotTone } from '../../ui/StatusDot'
 
 // StatusBar — simplified status bar with concise indicators. Detailed
@@ -8,12 +9,13 @@ import { StatusDot, type StatusDotTone } from '../../ui/StatusDot'
 // shown (available through help overlay/tooltips instead).
 //
 // Layout:
-//   Left:  Engine dot + state | Renderer dot + state | Project state
+//   Left:  Engine dot + state | Renderer dot + state | Project state | Tool hint
 //   Center: CRS
 //   Right: GPU | Version
 export function StatusBar({ engineStatus }: { engineStatus: EngineSessionStatus }) {
   const summary = useProjectStore((state) => state.summary)
   const rendererStatus = useViewportStore((state) => state.status)
+  const statusHint = useToolStore((state) => state.statusHint)
 
   const engineTone: StatusDotTone =
     engineStatus.state === 'ready' ? 'success' :
@@ -58,6 +60,15 @@ export function StatusBar({ engineStatus }: { engineStatus: EngineSessionStatus 
       ) : (
         <span className="status-item">No project</span>
       )}
+
+      {statusHint ? (
+        <>
+          <span className="status-divider" />
+          <span className="status-item status-hint" title={statusHint}>
+            {statusHint}
+          </span>
+        </>
+      ) : null}
 
       <div className="status-spacer" />
 

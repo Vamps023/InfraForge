@@ -6,7 +6,26 @@ InfraForge is a native-first infrastructure authoring, geospatial editing, rende
 
 InfraForge is being built from a clean repository. The project deliberately does not copy OpenGeoStudio's source tree or legacy coupling. Architecture, contracts, process boundaries, persistence rules, and UI composition are established before production feature work.
 
+OpenGeoStudio remains a lessons-learned workflow reference: InfraForge may reuse proven interaction ideas such as a persistent editor, stable Navigator/Inspector regions, direct manipulation plus exact numeric editing, and contextual profile/cross-section tools, but it does not use OpenGeoStudio as a codebase or visual clone target.
+
 Current implementation state is tracked in `docs/IMPLEMENTATION_STATUS.md`. A document describing a future capability does not mean that capability is implemented.
+
+## Product experience
+
+InfraForge uses one persistent desktop editor with domain workspaces instead of disconnected feature pages. The target workspace model is documented in:
+
+- `docs/06_UI_UX/APP_SHELL.md`
+- `docs/06_UI_UX/UX_SPEC.md`
+- `docs/06_UI_UX/WORKSPACE_MODEL.md`
+- `docs/06_UI_UX/DESIGN_SYSTEM.md`
+- `docs/UI_UX_ARCHITECTURE.md`
+- `docs/UI_UX_ROADMAP.md`
+
+The shared interaction grammar is:
+
+`Select -> Create/Edit -> Inspector -> Context Editor (when needed) -> Validate -> Undo/Redo`
+
+Global project actions, Problems, Operations, selection identity, project revision, and engine/renderer state remain consistent across workspaces.
 
 ## Architectural rules
 
@@ -20,6 +39,7 @@ Current implementation state is tracked in `docs/IMPLEMENTATION_STATUS.md`. A do
 8. No fake success responses, mock production handlers, fabricated progress, silent fallback data, or placeholder production code.
 9. Project georeferencing is canonical and shared by all domains.
 10. Large-world behavior is designed around spatial partitioning and incremental invalidation from the beginning.
+11. New domain UI must integrate with the shared workspace/command/selection/Navigator/Inspector/Problems/Operations model rather than create another application shell.
 
 ## Repository layout
 

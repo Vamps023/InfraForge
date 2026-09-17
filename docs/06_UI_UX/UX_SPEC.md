@@ -1,8 +1,10 @@
 # InfraForge UX specification
 
-## UX objective
+## Objective
 
-InfraForge is a viewport-first professional desktop editor. Navigation is mode/tool based, not a set of disconnected full-page web routes.
+InfraForge is one viewport-first desktop editor. Workspace changes should swap tools and context without making the user learn a new application. OpenGeoStudio is a workflow reference only; InfraForge keeps its own canonical engine, protocol, persistence, renderer, and visual identity.
+
+Users should always know the active workspace, active tool, current selection, next gesture, exact editable values, save/validation state, and how to cancel or recover.
 
 ## UI direction
 
@@ -28,70 +30,124 @@ The intended result is a coherent professional shell, not a visual clone:
 ## Persistent layout
 
 ```text
-┌────────────────────────────────────────────────────────────────────┐
-│ Menu bar                                                           │
-├────────────────────────────────────────────────────────────────────┤
-│ Context toolbar                                                    │
-├──────┬───────────────┬───────────────────────────┬─────────────────┤
-│ Mode │ Outliner      │ Native 3D viewport        │ Inspector       │
-│ rail │               │                           │                 │
-├──────┴───────────────┴───────────────────────────┴─────────────────┤
-│ Problems | Operations | Console | Simulation                       │
-├────────────────────────────────────────────────────────────────────┤
-│ Status: coordinates | CRS | engine | renderer | FPS | project rev │
-└────────────────────────────────────────────────────────────────────┘
+Menu / Project / Undo-Redo / Workspace / Import / Validate / Export / Search
+Workspace tool shelf / context toolbar
+Navigator [Scene | Layers | Assets | Sources] | Main 2D/3D Viewport | Inspector
+Context Editor [Profile | Cross-section | Topology | Timeline | other task view]
+Problems | Operations | Console | Performance/Simulation
+Status: tool hint | coordinates/station | CRS | engine | renderer | save/revision
 ```
 
-The left dock may expose tabs such as **Scene**, **Layers**, and **Assets**
-when their backing domain projections exist. The right dock uses progressive
-disclosure: essential selection properties first, engineering/detail sections
-second. The bottom dock is persistent enough that errors and long-running work
-do not disappear behind transient notifications.
+The viewport stays dominant. Context editors open only when the task benefits from a precise secondary representation. The right dock uses progressive disclosure: essential selection properties first, engineering/detail sections second. The bottom dock is persistent enough that errors and long-running work do not disappear behind transient notifications.
 
-## Mode rail
 
-Initial mode model:
+## Workspaces
 
-- World
-- Terrain
-- Road
-- Rail
-- Infrastructure
-- Assets
-- Scenario
-- Simulation
+Target workspaces are Home/Project, World, Terrain, Roads, Lanes & Junctions, Infrastructure, Environment & Assets, Rail, Scenario, and Simulation.
 
-Unavailable/unimplemented modes must be explicitly disabled or absent; they must not open fake workspaces.
+A workspace defines visible tool groups, selection filters, Inspector sections, optional context editor, status hints, and viewport interaction mode. It does not create separate canonical state.
 
-## Outliner
+Normal release builds should hide workspaces that do not yet have a real production path. Developer builds may expose feature-gated entries for implementation testing.
 
-The outliner supports hierarchy, search, domain filter, visibility where meaningful, lock where meaningful, multi-selection, rename where allowed, and context actions. Large trees are virtualized.
+## Global commands
+
+New/Open/Save/Save As/Close, Undo/Redo, Import, Check World, Export, Command Palette, Preferences, and Help remain globally discoverable. They use the same command registry and availability rules in every workspace.
+
+## Common interaction grammar
+
+Every authoring workspace follows:
+
+`Select -> Create/Edit -> Inspector -> Context Editor (when needed) -> Validate -> Undo/Redo`
+
+Selection uses stable canonical IDs. Hover differs from selection. Shift modifies multi-selection where supported. Locked objects may be inspected but not edited.
+
+`Esc` cancels an in-progress operation first; when no operation is active, another `Esc` may clear selection. Switching tools must not silently commit a preview.
+
+Direct manipulation should preview constrained results before commit where practical. Exact numeric editing is always available for engineering values with explicit units and validation.
+
+## Navigator
+
+- **Scene** — semantic hierarchy, search/filter, visibility/lock where meaningful, multi-selection, context actions, virtualization.
+- **Layers** — real layer visibility/isolate/lock/export inclusion; hidden until the layer model exists.
+- **Assets** — searchable project asset catalog with type/category filters, preview, source/relink state, and placement when supported.
+- **Sources** — GIS/OSM/terrain/engineering source provenance, CRS, coverage/bounds, attribution, refresh/relink status, warnings/errors, and links to derived canonical entities.
 
 ## Inspector
 
-Inspector content is selection driven. Property sections are supplied by the owning feature/domain UI adapter. Edits send commands; the inspector does not mutate cached canonical objects locally and pretend the backend accepted them.
+Preferred section order:
 
-## Operations panel
+`Identity -> Geometry -> Semantics -> Appearance -> Connections -> Source/Provenance -> Export -> Diagnostics`
 
-Long jobs appear with real lifecycle states. Percentage is shown only when the backend provides defensible progress. Failure remains visible until acknowledged/resolved; it is not only a toast.
+Common fields are easy to find; advanced groups use progressive disclosure. Edits send typed commands. Invalid values and backend rejection stay visible and attributable to the attempted edit.
 
-## Problems panel
+## Context editor
 
-Diagnostics include severity, source/domain, message, entity link when applicable, and optional suggested action. Selecting an entity diagnostic can frame/select the affected object when the viewport/domain supports it.
+The context editor is a docked/resizable surface sharing the same selection and project revision as the viewport. Typical uses include road elevation profile, lane cross-section, junction topology, rail profile/cant, controller phase editing, scenario timeline, and simulation metrics/table views.
 
-## Command palette
+It may collapse to maximize viewport space. It must never become a duplicate domain model.
 
-All significant commands register with one command service containing ID, label, availability predicate, shortcut, and invoke action. Menus/toolbars reference the same command registrations rather than duplicating behavior.
+## Workspace guidance
+
+### Home / Project
+New/Open, recent projects, recovery state, and concise getting-started guidance. No fake sample world.
+
+### World
+CRS/origin, project area, georeferencing, traffic side, map/reference sources, and project-wide spatial settings. Sources are prominent.
+
+### Terrain
+Import Terrain, Download Area, dataset selection, coverage inspection, and supported terrain operations. Inspector emphasizes source, CRS, coverage, resolution, NoData, attribution, and streaming/build status.
+
+### Roads
+Select, Create Road, Edit Plan, Edit Profile, and supported control/split/join operations. The viewport handles plan/direct geometry; the context editor handles vertical profile. Imported roads can compare source geometry with canonical alignment.
+
+### Lanes & Junctions
+Lane sections, cross-section, markings, connectivity, and junction movement/topology editing. The context editor hosts cross-section or topology views.
+
+### Infrastructure
+Road/lane-aware placement and editing of real semantic signals, signs, barriers, gantries, controllers, and other supported infrastructure. Inspector shows binding, semantics, appearance, connections, and diagnostics.
+
+### Environment & Assets
+Asset import/browse/place/transform and supported environment tools. Assets are prominent in the Navigator.
+
+### Rail
+Same overall interaction grammar as Roads, with rail-specific language, visuals, gauge/cant, switches/turnouts, topology, and signalling. Rail must not be presented as road data.
+
+### Scenario
+Canonical scenario entities and their routes/events/conditions through a timeline or other suitable context editor when implemented.
+
+### Simulation
+Configure, Run, Pause, Step, Reset. Runtime state is clearly separated from authored project state; results appear without replacing the authoring shell.
+
+## Problems
+
+Diagnostics include severity, stable code, domain/source, message, entity link where applicable, project revision, and optional supported actions such as Focus, Select, Fix, or Re-run. Critical failures must not exist only as transient toasts.
+
+## Operations
+
+Long work uses real states: queued, running, measurable progress, cancel requested, completed, completed with warnings, failed, or cancelled. Percentage is shown only when backend progress is meaningful.
+
+## Command model
+
+All significant commands register with one command service containing ID, label, workspace/domain grouping, availability predicate, shortcut, and invoke action. Menus, toolbars, palette, shortcuts, and context menus reference the same command registrations.
 
 ## Interaction qualities
 
 - Dense professional controls rather than dashboard cards.
-- Compact spacing and restrained corner radius.
-- Strong focus/hover/selection states.
-- Keyboard accessible controls.
-- Predictable numeric editing.
-- No destructive action hidden behind icon-only ambiguity.
-- Clear units on engineering values.
+- Compact spacing and restrained radii.
+- Strong focus/hover/selection/active-tool states.
+- Tooltips for icon-only actions.
+- Status hints for the active gesture.
+- Clear units and predictable numeric editing.
+- Empty states point to the next real action.
+- Destructive actions are never ambiguous icon-only controls.
+- Advanced options do not permanently occupy prime toolbar space.
 - Errors stay associated with the action/property that caused them when possible.
-- Viewport navigation, selection, framing, and tool cancellation have visible
-  affordances and documented shortcuts; focus must never be trapped in a dock.
+- Viewport navigation, selection, framing, and tool cancellation have visible affordances and documented shortcuts; focus must never be trapped in a dock.
+
+## Accessibility baseline
+
+Core controls and tabs are keyboard accessible, focus is visible, semantic labels are provided where appropriate, and critical state is never color-only. Numeric fields support keyboard increments and unit suffixes.
+
+## Acceptance
+
+A representative new user should be able to create/open a project, confirm world settings, import/download terrain, enter Roads, create/select/edit a road, edit exact plan/profile values, run validation, focus a problem, save, close, and reopen using visible UI guidance and the same interaction grammar throughout.

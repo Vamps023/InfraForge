@@ -1,139 +1,130 @@
 # InfraForge UI/UX Roadmap
 
-This document outlines the phased UI/UX modernization plan for InfraForge. Each phase builds on the previous one without destabilizing existing functionality.
+This roadmap replaces the earlier workspace-by-workspace UI expansion plan with a shared-workspace-first strategy. Domain UI must grow through one interaction architecture rather than accumulating separate toolbars, panels, and navigation conventions.
 
-## Phase 1: Core Editor Shell Modernization ✅
+## Phase A — Shared workspace foundation
 
-**Status:** Delivered on `feature/ui-modernization` branch.
+**Goal:** Make the current editor shell the stable frame for every domain.
 
-**Scope:**
-- Semantic design token system (`src/styles/tokens.css`)
-- Modular CSS architecture (replaced monolithic `styles.css`)
-- Reusable UI primitives (`src/ui/`: Button, IconButton, Tooltip, PanelHeader, StatusDot)
-- Modern application header (compact, inline menu, workspace label, search trigger)
-- Vertical workspace rail (Home, Terrain functional; Roads/Rail/Environment/Traffic/Simulation disabled)
-- Context toolbar (Terrain workspace: Import, Download Area, Georeference)
-- Simplified status bar (status dots, concise indicators, no permanent camera instructions)
-- Viewport HUD overlay (renderer state, GPU, Vulkan version)
-- Project home screen (no-project start experience with New/Open actions and getting-started guide)
-- 39 new tests (414 total, all passing)
+- registry-driven WorkspaceSwitcher;
+- global command placement for Project, Undo/Redo, Import, Validate, Export, Search;
+- Navigator host with Scene / Layers / Assets / Sources capability tabs;
+- stable Inspector group ordering;
+- ContextEditorHost for profile/cross-section/topology/timeline-style editors;
+- shared active-tool/status-hint/cancel conventions;
+- hide unavailable workspaces in normal release builds;
+- preserve current Problems, Operations, layout persistence, command registry, selection, and native viewport plumbing.
 
-**Preserved:**
-- All existing project workflows (create, open, save, close)
-- Terrain import and download
-- Georeferencing
-- Vulkan viewport integration
-- Command registry and palette
-- Panel resizing and persistence
-- All 375 pre-existing tests
+**Acceptance:** Switching workspaces never resets project state, duplicates selection/commands, or behaves like route navigation.
 
-## Phase 2: Terrain Authoring UX
+## Phase B — Terrain migration
 
-**Goal:** Deepen the terrain workspace into a full authoring experience.
+**Goal:** Prove the model with an already-real domain.
 
-**Scope:**
-- Outliner tabs (Scene / Layers / Assets) with terrain dataset hierarchy
-- Inspector sections for terrain datasets (source info, coverage, tile status, attribution)
-- Terrain visibility toggles in the outliner
-- Frame Terrain action (when the viewport supports camera framing)
-- Terrain settings panel (resolution, LOD, display options)
-- Download Area UX refinements (progress visualization, cancel feedback, error messaging)
-- Terrain dataset context menu (rename, delete, regenerate tiles)
-- On-screen viewport HUD (renderer/GPU/Vulkan/FPS) — requires native-side HUD rendering or a separate overlay window; CSS overlays are occluded by the native viewport HWND and cannot be used for this
+- Terrain tool group: Import, Download Area, dataset selection/inspection;
+- terrain hierarchy in Scene;
+- source/provenance in Sources;
+- Inspector for coverage, CRS, resolution, attribution, NoData, build/stream state;
+- Operations/Problems remain the sole long-job/error surfaces;
+- simplify dialogs so they act as focused tools, not separate applications.
 
-**Dependencies:** Viewport camera framing API (engine-side), native HUD rendering
+**Acceptance:** Local File and Download Area workflows complete end-to-end inside the shared workspace grammar.
 
-## Phase 3: Road Workspace
+## Phase C — Roads authoring UX
 
-**Goal:** Enable road/lanes/junction authoring.
+**Goal:** Make road authoring fast for direct editing and precise for engineering work.
 
-**Scope:**
-- Enable the Roads workspace in the workspace rail
-- Road context toolbar (Create Road, Edit Geometry, Add Lane, Junction)
-- Road outliner projection (road/lane/junction hierarchy)
-- Road inspector sections (geometry, lane config, road properties)
-- Road rendering in the viewport (when the renderer supports it)
-- OpenDRIVE import/export integration
+- Select / Create Road / Edit Plan / Edit Profile tool groups;
+- consistent control-point hover/selection/preview/cancel behavior;
+- Road Inspector with Geometry, Semantics, Source/Provenance, Diagnostics;
+- docked vertical Profile context editor;
+- source-vs-canonical comparison controls for imported roads;
+- precise numeric editing synchronized with direct manipulation;
+- supported snapping/status hints.
 
-**Dependencies:** GitHub issues #7 and #8 (road/lanes/junctions domain)
+**Acceptance:** A road can be created, selected, edited in plan/profile, validated, undone/redone, saved and reopened without leaving the shared editor model.
 
-## Phase 4: Rail Workspace
+## Phase D — Lanes & Junctions UX
 
-**Goal:** Enable rail infrastructure authoring.
+**Goal:** Keep lane/cross-section/topology work clear instead of overloading the Road Plan tool.
 
-**Scope:**
-- Enable the Rail workspace in the workspace rail
-- Rail context toolbar (Create Track, Edit Alignment, Add Switch)
-- Rail outliner projection
-- Rail inspector sections
-- Rail rendering in the viewport
+- lane section/cross-section/marking tool groups;
+- junction movement/topology tool;
+- cross-section context editor;
+- junction movement/topology context editor;
+- stable lane/junction selection/sub-selection;
+- diagnostics linked to canonical lane/junction entities.
 
-**Dependencies:** GitHub issue #13 (rail domain)
+## Phase E — World / Sources UX
 
-## Phase 5: Environment / Layers / Assets
+**Goal:** Give GIS/georeference/provenance one predictable home.
 
-**Goal:** Environmental authoring and asset management.
+- World workspace for CRS/origin/AOI/traffic-side/source alignment;
+- Sources Navigator provider;
+- source status, attribution, CRS, bounds/coverage, relink/refresh/error projection;
+- clear source vs canonical derived-entity relationships;
+- 2D map/3D parity for supported inspection/editing.
 
-**Scope:**
-- Enable the Environment workspace
-- Layer system (terrain layers, vegetation, buildings, water)
-- Asset browser (import, organize, place 3D models)
-- Material editor (when supported)
-- Environment context toolbar
-- Layer outliner tab
+## Phase F — Infrastructure and Assets
 
-**Dependencies:** Layer system domain, asset pipeline
+**Goal:** Add semantic infrastructure and visual content without breaking interaction consistency.
 
-## Phase 6: Traffic Workspace
+- Infrastructure tool groups for real supported semantic objects;
+- road/lane-aware placement;
+- Asset Browser provider with search/filter/preview;
+- Environment & Assets placement tools;
+- shared Inspector patterns for Semantics, Appearance, Connections, Source;
+- controller phase context editor when the controller model exists.
 
-**Goal:** Traffic infrastructure authoring.
+## Phase G — Rail
 
-**Scope:**
-- Enable the Traffic workspace
-- Traffic context toolbar (Add Signal, Add Sign, Define Flow)
-- Traffic outliner projection
-- Traffic inspector sections
-- OSM data import workflow
+**Goal:** Reuse interaction grammar, not road-specific domain assumptions.
 
-**Dependencies:** GitHub issues #11 (traffic infrastructure), #12 (traffic simulation)
+- rail plan/profile/cant/topology tool groups;
+- rail-specific Scene/Inspector language;
+- switch/turnout topology editing;
+- rail profile/cant/topology context editors;
+- source-vs-canonical rail inspection where applicable.
 
-## Phase 7: Simulation Workspace
+## Phase H — Scenario and Simulation
 
-**Goal:** Simulation preparation and execution.
+**Goal:** Preserve the authoring shell while adding timeline/runtime workflows.
 
-**Scope:**
-- Enable the Simulation workspace
-- Simulation context toolbar (Configure, Run, Pause, Stop)
-- Simulation parameters inspector
-- Scenario management
-- Results visualization
-- Performance profiling overlay
+- Scenario tools and timeline/event context editor;
+- Simulation configure/run/pause/step/reset controls;
+- clear authored-state vs runtime-state distinction;
+- results/metrics context views;
+- simulation Problems/Operations integration.
 
-**Dependencies:** GitHub issue #12 (traffic simulation), simulation runtime
+## Phase I — Professional polish
 
-## Phase 8: Advanced Professional Tooling
+- robust context menus;
+- shortcut discovery and later customization;
+- named/user layout profiles;
+- theme support after semantic token coverage is complete;
+- improved keyboard traversal and accessibility audits;
+- selection breadcrumbs where useful;
+- native/renderer HUD where justified;
+- high-density performance tuning/virtualization;
+- plugin UI contribution contracts built on the same workspace/panel registries.
 
-**Goal:** Polish for production use.
+## Cross-cutting requirements
 
-**Scope:**
-- Transform toolbar (Select, Move, Rotate, Scale, Measure, Draw) with real viewport integration
-- Advanced viewport overlays (coordinates, FPS, shading modes, grid settings)
-- Context menus (right-click) throughout the editor
-- Keyboard shortcut customization
-- Theme system (dark/light/custom)
-- Undo/redo infrastructure
-- Multi-monitor workspace layouts
-- Plugin/extension architecture
-- Performance optimization (virtualization, lazy loading, web workers)
+Every phase must preserve:
 
-**Dependencies:** Viewport interaction API, undo/redo domain
+- canonical engine ownership;
+- central command registry;
+- stable canonical selection IDs;
+- user layout state separate from project truth;
+- truthful engine/renderer/job/diagnostic state;
+- native viewport lifecycle/occlusion rules;
+- no fake functionality or sample domain content;
+- tests for workspace switching, keyboard/focus behavior, availability gating, and persistence of user layout preferences.
 
-## Cross-Cutting Concerns
+## UX release gate
 
-These apply across all phases:
+Before calling the redesign complete, a representative tester must be able to perform:
 
-- **Testing:** Every new UI component gets vitest tests. No phase is complete with failing tests.
-- **Typecheck:** Frontend and desktop TypeScript must remain clean.
-- **Architecture boundaries:** Frontend stays presentation-only. Domain logic stays in the C++ engine.
-- **No fake functionality:** Every wired button has a real action. Future features are disabled, not faked.
-- **Documentation:** Update `docs/UI_UX_ARCHITECTURE.md` as the architecture evolves.
+`Create/Open Project -> World settings -> Terrain -> Roads -> Lanes/Junctions (when implemented) -> Validate -> Save/Reopen`
+
+with the same selection, tool, Inspector, context-editor, cancellation, diagnostics, and command conventions throughout.

@@ -2,9 +2,9 @@
 
 ## 1. Product definition
 
-InfraForge is a desktop infrastructure authoring, geospatial editing, rendering, validation, and simulation application. It targets professional workflows for road, terrain, traffic infrastructure, environment, scenario, and later rail authoring in large georeferenced worlds.
+InfraForge is a desktop infrastructure authoring, geospatial editing, rendering, validation, and simulation application. It targets professional workflows for terrain, roads, lanes, junctions, traffic infrastructure, environment/assets, scenario, simulation, and later rail authoring in large georeferenced worlds.
 
-InfraForge is a new product architecture. OpenGeoStudio is a lessons-learned reference only; its source structure is not the implementation template.
+InfraForge is a new product architecture. OpenGeoStudio is a lessons-learned workflow/interaction reference only; its source structure is not the implementation template and its visual styling is not a clone target.
 
 ## 2. Product goals
 
@@ -21,7 +21,8 @@ InfraForge shall let a user:
 9. validate the authored world and receive actionable diagnostics;
 10. create and run traffic scenarios;
 11. export standard and runtime-oriented formats;
-12. work on large projects without loading the whole world into GPU memory.
+12. work on large projects without loading the whole world into GPU memory;
+13. move between domain workspaces without losing selection, context, project state, or familiar interaction patterns.
 
 ## 3. Product principles
 
@@ -31,19 +32,27 @@ Project/domain data is authoritative. UI widgets, generated meshes, renderer obj
 
 ### 3.2 Desktop-first professional editor
 
-The viewport is the primary workspace. InfraForge must behave like a desktop authoring tool rather than a collection of web pages.
+The viewport is the primary workspace. InfraForge must behave like one coherent desktop authoring tool rather than a collection of web pages or domain-specific mini-applications.
 
-### 3.3 Incremental systems
+### 3.3 Workspace consistency
+
+A workspace changes the tools and contextual editors used to manipulate the canonical world; it does not create a second navigation model or duplicate canonical state. Selection, commands, undo/redo, jobs, diagnostics, and project status remain global and consistent.
+
+### 3.4 Simple first, advanced on demand
+
+Common workflows should be visible and understandable without reading documentation. Advanced engineering parameters must remain accessible through predictable Inspector/context-editor sections with explicit units and validation.
+
+### 3.5 Incremental systems
 
 A local edit invalidates only dependent domain/cache/render data. A one-road edit must not require a full-world rebuild.
 
-### 3.4 Explicit failures
+### 3.6 Explicit failures
 
 Production workflows must not fabricate success, fake progress, silently substitute data, or convert hard failures into hidden fallbacks.
 
-### 3.5 Extensibility
+### 3.7 Extensibility
 
-Import/export, domain tooling, simulation, and rendering interfaces must permit future plugins without exposing internal mutable state.
+Import/export, domain tooling, simulation, rendering, and UI command interfaces must permit future plugins without exposing internal mutable state.
 
 ## 4. Primary personas
 
@@ -55,19 +64,20 @@ Import/export, domain tooling, simulation, and rendering interfaces must permit 
 
 ## 5. Core user workflow
 
-1. Create Project.
-2. Set CRS, units, traffic side, and project storage location.
-3. Define/import area of interest.
-4. Import/download terrain, imagery, and available map data.
-5. Inspect generated/imported world data.
-6. Author/edit roads.
-7. Author lanes and junctions.
-8. Add markings, signs, signals, barriers, and gantries.
-9. Populate environment assets.
-10. Create traffic/scenario content.
-11. Run **Check World** validation.
-12. Run simulation.
-13. Export required deliverables.
+The main workflow must be achievable through visible UI without understanding backend architecture:
+
+1. **Home / Project** — create or open a project.
+2. **World** — confirm CRS, units, traffic side, origin, area of interest, and source alignment.
+3. **Terrain** — import/download terrain and imagery, inspect coverage, and resolve source problems.
+4. **Roads** — create/import roads, edit plan geometry and vertical profile, and inspect source-vs-canonical alignment when applicable.
+5. **Lanes & Junctions** — edit sections, widths, markings, connectivity, and junction movements.
+6. **Infrastructure** — place signals, signs, barriers, gantries, and controllers.
+7. **Environment & Assets** — import/place visual assets and environmental content.
+8. **Scenario / Simulation** — configure actors/routes/runtime conditions and run supported simulations.
+9. **Validate** — run Check World from a global command surface and focus actionable diagnostics.
+10. **Export** — choose scope/format, review validation/preview, and run a tracked export job.
+
+Import, Validate, Save, Undo/Redo, Command Palette, and Export are global application capabilities and must not be hidden inside a single workspace.
 
 ## 6. Functional domains
 
@@ -75,16 +85,84 @@ The product is divided into Project, Geo, Terrain, Road, Lane, Junction, Infrast
 
 ## 7. UX requirements
 
-- Persistent central viewport.
-- Dockable/resizable supporting panels.
-- Mode rail for World, Terrain, Road, Rail, Infrastructure, Assets, Scenario, Simulation.
-- Context-sensitive toolbar and inspector.
-- Virtualized searchable outliner.
-- Bottom panel for Problems, Operations, Console, and Simulation.
-- Global command palette.
-- Keyboard shortcuts for common authoring actions.
-- No critical operation represented only by transient toast notification.
-- 2D map and 3D viewport are equal-quality views of the same canonical world. Supported editing, selection, snapping, diagnostics, undo/redo, and revision behavior must remain semantically equivalent across both views; projection and camera differences are presentation concerns only.
+### 7.1 Persistent editor shell
+
+The default desktop shell contains:
+
+- compact application/menu bar with project identity and global commands;
+- workspace switcher;
+- context toolbar/tool shelf for the active workspace/tool;
+- left Navigator with **Scene / Layers / Assets / Sources** tabs as capabilities become real;
+- persistent central 2D/3D viewport host;
+- right Inspector driven by canonical selection/tool context;
+- resizable context editor/drawer for profile, cross-section, topology, timeline, phases, tables, or other task-specific 2D editing;
+- bottom utility tabs for **Problems / Operations / Console / Performance/Simulation** when available;
+- status bar with coordinates, CRS, active tool hints, engine/renderer state, save/revision state, and relevant viewport status.
+
+### 7.2 Workspace model
+
+Target workspaces:
+
+- Home / Project
+- World
+- Terrain
+- Roads
+- Lanes & Junctions
+- Infrastructure
+- Environment & Assets
+- Rail
+- Scenario
+- Simulation
+
+A workspace may be absent from release UI until its real production path exists. Normal builds should prefer hiding unavailable workspaces over showing large groups of disabled "coming later" entries.
+
+### 7.3 Common interaction grammar
+
+Every authoring workspace shall use the same baseline behavior:
+
+- Select is always understandable and recoverable.
+- Hover and selected states are visually distinct.
+- `Esc` cancels the in-progress operation first; another `Esc` may clear selection.
+- Shift modifies multi-selection where supported.
+- Direct manipulation previews the result before commit when practical.
+- Inspector sections use stable ordering and explicit units.
+- Tool changes do not discard canonical selection unless the selected type is incompatible.
+- Undo/redo uses canonical commands/transactions, never UI-only snapshots.
+- Long operations appear in Operations with real lifecycle state.
+- Validation findings remain persistent in Problems until resolved/acknowledged.
+
+### 7.4 Precision and context editors
+
+Direct 2D/3D editing and exact numeric editing are equal-quality workflows. Road profile, cross-section, rail cant/profile, signal phases, scenario timeline, and similar engineering editors appear as docked contextual surfaces sharing canonical IDs/revisions with the viewport.
+
+### 7.5 Outliner/Navigator
+
+The Scene view supports hierarchy, search, type/domain filters, visibility where meaningful, lock where meaningful, multi-selection, rename where allowed, context actions, and virtualization for large trees. Layers, Assets, and Sources become available only when their real models exist.
+
+### 7.6 Inspector
+
+Inspector content is selection/tool driven. Stable section ordering should be used where applicable:
+
+`Identity -> Geometry -> Semantics -> Appearance -> Connections -> Source/Provenance -> Export -> Diagnostics`
+
+Feature code sends commands; it must not mutate cached canonical objects locally and pretend acceptance.
+
+### 7.7 2D/3D parity
+
+2D map and 3D viewport are equal-quality views of the same canonical world. Supported editing, selection, snapping, diagnostics, undo/redo, and revision behavior must remain semantically equivalent across both views; projection and camera differences are presentation concerns only.
+
+### 7.8 Discoverability and density
+
+- Primary actions use text or unmistakable icon+tooltip patterns.
+- Advanced/rare settings use progressive disclosure, not permanent toolbar clutter.
+- Critical destructive actions are never ambiguous icon-only affordances.
+- Tooltips and status hints explain active gestures and shortcuts.
+- Empty states explain the next real action; they do not display fake sample content.
+- Compact desktop sizing is preferred over oversized cards.
+
+### 7.9 Accessibility
+
+Core controls must be keyboard reachable, focus visible, screen-reader labelled where appropriate, and not encode critical state using color alone. Numeric fields support keyboard increments and unit suffixes.
 
 ## 8. Reliability requirements
 
@@ -95,6 +173,7 @@ The product is divided into Project, Geo, Terrain, Road, Lane, Junction, Infrast
 - Long operations support cancellation where safe.
 - Engine crash/disconnect is surfaced explicitly to the desktop UI.
 - Unsaved changes are tracked by canonical project revision, not component-local flags.
+- Workspace/layout preferences are user preferences unless an explicitly designed project-scoped layout exists.
 
 ## 9. Performance engineering budgets
 
@@ -118,8 +197,16 @@ Detailed requirements are defined in `docs/05_DOMAINS/LINEAR_INFRASTRUCTURE_GEOM
 
 ## 11. Non-goals for the foundation phase
 
-The foundation phase does not claim production-ready road authoring, terrain acquisition, simulation, rail, or exporters. Its purpose is to establish architecture, process separation, contracts, project lifecycle, viewport integration, and quality gates so later features do not require structural rewrites.
+The foundation phase does not claim production-ready road authoring, simulation, rail, or exporters merely because their workspace shell can be represented. UI surfaces must not be counted as feature completion unless their real canonical production path is implemented.
 
 ## 12. Success criteria
 
-InfraForge succeeds when a feature can be implemented vertically without bypassing architecture boundaries, large projects remain incremental, project files are deterministic/recoverable, and the UI remains a coherent professional editor as domains grow.
+InfraForge succeeds when:
+
+- a feature can be implemented vertically without bypassing architecture boundaries;
+- large projects remain incremental and recoverable;
+- project files are deterministic and canonical;
+- the user can move across domain workspaces without relearning the application;
+- common tasks are obvious while advanced engineering controls remain available;
+- UI state never becomes a second source of domain truth;
+- a new user can complete a representative terrain -> road -> lane/junction -> validate -> save workflow using visible UI guidance.

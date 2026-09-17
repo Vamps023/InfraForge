@@ -4,7 +4,8 @@ This document outlines the phased UI/UX modernization plan for InfraForge. Each 
 
 ## Phase 1: Core Editor Shell Modernization ✅
 
-**Status:** Delivered on `feature/ui-modernization` branch.
+**Status:** Delivered as the initial shell. The reference-informed refinements
+below remain planned until they have production evidence.
 
 **Scope:**
 - Semantic design token system (`src/styles/tokens.css`)
@@ -27,6 +28,25 @@ This document outlines the phased UI/UX modernization plan for InfraForge. Each 
 - Panel resizing and persistence
 - All 375 pre-existing tests
 
+## UI Direction: Reference-Informed Professional Shell
+
+**Goal:** Evolve the whole application toward a cohesive, dense professional
+editor comparable in workflow shape to OpenGeoStudio while preserving
+InfraForge's independent implementation and architecture.
+
+**Scope:**
+- Keep the viewport-first shell constant across all workspaces.
+- Use one workspace rail, command registry, selection presentation, outliner,
+  inspector, bottom dock, and status surface.
+- Introduce Scene/Layers/Assets dock tabs only when backed by real engine
+  projections.
+- Standardize contextual toolbars, selection affordances, and progressive
+  inspector sections across domains.
+- Add layout-reset, DPI, keyboard-focus, and multi-monitor acceptance coverage.
+
+**Non-goals:** Copying OpenGeoStudio source, visual assets, data model,
+frontend-store design, Electron responsibilities, renderer, or transport.
+
 ## Phase 2: Terrain Authoring UX
 
 **Goal:** Deepen the terrain workspace into a full authoring experience.
@@ -45,10 +65,10 @@ This document outlines the phased UI/UX modernization plan for InfraForge. Each 
 
 ## Phase 3: Road Workspace
 
-**Goal:** Enable road/lanes/junction authoring.
+**Goal:** Continue road authoring and prepare lanes/junction authoring.
 
 **Scope:**
-- Enable the Roads workspace in the workspace rail
+- Refine the enabled Roads workspace within the common shell
 - Road context toolbar (Create Road, Edit Geometry, Add Lane, Junction)
 - Road outliner projection (road/lane/junction hierarchy)
 - Road inspector sections (geometry, lane config, road properties)

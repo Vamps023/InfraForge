@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <bit>
 #include <chrono>
 #include <deque>
 #include <filesystem>
@@ -422,6 +423,92 @@ TEST_CASE("import produces canonical dataset, sampling, tiles, and survives reop
     const auto detailsAfter = harness.terrain->datasetDetails(
         infraforge::domain::terrain::uuidTextFromEntityId(reopened.id));
     CHECK(detailsAfter.presentTiles == 1);
+}
+
+TEST_CASE("adjacent terrain chunks share bit-identical edges at every LOD") {
+    // Donor-port regression inspired by OpenGeoStudio TerrainChunk seam
+    // handling. InfraForge derives both chunks from the same canonical
+    // sampler, so their shared boundary must match without mutating either
+    // tile through renderer-side edge morphing.
+    infraforge::testhelpers::TerrainDemSpec spec;
+    spec.width = 199;
+    spec.height = 99;
+    spec.originX = 500005.0;
+    spec.originY = 4650995.0;
+    spec.withNodata = false;
+    TerrainHarness harness{spec};
+
+    const auto record = harness.terrain->startImport(
+        {.sourcePath = harness.demPath, .displayName = "Two Chunk Seam DEM"});
+    REQUIRE(harness.waitFor(
+        [&] { return isTerminal(harness.jobs->job(record.jobId)); },
+        std::chrono::seconds{30}));
+    REQUIRE(harness.jobs->job(record.jobId)->state == infraforge::application::JobState::Completed);
+
+    const auto datasets = harness.store.terrainDatasets();
+    REQUIRE(datasets.size() == 1);
+    const auto& dataset = datasets.front();
+    const auto uuid = infraforge::domain::terrain::uuidTextFromEntityId(dataset.id);
+    const auto chunks = harness.world.chunksIntersecting(dataset.bounds);
+    REQUIRE(chunks.size() == 2);
+    const auto westChunk = *std::min_element(chunks.begin(), chunks.end(),
+        [](const auto& a, const auto& b) { return a.x < b.x; });
+    const auto eastChunk = *std::max_element(chunks.begin(), chunks.end(),
+        [](const auto& a, const auto& b) { return a.x < b.x; });
+    REQUIRE(westChunk.y == eastChunk.y);
+    REQUIRE(eastChunk.x == westChunk.x + 1);
+
+    const auto settled = harness.waitFor([&] {
+        const auto details = harness.terrain->datasetDetails(uuid);
+        return details.expectedTiles == 2 && details.presentTiles == 2;
+    }, std::chrono::seconds{30});
+    REQUIRE(settled);
+
+    const auto west = decodeTerrainTileFromFile(TerrainTileGenerator::tilePath(
+        harness.projectDirectory, uuid, westChunk.x, westChunk.y).string());
+    const auto east = decodeTerrainTileFromFile(TerrainTileGenerator::tilePath(
+        harness.projectDirectory, uuid, eastChunk.x, eastChunk.y).string());
+    REQUIRE(west.lods.size() == kTerrainTileLodCount);
+    REQUIRE(east.lods.size() == kTerrainTileLodCount);
+
+    for (std::uint32_t level = 0; level < kTerrainTileLodCount; ++level) {
+        const auto& westLod = west.lods[level];
+        const auto& eastLod = east.lods[level];
+        REQUIRE(westLod.dim == eastLod.dim);
+        CHECK(westLod.originEasting + static_cast<double>(westLod.dim - 1) * westLod.cellEasting
+            == doctest::Approx(eastLod.originEasting).epsilon(1e-12));
+        for (std::uint32_t row = 0; row < westLod.dim; ++row) {
+            const double westHeight = westLod.heights[
+                static_cast<std::size_t>(row) * westLod.dim + (westLod.dim - 1)];
+            const double eastHeight = eastLod.heights[static_cast<std::size_t>(row) * eastLod.dim];
+            CHECK(std::bit_cast<std::uint64_t>(westHeight)
+                == std::bit_cast<std::uint64_t>(eastHeight));
+        }
+    }
+
+    // Mixed-LOD neighbours share every vertex present on the coarser edge.
+    // The finer edge may contain additional vertices between them; renderer
+    // skirts cover those T-junction intervals without changing either
+    // tile's canonical derived heights.
+    for (std::uint32_t westLevel = 0; westLevel < kTerrainTileLodCount; ++westLevel) {
+        for (std::uint32_t eastLevel = 0; eastLevel < kTerrainTileLodCount; ++eastLevel) {
+            const auto& westLod = west.lods[westLevel];
+            const auto& eastLod = east.lods[eastLevel];
+            const std::uint32_t commonSegments = std::min(westLod.dim - 1, eastLod.dim - 1);
+            const std::uint32_t westStride = (westLod.dim - 1) / commonSegments;
+            const std::uint32_t eastStride = (eastLod.dim - 1) / commonSegments;
+            for (std::uint32_t commonRow = 0; commonRow <= commonSegments; ++commonRow) {
+                const std::uint32_t westRow = commonRow * westStride;
+                const std::uint32_t eastRow = commonRow * eastStride;
+                const double westHeight = westLod.heights[
+                    static_cast<std::size_t>(westRow) * westLod.dim + (westLod.dim - 1)];
+                const double eastHeight = eastLod.heights[
+                    static_cast<std::size_t>(eastRow) * eastLod.dim];
+                CHECK(std::bit_cast<std::uint64_t>(westHeight)
+                    == std::bit_cast<std::uint64_t>(eastHeight));
+            }
+        }
+    }
 }
 
 TEST_CASE("cancelling a queued import commits nothing; the running import completes") {

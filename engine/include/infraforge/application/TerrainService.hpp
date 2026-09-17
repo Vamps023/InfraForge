@@ -1,6 +1,7 @@
 #pragma once
 
 #include "infraforge/application/JobSystem.hpp"
+#include "infraforge/application/TerrainExportEngine.hpp"
 #include "infraforge/application/WorldState.hpp"
 #include "infraforge/domain/geo/ProjectGeoreference.hpp"
 #include "infraforge/domain/terrain/TerrainDataset.hpp"
@@ -145,6 +146,12 @@ public:
         std::uint32_t tileSizeMetres,
         const std::vector<std::int32_t>& selectedIndices,
         const std::string& displayName);
+
+    // Export a terrain dataset to external formats (GeoTIFF, PNG-16, Raw R16).
+    [[nodiscard]] TerrainExportOutput exportDataset(
+        const TerrainExportOptions& options,
+        const ExportProgressCallback& progress = nullptr,
+        const ExportCancellationCallback& cancel = nullptr);
 
     [[nodiscard]] std::vector<domain::terrain::TerrainDataset> listDatasets() const;
     [[nodiscard]] TerrainDatasetDetails datasetDetails(const std::string& datasetUuid) const;

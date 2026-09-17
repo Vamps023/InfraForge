@@ -184,6 +184,42 @@ std::array<float, 16> EditorCamera::viewProjection() const noexcept {
     return output;
 }
 
+std::optional<CameraPoint3d> EditorCamera::screenToHorizontalPlane(
+    const double screenX, const double screenY, const double elevation) const noexcept {
+    if (!std::isfinite(screenX) || !std::isfinite(screenY) ||
+        screenX < 0.0 || screenY < 0.0 ||
+        screenX > static_cast<double>(width_) || screenY > static_cast<double>(height_)) {
+        return std::nullopt;
+    }
+    const CameraPoint3d eye = position();
+    const Vec3 forward = normalized(target_ - eye);
+    const Vec3 worldUp{0.0, 0.0, 1.0};
+    const Vec3 right = normalized(cross(forward, worldUp));
+    const Vec3 up = cross(right, forward);
+    const double ndcX = 2.0 * screenX / static_cast<double>(width_) - 1.0;
+    const double ndcY = 1.0 - 2.0 * screenY / static_cast<double>(height_);
+    Vec3 direction{};
+    CameraPoint3d origin = eye;
+    if (projection_ == CameraProjection::Top) {
+        const double halfHeight = topHalfHeight_;
+        const double halfWidth = halfHeight * aspectRatio();
+        origin.x = target_.x + right.x * ndcX * halfWidth + up.x * ndcY * halfHeight;
+        origin.y = target_.y + right.y * ndcX * halfWidth + up.y * ndcY * halfHeight;
+        direction = forward;
+    } else {
+        const double halfHeight = std::tan(verticalFov_ * 0.5);
+        direction = normalized({
+            forward.x + right.x * ndcX * halfHeight * aspectRatio() + up.x * ndcY * halfHeight,
+            forward.y + right.y * ndcX * halfHeight * aspectRatio() + up.y * ndcY * halfHeight,
+            forward.z + right.z * ndcX * halfHeight * aspectRatio() + up.z * ndcY * halfHeight});
+    }
+    if (std::abs(direction.z) < 1e-12) return std::nullopt;
+    const double distance = (elevation - origin.z) / direction.z;
+    if (distance < 0.0 || !std::isfinite(distance)) return std::nullopt;
+    return CameraPoint3d{origin.x + direction.x * distance,
+        origin.y + direction.y * distance, elevation};
+}
+
 void EditorCamera::writeViewProjection(float* out16) const noexcept {
     const auto matrix = viewProjection();
     std::copy(matrix.begin(), matrix.end(), out16);

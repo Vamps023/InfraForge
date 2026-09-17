@@ -7,11 +7,11 @@ import { create } from 'zustand'
 //
 // Minimum sizes are enforced so panels cannot collapse to unusable widths.
 
-export type PanelRegion = 'left' | 'right' | 'bottom'
+export type PanelRegion = 'left' | 'right' | 'bottom' | 'contextEditor'
 
 export interface PanelState {
   visible: boolean
-  // For left/right: width in CSS px. For bottom: height in CSS px.
+  // For left/right: width in CSS px. For bottom and contextEditor: height in CSS px.
   size: number
 }
 
@@ -23,12 +23,14 @@ export const PANEL_MIN_SIZE: Record<PanelRegion, number> = {
   left: 180,
   right: 200,
   bottom: 80,
+  contextEditor: 120,
 }
 
 export const PANEL_DEFAULT_SIZE: Record<PanelRegion, number> = {
   left: 250,
   right: 290,
   bottom: 150,
+  contextEditor: 200,
 }
 
 const PREFERENCES_STORAGE_KEY = 'infraforge.editor.layout.v1'
@@ -39,6 +41,7 @@ export function defaultPreferences(): LayoutPreferences {
       left: { visible: true, size: PANEL_DEFAULT_SIZE.left },
       right: { visible: true, size: PANEL_DEFAULT_SIZE.right },
       bottom: { visible: true, size: PANEL_DEFAULT_SIZE.bottom },
+      contextEditor: { visible: true, size: PANEL_DEFAULT_SIZE.contextEditor },
     },
   }
 }
@@ -53,6 +56,7 @@ export const PANEL_MAX_SIZE: Record<PanelRegion, number> = {
   left: 2400,
   right: 2400,
   bottom: 1600,
+  contextEditor: 1200,
 }
 
 export function clampPanelSize(region: PanelRegion, size: number): number {
@@ -107,6 +111,7 @@ function normalizePreferences(parsed: Partial<LayoutPreferences> | undefined): L
       left: region('left'),
       right: region('right'),
       bottom: region('bottom'),
+      contextEditor: region('contextEditor'),
     },
   }
 }

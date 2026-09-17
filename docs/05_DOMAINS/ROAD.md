@@ -11,8 +11,8 @@ Canonical Road (domain)
   → ReferenceAlignment (Line / CircularArc / Clothoid)
   → ElevationProfile
   → SuperelevationProfile
-  → Derived Tessellation (future, rebuildable)
-  → Render Projection (future, renderer-owned)
+  → Derived Tessellation (implemented, rebuildable)
+  → Render Projection (implemented, renderer consumes deltas)
 ```
 
 Never: `Rendered Mesh → Road Truth`.
@@ -141,10 +141,10 @@ SourcePolyline (source coordinates, e.g. WGS84)
   tags, import timestamp), and protected anchors.
 - Authored roads have an empty `SourcePolyline` and `provider == Authored`.
 - Protected anchors (junction locations, endpoints, user-pinned points) are
-  reference data that future fitting/smoothing must not move.
+  reference data that fitting/smoothing must not move.
 - The `AlignmentFitInput`/`AlignmentFitResult` interface establishes the
-  contract for the future shared fitter. The full OSM/OpenDRIVE importer is
-  out of scope (issues #9/#15).
+  contract for the shared fitter (implemented). The full OSM/OpenDRIVE
+  importer is out of scope (issues #9/#15).
 
 ## Persistence
 
@@ -153,6 +153,10 @@ Road persistence integrates with the existing SQLite/project architecture:
 - **Migration 7** ("road canonical geometry") creates explicit tables for
   roads, segments, elevation/superelevation breakpoints, source data, source
   vertices, and protected anchors.
+- **Migration 8** persists the fitting contract, **migration 9** separates
+  editable control vertices from immutable source evidence, and **migration
+  10** persists protected-anchor alignment boundary indices so an intentional
+  curvature discontinuity reconstructs identically after reopen.
 - `ProjectStore` port gains `roads()`, `insertRoad()`, `removeRoad()`.
 - `SqliteProjectStore` implements these with transactional commits that advance
   the project revision.
@@ -168,14 +172,39 @@ Given identical canonical road parameters, evaluation is identical. The
 clothoid quadrature uses fixed constants and bounded deterministic subdivision.
 Tests use explicit tolerances.
 
+## Implemented Integration
+
+- **Fitting**: the `AlignmentFitter` converts conditioned source polylines
+  into canonical alignments with line/arc/clothoid segments and real
+  clothoid transitions at curvature boundaries.
+- **World partition**: roads register with `WorldState` for spatial
+  indexing and chunk invalidation. Road edits invalidate only affected
+  chunks, not the full world.
+- **Authoring and editing**: the Roads workspace supports click placement with
+  a transient Vulkan ribbon preview, finish/cancel, viewport road picking,
+  and inspector actions to move, insert, or delete editable controls.
+  Screen coordinates are converted by the native camera to canonical project
+  coordinates; authoring does not fabricate an elevation.
+- **Renderer transport**: terrain and roads share one strictly validated
+  `scene` command with optional domain deltas. Applying one domain never clears
+  the other; a combined empty scene clears both at project close.
+- **Chunk/GPU derivation**: road ribbons are partitioned into stable
+  `RoadId + ChunkCoord` meshes with bit-identical shared boundary samples.
+  Unchanged road tessellations are cached, and `RoadPass` fingerprints keyed
+  meshes so edits upload only changed buffers. Replaced buffers retire after
+  in-flight frames without a normal-edit `vkDeviceWaitIdle` stall.
+- **Persistence**: roads persist through SQLite migration 7 with full
+  provenance, profiles, and protected anchors.
+- **Undo/redo**: global road undo/redo with proper event semantics
+  (Created/Removed/GeometryChanged) and affected-chunk invalidation.
+- **Source-deviation validation**: deterministic per-segment nearest-point
+  evaluation with explicit tolerance enforcement.
+
 ## Future Integration
 
 - **Lanes/junctions** (Issue #8): will attach to the reference alignment via
   cross-sections and topology nodes.
 - **OSM/OpenDRIVE import** (Issue #9/#15): will use the fitter interface to
   convert conditioned source polylines into canonical alignments.
-- **World partition**: roads will register with `WorldState` for spatial
-  indexing and chunk invalidation.
-- **Renderer**: will consume derived tessellation, not canonical geometry.
 - **Terrain integration**: terrain may provide elevation snapping, but the
   road domain functions independently.

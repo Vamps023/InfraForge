@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { cleanup, render, screen, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ContextToolbar } from './ContextToolbar'
 import { useWorkspaceStore } from './workspaceStore'
@@ -7,10 +7,17 @@ import { useShellUiStore } from './shellUiStore'
 import { useProjectStore } from '../../features/project/projectStore'
 import { registerBuiltinCommands, unregisterBuiltinCommands } from '../commands/builtinCommands'
 import { registerTerrainCommands, unregisterTerrainCommands } from '../../features/terrain/terrainCommands'
+import { registerRoadCommands, unregisterRoadCommands } from '../../features/road/roadCommands'
 import { commandRegistry, type CommandContext } from '../commands/useCommands'
 import type { AvailabilityContext } from '../availability'
 import { create } from '@bufbuild/protobuf'
 import { ProjectSummarySchema, type ProjectSummary } from '@infraforge/protocol'
+import { useRoadToolStore } from '../../features/road/roadToolStore'
+
+// Context toolbar tests. In addition to the behavioral command-routing tests
+// below, a group-composition suite pins the reference-informed grouping and
+// accessibility contract (labeled role="group" sections) so the toolbar
+// cannot silently regress to a flat, unlabeled button row.
 
 function readyContext(): AvailabilityContext {
   return {
@@ -20,6 +27,55 @@ function readyContext(): AvailabilityContext {
     viewportActive: true,
   }
 }
+
+describe('ContextToolbar group composition', () => {
+  it('organizes the terrain toolbar into labeled groups', () => {
+    useProjectStore.getState().setSummary(makeSummary())
+    useWorkspaceStore.getState().setWorkspace('terrain')
+    render(<ContextToolbar context={ctx(readyContext())} />)
+    expect(screen.getByRole('group', { name: 'Terrain acquisition' })).toBeInTheDocument()
+    expect(screen.getByRole('group', { name: 'Terrain management' })).toBeInTheDocument()
+  })
+
+  it('organizes the roads toolbar into draw/author/history groups', () => {
+    useProjectStore.getState().setSummary(makeSummary())
+    useWorkspaceStore.getState().setWorkspace('roads')
+    render(<ContextToolbar context={ctx(readyContext())} />)
+    expect(screen.getByRole('group', { name: 'Road authoring' })).toBeInTheDocument()
+    expect(screen.getByRole('group', { name: 'Road edit history' })).toBeInTheDocument()
+    // The drawing-mode group is transient: absent when not drawing.
+    expect(screen.queryByRole('group', { name: 'Road drawing mode' })).not.toBeInTheDocument()
+  })
+
+  it('transitions cleanly between idle and road drawing without hook violations', async () => {
+    useProjectStore.getState().setSummary(makeSummary())
+    useWorkspaceStore.getState().setWorkspace('roads')
+    const { rerender } = render(<ContextToolbar context={ctx(readyContext())} />)
+
+    // 1. Initially idle: no road drawing group
+    expect(screen.queryByRole('group', { name: 'Road drawing mode' })).not.toBeInTheDocument()
+
+    // 2. Begin drawing
+    act(() => {
+      useRoadToolStore.getState().begin('Test Road', 0.1, null)
+    })
+    rerender(<ContextToolbar context={ctx(readyContext())} />)
+
+    // Drawing group appears with Finish and Cancel buttons
+    expect(screen.getByRole('group', { name: 'Road drawing mode' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Finish/ })).toBeInTheDocument()
+    const cancelBtn = screen.getByRole('button', { name: /Cancel/ })
+    expect(cancelBtn).toBeInTheDocument()
+
+    // 3. Click cancel
+    await userEvent.click(cancelBtn)
+    rerender(<ContextToolbar context={ctx(readyContext())} />)
+
+    // Drawing group disappears cleanly
+    expect(screen.queryByRole('group', { name: 'Road drawing mode' })).not.toBeInTheDocument()
+    expect(useRoadToolStore.getState().mode).toBe('idle')
+  })
+})
 
 function noProjectContext(): AvailabilityContext {
   return {
@@ -60,6 +116,7 @@ beforeEach(() => {
   }
   registerBuiltinCommands({ getEngineClient: () => null })
   registerTerrainCommands({ getEngineClient: () => null })
+  registerRoadCommands({ getEngineClient: () => null })
   useWorkspaceStore.getState().setWorkspace('terrain')
   useShellUiStore.getState().closeDialog()
   useProjectStore.getState().clearProject()
@@ -68,6 +125,7 @@ beforeEach(() => {
 afterEach(() => {
   unregisterBuiltinCommands()
   unregisterTerrainCommands()
+  unregisterRoadCommands()
   useWorkspaceStore.getState().setWorkspace('terrain')
   useShellUiStore.getState().closeDialog()
   useProjectStore.getState().clearProject()

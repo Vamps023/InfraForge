@@ -3,6 +3,9 @@ import { useGeoStore } from '../geo/geoStore'
 import { useSelectionStore } from '../../editor/selection/selectionStore'
 import { useTerrainStore } from '../terrain/terrainStore'
 import { fetchTerrainScene, refreshTerrainDatasets, refreshTerrainJobs } from '../terrain/terrainApi'
+import { useRoadStore } from '../road/roadStore'
+import { useRoadToolStore } from '../road/roadToolStore'
+import { listRoads, fetchRoadScene } from '../road/roadApi'
 import type { EngineClient } from '../../lib/engineSession'
 import type { EventEnvelope } from '@infraforge/protocol'
 
@@ -29,6 +32,7 @@ export function applyProjectEvent(client: EngineClient, event: EventEnvelope) {
       // it before applying results, so a stale response from project A
       // cannot populate project B's store.
       const sessionToken = useTerrainStore.getState().beginSession()
+      const roadSessionToken = useRoadStore.getState().beginSession()
       void (async () => {
         await refreshTerrainDatasets(client).catch(() => undefined)
         // Check if the project changed during the async refresh.
@@ -41,6 +45,16 @@ export function applyProjectEvent(client: EngineClient, event: EventEnvelope) {
           window.infraforgeDesktop?.setViewportScene?.(scene as Record<string, unknown>)
         }
       })()
+      // Refresh road projection state for the newly opened project.
+      void (async () => {
+        await listRoads(client).catch(() => undefined)
+        if (useRoadStore.getState().sessionToken !== roadSessionToken) return
+        const roadScene = await fetchRoadScene(client).catch(() => null)
+        if (useRoadStore.getState().sessionToken !== roadSessionToken) return
+        if (roadScene) {
+          window.infraforgeDesktop?.setViewportScene?.(roadScene as Record<string, unknown>)
+        }
+      })()
       break
     case 'projectClosed':
       store.clearProject()
@@ -50,6 +64,9 @@ export function applyProjectEvent(client: EngineClient, event: EventEnvelope) {
       useSelectionStore.getState().clear()
       // Clear terrain projection state: datasets belong to the closed project.
       useTerrainStore.getState().reset()
+      // Clear road projection state: roads belong to the closed project.
+      useRoadStore.getState().reset()
+      useRoadToolStore.getState().cancel()
       // BLOCKER 3: send an empty scene to the viewport so the previous
       // project's GPU terrain is released immediately. BLOCKER 7: use the
       // typed adapter so the empty scene has the full viewport schema
@@ -61,6 +78,10 @@ export function applyProjectEvent(client: EngineClient, event: EventEnvelope) {
         tiles: [],
         missingTiles: 0,
         revision: 0,
+      })
+      window.infraforgeDesktop?.setViewportScene?.({
+        originEasting: 0, originNorthing: 0, originHeight: 0,
+        meshes: [], revision: 0,
       })
       break
     case 'projectRevisionChanged':

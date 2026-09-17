@@ -71,10 +71,30 @@ ControlCommand parseControlCommand(const std::string_view line) {
     }
 
     if (type == "scene") {
-        // The terrain scene body is parsed and validated by the renderer
-        // layer's scene parser (same explicit-rejection rules).
+        const bool hasTerrain = json.contains("terrain");
+        const bool hasRoads = json.contains("roads");
+        if (!hasTerrain && !hasRoads) {
+            failParse("scene command requires at least one of 'terrain' or 'roads'");
+        }
+        if (json.size() != 1U + static_cast<std::size_t>(hasTerrain)
+                + static_cast<std::size_t>(hasRoads)) {
+            failParse("scene command contains unknown fields");
+        }
         try {
-            return SceneCommand{.scene = parseTerrainScene(line)};
+            SceneCommand command;
+            if (hasTerrain) {
+                if (!json.at("terrain").is_object()) {
+                    failParse("scene field 'terrain' must be an object");
+                }
+                command.terrain = parseTerrainScene(json.at("terrain").dump());
+            }
+            if (hasRoads) {
+                if (!json.at("roads").is_object()) {
+                    failParse("scene field 'roads' must be an object");
+                }
+                command.roads = parseRoadScene(json.at("roads").dump());
+            }
+            return command;
         } catch (const CommandParseError& error) {
             failParse(std::string("scene command rejected: ") + error.message);
         }
@@ -155,6 +175,14 @@ std::string formatStatusRecord(
         record["vulkan"] = vulkanVersion;
     }
     return std::string{kStatusPrefix} + record.dump();
+}
+
+std::string formatInteractionRecord(const double easting, const double northing,
+    const double height, const std::string_view roadId) {
+    nlohmann::json record = {{"kind", "primary-click"}, {"easting", easting},
+        {"northing", northing}, {"height", height}};
+    if (!roadId.empty()) record["roadId"] = roadId;
+    return std::string{kInteractionPrefix} + record.dump();
 }
 
 } // namespace infraforge::viewport

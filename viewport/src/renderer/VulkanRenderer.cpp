@@ -20,10 +20,12 @@ constexpr std::uint64_t kAcquireTimeout = std::numeric_limits<std::uint64_t>::ma
 VulkanRenderer::VulkanRenderer(
     const std::uint64_t nativeWindowHandle,
     RendererStatusCallback statusCallback,
-    const bool validationEnabled)
+    const bool validationEnabled,
+    ViewportInteractionCallback interactionCallback)
     : nativeWindowHandle_(nativeWindowHandle),
       statusCallback_(std::move(statusCallback)),
-      validationEnabled_(validationEnabled) {}
+      validationEnabled_(validationEnabled),
+      interactionCallback_(std::move(interactionCallback)) {}
 
 VulkanRenderer::~VulkanRenderer() {
     stop();
@@ -79,6 +81,9 @@ bool VulkanRenderer::start(const std::uint32_t initialWidth, const std::uint32_t
             device_.physical(), device_.get(), device_.queue(), device_.queueFamily(),
             swapchain_.renderPass());
         terrainPass_.create(
+            device_.physical(), device_.get(), device_.queue(), device_.queueFamily(),
+            swapchain_.renderPass());
+        roadPass_.create(
             device_.physical(), device_.get(), device_.queue(), device_.queueFamily(),
             swapchain_.renderPass());
 
@@ -162,6 +167,14 @@ void VulkanRenderer::setTerrainScene(const TerrainScene& scene) {
     terrainPass_.setScene(scene);
 }
 
+void VulkanRenderer::setRoadScene(const RoadScene& scene) {
+    {
+        std::lock_guard lock{stateMutex_};
+        pendingRoadScene_ = scene;
+    }
+    roadPass_.setScene(scene);
+}
+
 void VulkanRenderer::postCameraInput(const SurfaceInputEvent& event) {
     std::lock_guard lock{inputMutex_};
     // Bounded queue: input arrives at human rates; dropping stale deltas
@@ -182,6 +195,7 @@ void VulkanRenderer::stop() {
     if (initialized_) {
         vkDeviceWaitIdle(device_.get());
         terrainPass_.destroy();
+        roadPass_.destroy();
         gridPass_.destroy();
         swapchain_.destroy();
         commandPool_.reset();
@@ -250,6 +264,12 @@ void VulkanRenderer::runLoop(std::atomic_bool& running) {
             }
         }
 
+        // Adopt pending road scene (no camera framing needed for roads).
+        {
+            std::lock_guard lock{stateMutex_};
+            pendingRoadScene_.reset();
+        }
+
         // Drain raw mouse input into camera motion; the render thread owns
         // the camera, so application happens here (grab-style panning and
         // exponential wheel zoom).
@@ -260,7 +280,20 @@ void VulkanRenderer::runLoop(std::atomic_bool& running) {
                 events.swap(inputQueue_);
             }
             for (const SurfaceInputEvent& event : events) {
-                cameraController_.handleInput(event);
+                if (event.primaryClick) {
+                    const auto& camera = cameraController_.camera();
+                    const auto world = camera.screenToHorizontalPlane(
+                        event.screenX, event.screenY, camera.renderOrigin().z);
+                    if (world.has_value() && interactionCallback_) {
+                        interactionCallback_(ViewportInteraction{
+                            .easting = world->x,
+                            .northing = world->y,
+                            .height = world->z,
+                            .roadId = roadPass_.pickRoad(*world, camera.renderOrigin())});
+                    }
+                } else {
+                    cameraController_.handleInput(event);
+                }
             }
         }
 
@@ -385,6 +418,8 @@ void VulkanRenderer::renderFrame(std::atomic_bool& running) {
     const EditorCamera& camera = cameraController_.camera();
     terrainPass_.update(camera);
     terrainPass_.record(command, camera);
+    roadPass_.update(camera);
+    roadPass_.record(command, camera);
     gridPass_.record(command, camera);
 
     vkCmdEndRenderPass(command);

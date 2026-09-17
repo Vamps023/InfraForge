@@ -52,6 +52,11 @@ public:
     // Render thread: bind the pipeline and draw resident tiles.
     void record(const VkCommandBuffer command, const EditorCamera& camera) const;
 
+    void setHeightScale(float scale) noexcept { heightScale_ = scale; }
+    [[nodiscard]] float heightScale() const noexcept { return heightScale_; }
+    void setRenderMode(std::uint32_t mode) noexcept { renderMode_ = mode; }
+    [[nodiscard]] std::uint32_t renderMode() const noexcept { return renderMode_; }
+
     [[nodiscard]] bool created() const noexcept { return device_ != VK_NULL_HANDLE; }
     [[nodiscard]] std::size_t residentCount() const noexcept { return cache_.residentTiles().size(); }
 
@@ -70,7 +75,7 @@ private:
         std::string datasetUuid;
         std::uint64_t datasetRevision{0};
         std::uint32_t lod{0};
-        std::vector<float> vertices; // pos(3) + normal(3)
+        std::vector<float> vertices; // pos(3) + normal(3) + uv(2)
         std::vector<std::uint32_t> indices;
         std::optional<TileGpu> gpu;
     };
@@ -98,6 +103,11 @@ private:
 
     std::mutex sceneMutex_;
     std::optional<TerrainScene> pendingScene_;
+
+    float heightScale_{1.0f};
+    std::uint32_t renderMode_{0};
+    mutable float minHeight_{0.0f};
+    mutable float maxHeight_{1000.0f};
 };
 
 } // namespace infraforge::viewport

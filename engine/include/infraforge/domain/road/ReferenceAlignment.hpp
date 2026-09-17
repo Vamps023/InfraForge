@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <expected>
+#include <set>
 #include <vector>
 
 namespace infraforge::domain::road {
@@ -47,11 +48,18 @@ public:
     // builder never silently repairs invalid engineering geometry: on any
     // failure it returns the collected typed diagnostics instead of an
     // alignment.
+    //
+    // `anchorBoundarySegments` is the set of segment indices that start at
+    // a protected anchor. At those boundaries the curvature-continuity
+    // check is skipped: a protected anchor (e.g. a junction) may carry an
+    // intentional curvature discontinuity, and the anchor position takes
+    // precedence over smoothness (Blocker 8).
     [[nodiscard]] static std::expected<ReferenceAlignment, std::vector<RoadDiagnostic>> build(
         std::vector<AlignmentSegment> segments,
         double positionTolerance = kDefaultPositionTolerance,
         double headingTolerance = kDefaultHeadingTolerance,
-        double curvatureTolerance = kDefaultCurvatureTolerance);
+        double curvatureTolerance = kDefaultCurvatureTolerance,
+        const std::set<std::size_t>& anchorBoundarySegments = {});
 
     // Evaluates position, heading, and curvature at station s. Stations
     // outside [0, totalLength()] clamp to the nearest end deterministically

@@ -14,7 +14,8 @@ export function registerTerrainInspectorSection(deps: TerrainInspectorDeps): voi
   const section = {
     id: 'terrain-dataset',
     label: 'Terrain Dataset',
-    order: 50,
+    category: 'geometry' as const,
+    order: 0,
     applies: (context: InspectorSectionContext) => {
       const id = context.primaryId
       return id !== null && id.startsWith('terrain:')

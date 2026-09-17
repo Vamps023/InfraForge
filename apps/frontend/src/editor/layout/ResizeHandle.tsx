@@ -125,7 +125,7 @@ export function ResizeHandle({ region, edge, ariaLabel }: ResizeHandleProps) {
     [edge, region, setPanelSize, size],
   )
 
-  const orientation = region === 'bottom' ? 'horizontal' : 'vertical'
+  const orientation = region === 'bottom' || region === 'contextEditor' ? 'horizontal' : 'vertical'
   return (
     <div
       role="separator"

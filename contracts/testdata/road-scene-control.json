@@ -1,0 +1,1 @@
+{"type":"scene","roads":{"originEasting":500000,"originNorthing":4650000,"originHeight":120,"roads":[{"roadId":"123e4567-e89b-42d3-a456-426614174000","chunkX":"12","chunkY":"-4","vertices":[{"x":0,"y":0,"z":0,"nx":0,"ny":0,"nz":1},{"x":1,"y":0,"z":0,"nx":0,"ny":0,"nz":1},{"x":0,"y":1,"z":0,"nx":0,"ny":0,"nz":1}],"indices":[0,1,2]}],"roadRevision":"9007199254740993"}}

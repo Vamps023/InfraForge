@@ -4,6 +4,7 @@
 #include "infraforge/application/GeoService.hpp"
 #include "infraforge/application/JobSystem.hpp"
 #include "infraforge/application/ProjectService.hpp"
+#include "infraforge/application/RoadService.hpp"
 #include "infraforge/application/TerrainService.hpp"
 #include "infraforge/application/WorldState.hpp"
 #include "infraforge/persistence/GdalTerrainSource.hpp"
@@ -124,8 +125,25 @@ private:
     void handleTerrainListSources(const std::string& connectionId, const protocol::v1::Frame& frame);
     void handleTerrainPlanDownload(const std::string& connectionId, const protocol::v1::Frame& frame);
     void handleTerrainDownloadSelected(const std::string& connectionId, const protocol::v1::Frame& frame);
+    void handleTerrainExport(const std::string& connectionId, const protocol::v1::Frame& frame);
     void handleJobCancel(const std::string& connectionId, const protocol::v1::Frame& frame);
     void handleJobList(const std::string& connectionId, const protocol::v1::Frame& frame);
+
+    // Road command handlers.
+    void handleCreateRoad(const std::string& connectionId, const protocol::v1::Frame& frame);
+    void handleDeleteRoad(const std::string& connectionId, const protocol::v1::Frame& frame);
+    void handleRenameRoad(const std::string& connectionId, const protocol::v1::Frame& frame);
+    void handleInsertRoadControl(const std::string& connectionId, const protocol::v1::Frame& frame);
+    void handleMoveRoadControl(const std::string& connectionId, const protocol::v1::Frame& frame);
+    void handleDeleteRoadControl(const std::string& connectionId, const protocol::v1::Frame& frame);
+    void handleFitRoadSource(const std::string& connectionId, const protocol::v1::Frame& frame);
+    void handleUpdateRoadElevation(const std::string& connectionId, const protocol::v1::Frame& frame);
+    void handleUpdateRoadSuperelevation(const std::string& connectionId, const protocol::v1::Frame& frame);
+    void handleUndoRoad(const std::string& connectionId, const protocol::v1::Frame& frame);
+    void handleRedoRoad(const std::string& connectionId, const protocol::v1::Frame& frame);
+    void handleListRoads(const std::string& connectionId, const protocol::v1::Frame& frame);
+    void handleGetRoad(const std::string& connectionId, const protocol::v1::Frame& frame);
+    void handleGetRoadScene(const std::string& connectionId, const protocol::v1::Frame& frame);
 
     // Executes one service use case, then emits the correlated result frame
     // (state or closed) and the derived event frames. Argument-validation
@@ -142,6 +160,7 @@ private:
 
     void publishEvents(std::span<const ProjectEvent> events);
     void publishTerrainEvent(const TerrainServiceEvent& event);
+    void publishRoadEvent(const RoadServiceEvent& event);
 
     // Emits a background-job lifecycle event frame using the canonical 1.3
     // event format (owned by Issue #5). These are real events sourced from
@@ -197,6 +216,7 @@ private:
     WorldState world_;
     std::optional<JobSystem> jobs_;
     std::optional<TerrainService> terrainService_;
+    std::optional<RoadService> roadService_;
 
     // Tracks whether any terrain-scoped diagnostics have been emitted, so
     // close only emits diagnosticCleared("terrain") when there is something

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "infraforge/viewport/renderer/RoadScene.hpp"
 #include "infraforge/viewport/renderer/TerrainScene.hpp"
 #include "infraforge/viewport/platform/SurfaceInput.hpp"
 
@@ -15,6 +16,7 @@ namespace infraforge::viewport {
 
 inline constexpr std::string_view kReadyPrefix = "INFRAFORGE_VIEWPORT_READY ";
 inline constexpr std::string_view kStatusPrefix = "INFRAFORGE_VIEWPORT_STATUS ";
+inline constexpr std::string_view kInteractionPrefix = "INFRAFORGE_VIEWPORT_INTERACTION ";
 
 // Physical-pixel placement of the child surface, in SCREEN coordinates. The
 // viewport converts to parent-client coordinates at apply time via
@@ -47,7 +49,8 @@ struct VisibilityCommand {
 struct ShutdownCommand {
 };
 struct SceneCommand {
-    TerrainScene scene;
+    std::optional<TerrainScene> terrain;
+    std::optional<RoadScene> roads;
 };
 struct CameraCommand {
     ViewportAction action{ViewportAction::None};
@@ -74,5 +77,7 @@ struct CommandParseError : std::runtime_error {
     std::string_view gpuName = {},
     std::string_view vulkanVersion = {},
     bool validationEnabled = false);
+[[nodiscard]] std::string formatInteractionRecord(
+    double easting, double northing, double height, std::string_view roadId = {});
 
 } // namespace infraforge::viewport

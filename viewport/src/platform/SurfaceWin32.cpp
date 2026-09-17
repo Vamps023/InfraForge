@@ -54,6 +54,12 @@ LRESULT CALLBACK viewportWndProc(const HWND window, const UINT message, const WP
         (void)SetCapture(window);
         (void)SetFocus(window);
         return 0;
+    case WM_LBUTTONUP:
+        dispatchSurfaceInput(SurfaceInputEvent{
+            .primaryClick = true,
+            .screenX = static_cast<double>(GET_X_LPARAM(lParam)),
+            .screenY = static_cast<double>(GET_Y_LPARAM(lParam))});
+        return 0;
     case WM_MBUTTONUP:
     case WM_RBUTTONUP:
         cancelGesture();

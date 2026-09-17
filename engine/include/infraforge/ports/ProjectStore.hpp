@@ -101,6 +101,12 @@ public:
     [[nodiscard]] virtual domain::road::RoadRecord insertRoad(
         const domain::road::RoadRecord& road) = 0;
 
+    // Replaces an existing canonical road's full record (segments, profiles,
+    // source, anchors) and advances the project revision. The road must
+    // already exist; this call does not create it.
+    [[nodiscard]] virtual domain::road::RoadRecord updateRoad(
+        const domain::road::RoadRecord& road) = 0;
+
     // Removes a road and all its segments/profiles/source data, advancing
     // the project revision.
     virtual void removeRoad(const std::string& roadId) = 0;

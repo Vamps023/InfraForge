@@ -2,7 +2,20 @@
 
 The app shell owns persistent editor composition, navigation, and transient UI state. It never owns canonical domain behavior or project truth.
 
+<<<<<<< HEAD
+## Reference-informed composition
+
+The shell follows a professional geospatial/CAD-editor composition: a compact
+application header, vertical workspace rail, contextual toolbar, docked scene
+navigation, maximum-area native viewport, selection inspector, bottom
+diagnostics/operations dock, and a concise status bar. OpenGeoStudio is a UX
+reference for this composition only; InfraForge retains its own React,
+WebSocket/Protobuf, native-engine, and Vulkan process boundaries.
+
+## Regions
+=======
 ## UX objective
+>>>>>>> origin/main
 
 InfraForge should feel like one desktop engineering tool regardless of active domain. Workspace changes must preserve the application frame and familiar interaction locations while swapping only the tools, projections, and contextual editors relevant to the task.
 
@@ -115,6 +128,12 @@ Panel size, visibility, docking, active Navigator tab, context-editor size, and 
 
 A future layout profile system may provide sensible defaults per workspace, but user customization must be respected rather than reset on every workspace switch.
 
+The shell must provide a safe reset-layout action and preserve a usable
+viewport, keyboard focus path, and reachable panel headers after DPI or
+multi-monitor changes. A workspace may contribute dock content only through
+shell-defined presentation interfaces; it may not introduce another app shell
+or a cross-domain canonical store.
+
 ## Engine state
 
 The shell visibly distinguishes `starting`, `ready`, `disconnected`, `failed`, and `shutting_down`. Domain controls requiring the engine are disabled when the engine session is unavailable, with a discoverable reason.
@@ -123,11 +142,11 @@ The shell visibly distinguishes `starting`, `ready`, `disconnected`, `failed`, a
 
 Before a project is open, Home/Project shows real project actions and recent projects. Workspace empty states explain the next supported action using real commands; they must not inject sample terrain, roads, assets, or fake jobs.
 
-## Native viewport
-
 The viewport host must correctly handle resize, focus, pointer capture, DPI scaling, maximize/restore, multi-monitor movement, tab/dock visibility, destruction, renderer failure, and blocking React overlays.
 
 Because the native Vulkan child surface cannot be covered by ordinary CSS z-index, blocking dialogs/context surfaces that overlap its bounds must use the established viewport visibility policy or native-side overlay strategy. The viewport host remains mounted for process lifecycle stability.
+
+Viewport overlays and contextual authoring controls are presentation aids. They must route semantic operations through the existing command path and must not create renderer-owned or frontend-owned road, terrain, CRS, or project truth.
 
 ## Interaction invariants
 
@@ -138,3 +157,4 @@ Because the native Vulkan child surface cannot be covered by ordinary CSS z-inde
 - Direct manipulation previews before commit where practical.
 - Numeric edits show units and validation inline.
 - Every workspace uses the central command registry and common availability predicates.
+

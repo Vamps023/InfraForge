@@ -21,6 +21,7 @@ export interface ViewportStatus {
 
 const READY_PREFIX = 'INFRAFORGE_VIEWPORT_READY '
 const STATUS_PREFIX = 'INFRAFORGE_VIEWPORT_STATUS '
+const INTERACTION_PREFIX = 'INFRAFORGE_VIEWPORT_INTERACTION '
 const DEFAULT_STARTUP_TIMEOUT_MS = 10_000
 const SHUTDOWN_GRACE_MS = 2_000
 
@@ -34,6 +35,9 @@ export interface ViewportSupervisorOptions {
   // Lifecycle-test seam: readiness timeout. Production uses 10 seconds.
   startupTimeoutMs?: number
 }
+
+export interface RoadPreviewPoint { easting: number; northing: number }
+const ROAD_PREVIEW_HALF_WIDTH = 5
 
 function isStatusState(value: unknown): value is ViewportStatus['state'] {
   return (
@@ -56,6 +60,8 @@ export class ViewportSupervisor {
   private child: ViewportChild | null = null
   private starting = false
   private statusListener: ((status: ViewportStatus) => void) | null = null
+  private interactionListener: ((interaction: ViewportInteraction) => void) | null = null
+  private latestRoadScene: Record<string, unknown> | null = null
   private readonly options: ViewportSupervisorOptions
   private readonly startupTimeoutMs: number
   private status: ViewportStatus = {
@@ -70,6 +76,10 @@ export class ViewportSupervisor {
 
   setStatusListener(listener: (status: ViewportStatus) => void): void {
     this.statusListener = listener
+  }
+
+  setInteractionListener(listener: (interaction: ViewportInteraction) => void): void {
+    this.interactionListener = listener
   }
 
   snapshot(): ViewportStatus {
@@ -132,7 +142,77 @@ export class ViewportSupervisor {
     }
   }
 
+  // Blocker 1: Forwards the engine-derived road scene projection to the
+  // viewport through the single coherent "scene" control message type.
+  // The native ControlProtocol's "scene" handler parses BOTH terrain
+  // (parseTerrainScene) and road (parseRoadScene) data from the same JSON.
+  // Road-only updates send a "scene" with a "roads" field and no "tiles"
+  // field, so the terrain scene is empty and only the road scene updates.
+  // This avoids a competing "roadScene" control type that the native
+  // protocol does not recognize.
+  sendRoadScene(scene: Record<string, unknown>): void {
+    // Validate the road scene payload is a bounded plain object with roads.
+    if (typeof scene !== 'object' || scene === null || Array.isArray(scene)) {
+      return
+    }
+    const record = scene as Record<string, unknown>
+    if (!Array.isArray(record.meshes)) {
+      return
+    }
+    this.latestRoadScene = record
+    this.sendRoadSceneWithPreview(record, [])
+  }
+
+  sendRoadPreview(points: RoadPreviewPoint[]): void {
+    if (this.latestRoadScene) this.sendRoadSceneWithPreview(this.latestRoadScene, points)
+  }
+
+  private sendRoadSceneWithPreview(record: Record<string, unknown>, points: RoadPreviewPoint[]): void {
+    const meshes = [...(record.meshes as unknown[])]
+    if (points.length >= 2) {
+      const originEasting = Number(record.originEasting ?? 0)
+      const originNorthing = Number(record.originNorthing ?? 0)
+      const vertices: Array<Record<string, number>> = []
+      const indices: number[] = []
+      for (let i = 0; i < points.length; i += 1) {
+        const previous = points[Math.max(0, i - 1)]!
+        const next = points[Math.min(points.length - 1, i + 1)]!
+        const point = points[i]!
+        const dx = next.easting - previous.easting
+        const dy = next.northing - previous.northing
+        const length = Math.hypot(dx, dy)
+        if (!Number.isFinite(length) || length === 0) return
+        const offsetX = -dy / length * ROAD_PREVIEW_HALF_WIDTH
+        const offsetY = dx / length * ROAD_PREVIEW_HALF_WIDTH
+        vertices.push({ x: point.easting + offsetX - originEasting,
+          y: point.northing + offsetY - originNorthing, z: 0, nx: 0, ny: 0, nz: 1 })
+        vertices.push({ x: point.easting - offsetX - originEasting,
+          y: point.northing - offsetY - originNorthing, z: 0, nx: 0, ny: 0, nz: 1 })
+        if (i > 0) {
+          const base = i * 2
+          indices.push(base - 2, base - 1, base, base - 1, base + 1, base)
+        }
+      }
+      meshes.push({ roadId: '__authoring_preview__', chunkX: '0', chunkY: '0', vertices, indices })
+    }
+    // Forward as a "scene" type with "roads" field so the native viewport's
+    // single scene parser handles both terrain and road data coherently.
+    const sceneControl: Record<string, unknown> = {
+      type: 'scene',
+      roads: {
+        originEasting: record.originEasting,
+        originNorthing: record.originNorthing,
+        originHeight: record.originHeight,
+        roads: meshes,
+        roadRevision: typeof record.revision === 'bigint'
+          ? record.revision.toString() : String(record.revision ?? 0),
+      },
+    }
+    this.sendControl(sceneControl)
+  }
+
   sendEmptyScene(): void {
+    this.latestRoadScene = null
     this.sendControl(emptyViewportScene() as unknown as Record<string, unknown>)
   }
 
@@ -218,6 +298,10 @@ export class ViewportSupervisor {
         }
         if (line.startsWith(STATUS_PREFIX)) {
           this.handleStatusLine(line.slice(STATUS_PREFIX.length))
+          return
+        }
+        if (line.startsWith(INTERACTION_PREFIX)) {
+          this.handleInteractionLine(line.slice(INTERACTION_PREFIX.length))
         }
       })
 
@@ -297,6 +381,21 @@ export class ViewportSupervisor {
     this.statusListener?.(status)
   }
 
+  private handleInteractionLine(payload: string): void {
+    try {
+      const parsed = JSON.parse(payload) as Record<string, unknown>
+      if (parsed.kind !== 'primary-click' || typeof parsed.easting !== 'number' ||
+          typeof parsed.northing !== 'number' || typeof parsed.height !== 'number' ||
+          !Number.isFinite(parsed.easting) || !Number.isFinite(parsed.northing) ||
+          !Number.isFinite(parsed.height)) return
+      this.interactionListener?.({ kind: 'primary-click', easting: parsed.easting,
+        northing: parsed.northing, height: parsed.height,
+        roadId: typeof parsed.roadId === 'string' ? parsed.roadId : undefined })
+    } catch {
+      // Malformed child output is ignored; it never becomes an editor action.
+    }
+  }
+
   private killChild(): void {
     const child = this.child
     this.child = null
@@ -304,6 +403,14 @@ export class ViewportSupervisor {
       child.kill()
     }
   }
+}
+
+export interface ViewportInteraction {
+  kind: 'primary-click'
+  easting: number
+  northing: number
+  height: number
+  roadId?: string
 }
 
 function readWindowHandleHex(handle: Buffer): string {

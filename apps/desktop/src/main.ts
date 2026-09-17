@@ -351,6 +351,11 @@ app.whenReady().then(async () => {
           window.webContents.send('viewport:status', status)
         }
       })
+      viewportSupervisor.setInteractionListener((interaction) => {
+        if (!window.isDestroyed()) {
+          window.webContents.send('viewport:interaction', interaction)
+        }
+      })
       void viewportSupervisor.start(window.getNativeWindowHandle(), placement).then(() => {
         // The native surface is ALWAYS created hidden, so nothing can flash
         // regardless of when overlay/minimize state changes during startup.
@@ -386,10 +391,15 @@ app.whenReady().then(async () => {
       return
     }
     const record = scene as Record<string, unknown>
-    if (!Array.isArray(record.tiles)) {
-      return
+    // Blocker 10: terrain scenes have a 'tiles' array; road scenes have a
+    // 'meshes' array. Forward each through its dedicated narrow channel
+    // so road scenes are not rejected by terrain-only validation.
+    if (Array.isArray(record.tiles)) {
+      viewportSupervisor.sendScene(record)
     }
-    viewportSupervisor.sendScene(record)
+    if (Array.isArray(record.meshes)) {
+      viewportSupervisor.sendRoadScene(record)
+    }
   })
 
   ipcMain.on('viewport:camera', (_event, action: unknown, datasetUuid: unknown) => {
@@ -405,6 +415,15 @@ app.whenReady().then(async () => {
       return
     }
     viewportSupervisor.sendCameraAction(action)
+  })
+
+  ipcMain.on('viewport:road-preview', (_event, points: unknown) => {
+    if (!viewportSupervisor || !Array.isArray(points) || points.length > 10_000) return
+    const valid = points.every((point) => typeof point === 'object' && point !== null &&
+      Number.isFinite((point as { easting?: unknown }).easting) &&
+      Number.isFinite((point as { northing?: unknown }).northing))
+    if (!valid) return
+    viewportSupervisor.sendRoadPreview(points as Array<{ easting: number; northing: number }>)
   })
 
   createMainWindow()

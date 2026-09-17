@@ -17,6 +17,9 @@ export interface ViewportStatusPayload {
   gpu?: string
   vulkan?: string
 }
+export interface ViewportInteractionPayload {
+  kind: 'primary-click'; easting: number; northing: number; height: number; roadId?: string
+}
 
 const desktopApi = Object.freeze({
   platform: process.platform,
@@ -45,6 +48,9 @@ const desktopApi = Object.freeze({
   setViewportScene: (scene: Record<string, unknown>) => {
     ipcRenderer.send('viewport:scene', scene)
   },
+  setRoadPreview: (points: Array<{ easting: number; northing: number }>) => {
+    ipcRenderer.send('viewport:road-preview', points)
+  },
   setViewportBounds: (rect: { x: number; y: number; width: number; height: number }, dpiScale: number) => {
     ipcRenderer.send('viewport:set-bounds', { rect, dpiScale })
   },
@@ -57,6 +63,11 @@ const desktopApi = Object.freeze({
     return () => {
       ipcRenderer.removeListener('viewport:status', channelListener)
     }
+  },
+  onViewportInteraction: (listener: (interaction: ViewportInteractionPayload) => void) => {
+    const channelListener = (_event: unknown, interaction: ViewportInteractionPayload) => listener(interaction)
+    ipcRenderer.on('viewport:interaction', channelListener)
+    return () => ipcRenderer.removeListener('viewport:interaction', channelListener)
   },
   setViewportCamera: (action: 'focus-terrain' | 'frame-all' | 'perspective' | 'top', datasetUuid?: string) => {
     ipcRenderer.send('viewport:camera', action, datasetUuid)

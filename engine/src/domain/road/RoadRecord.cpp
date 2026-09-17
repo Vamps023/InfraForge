@@ -47,6 +47,8 @@ RoadRecord toRecord(const Road& road) {
             source.geometry.vertices[i].x, source.geometry.vertices[i].y,
             source.geometry.vertices[i].z});
     }
+    // controlVertices is managed by RoadService (not part of the Road
+    // domain model). toRecord leaves it empty; the caller populates it.
     for (std::size_t i = 0; i < source.protectedAnchors.size(); ++i) {
         const auto& anchor = source.protectedAnchors[i];
         record.protectedAnchors.push_back({static_cast<std::uint64_t>(i),
@@ -79,7 +81,10 @@ std::expected<Road, std::vector<RoadDiagnostic>> fromRecord(const RoadRecord& re
         }
     }
 
-    auto alignment = ReferenceAlignment::build(std::move(segments));
+    auto alignment = ReferenceAlignment::build(
+        std::move(segments), kDefaultPositionTolerance,
+        kDefaultHeadingTolerance, kDefaultCurvatureTolerance,
+        record.anchorBoundarySegments);
     if (!alignment.has_value()) {
         return std::unexpected(std::move(alignment.error()));
     }

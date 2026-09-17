@@ -12,6 +12,8 @@ set(INFRAFORGE_VIEWPORT_RENDERER_SOURCES
     src/renderer/EditorCamera.cpp
     src/renderer/EditorCameraController.cpp
     src/renderer/GridPass.cpp
+    src/renderer/RoadPass.cpp
+    src/renderer/RoadScene.cpp
     src/renderer/SelectionId.cpp
     src/renderer/SwapchainState.cpp
     src/renderer/TerrainPass.cpp
@@ -36,11 +38,15 @@ add_custom_command(
         -DNAME_1=kGridFragment -DFILE_1=${CMAKE_CURRENT_SOURCE_DIR}/../shaders/grid.frag.glsl
         -DNAME_2=kTerrainVertex -DFILE_2=${CMAKE_CURRENT_SOURCE_DIR}/../shaders/terrain.vert.glsl
         -DNAME_3=kTerrainFragment -DFILE_3=${CMAKE_CURRENT_SOURCE_DIR}/../shaders/terrain.frag.glsl
+        -DNAME_4=kRoadVertex -DFILE_4=${CMAKE_CURRENT_SOURCE_DIR}/../shaders/road.vert.glsl
+        -DNAME_5=kRoadFragment -DFILE_5=${CMAKE_CURRENT_SOURCE_DIR}/../shaders/road.frag.glsl
         -P ${CMAKE_CURRENT_SOURCE_DIR}/../shaders/EmbedTextFiles.cmake
     DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/../shaders/grid.vert.glsl
             ${CMAKE_CURRENT_SOURCE_DIR}/../shaders/grid.frag.glsl
             ${CMAKE_CURRENT_SOURCE_DIR}/../shaders/terrain.vert.glsl
             ${CMAKE_CURRENT_SOURCE_DIR}/../shaders/terrain.frag.glsl
+            ${CMAKE_CURRENT_SOURCE_DIR}/../shaders/road.vert.glsl
+            ${CMAKE_CURRENT_SOURCE_DIR}/../shaders/road.frag.glsl
             ${CMAKE_CURRENT_SOURCE_DIR}/../shaders/EmbedTextFiles.cmake
     COMMENT "Embedding viewport shader sources"
 )

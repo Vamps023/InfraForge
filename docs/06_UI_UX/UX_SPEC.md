@@ -6,6 +6,27 @@ InfraForge is one viewport-first desktop editor. Workspace changes should swap t
 
 Users should always know the active workspace, active tool, current selection, next gesture, exact editable values, save/validation state, and how to cancel or recover.
 
+## UI direction
+
+InfraForge adopts a dense, engineering-editor interaction model informed by the
+OpenGeoStudio editor experience: a persistent viewport surrounded by a
+workspace rail, contextual tools, a navigable scene hierarchy, an inspector,
+and durable diagnostic/operation surfaces. This is a UX reference only. No
+OpenGeoStudio source, architecture, state model, renderer, or protocol is an
+InfraForge implementation dependency.
+
+The intended result is a coherent professional shell, not a visual clone:
+
+- the native viewport remains the dominant working area;
+- every workspace changes tools and projections, not the underlying shell;
+- selection is one shared presentation state synchronized among viewport,
+  outliner, inspector, and Problems;
+- menus, toolbar buttons, context menus, shortcuts, and the command palette
+  invoke the same registered command;
+- panels are compact, information-dense, resizable, and recoverable at common
+  Windows DPI scales;
+- unavailable capabilities are visibly unavailable, never simulated.
+
 ## Persistent layout
 
 ```text
@@ -17,7 +38,8 @@ Problems | Operations | Console | Performance/Simulation
 Status: tool hint | coordinates/station | CRS | engine | renderer | save/revision
 ```
 
-The viewport stays dominant. Context editors open only when the task benefits from a precise secondary representation.
+The viewport stays dominant. Context editors open only when the task benefits from a precise secondary representation. The right dock uses progressive disclosure: essential selection properties first, engineering/detail sections second. The bottom dock is persistent enough that errors and long-running work do not disappear behind transient notifications.
+
 
 ## Workspaces
 
@@ -110,6 +132,7 @@ All significant commands register with one command service containing ID, label,
 
 ## Interaction qualities
 
+- Dense professional controls rather than dashboard cards.
 - Compact spacing and restrained radii.
 - Strong focus/hover/selection/active-tool states.
 - Tooltips for icon-only actions.
@@ -118,6 +141,8 @@ All significant commands register with one command service containing ID, label,
 - Empty states point to the next real action.
 - Destructive actions are never ambiguous icon-only controls.
 - Advanced options do not permanently occupy prime toolbar space.
+- Errors stay associated with the action/property that caused them when possible.
+- Viewport navigation, selection, framing, and tool cancellation have visible affordances and documented shortcuts; focus must never be trapped in a dock.
 
 ## Accessibility baseline
 

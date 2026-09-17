@@ -27,6 +27,9 @@ struct SurfaceInputEvent {
     double wheelSteps{0.0};
     double deltaX{0.0};
     double deltaY{0.0};
+    bool primaryClick{false};
+    double screenX{0.0};
+    double screenY{0.0};
     std::string datasetUuid;
 };
 

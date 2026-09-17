@@ -3,6 +3,7 @@
 #include "infraforge/viewport/platform/SurfaceInput.hpp"
 #include "infraforge/viewport/renderer/EditorCameraController.hpp"
 #include "infraforge/viewport/renderer/GridPass.hpp"
+#include "infraforge/viewport/renderer/RoadPass.hpp"
 #include "infraforge/viewport/renderer/RenderThread.hpp"
 #include "infraforge/viewport/renderer/SwapchainState.hpp"
 #include "infraforge/viewport/renderer/TerrainPass.hpp"
@@ -33,6 +34,13 @@ struct RendererStatus {
 };
 
 using RendererStatusCallback = std::function<void(const RendererStatus&)>;
+struct ViewportInteraction {
+    double easting{0.0};
+    double northing{0.0};
+    double height{0.0};
+    std::string roadId;
+};
+using ViewportInteractionCallback = std::function<void(const ViewportInteraction&)>;
 
 // Owns the Vulkan 1.3 renderer for the native child surface: RAII core
 // objects, a dedicated render thread running the swapchain lifecycle state
@@ -40,7 +48,8 @@ using RendererStatusCallback = std::function<void(const RendererStatus&)>;
 // canonical project state lives here.
 class VulkanRenderer final {
 public:
-    VulkanRenderer(std::uint64_t nativeWindowHandle, RendererStatusCallback statusCallback, bool validationEnabled);
+    VulkanRenderer(std::uint64_t nativeWindowHandle, RendererStatusCallback statusCallback,
+        bool validationEnabled, ViewportInteractionCallback interactionCallback = {});
     ~VulkanRenderer();
 
     VulkanRenderer(const VulkanRenderer&) = delete;
@@ -59,6 +68,9 @@ public:
     // render thread; the renderer fits the camera to the scene extent the
     // first time a non-empty scene arrives.
     void setTerrainScene(const TerrainScene& scene);
+
+    // Thread-safe road scene hand-off (control path).
+    void setRoadScene(const RoadScene& scene);
 
     // Thread-safe raw mouse input (surface window procedure).
     void postCameraInput(const SurfaceInputEvent& event);
@@ -81,12 +93,14 @@ private:
     std::uint64_t nativeWindowHandle_;
     RendererStatusCallback statusCallback_;
     bool validationEnabled_;
+    ViewportInteractionCallback interactionCallback_;
 
     VulkanInstance instance_;
     VulkanSurface surface_;
     VulkanDevice device_;
     VulkanSwapchain swapchain_;
     TerrainPass terrainPass_;
+    RoadPass roadPass_;
     GridPass gridPass_;
     EditorCameraController cameraController_;
 
@@ -109,6 +123,7 @@ private:
     bool sizeDirty_{false};
     bool visible_{true};
     std::optional<TerrainScene> pendingScene_;
+    std::optional<RoadScene> pendingRoadScene_;
 
     // Raw input queue: the window procedure posts, the render thread drains
     // and applies (camera stays render-thread-owned).

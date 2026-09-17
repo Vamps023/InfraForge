@@ -471,8 +471,10 @@ function DownloadAreaImport({ client, busy, onClose }: { client: EngineClient; b
   const [area, setArea] = useState<DrawnArea | null>(null)
   const [tileSize, setTileSize] = useState(4000)
   const [selectedIndices, setSelectedIndices] = useState<Set<number>>(new Set())
-  const [providers, setProviders] = useState<{ providerId: string; displayName: string; attribution: string }[]>([])
+  const [providers, setProviders] = useState<{ providerId: string; displayName: string; attribution: string; requiresAuth: boolean }[]>([])
   const [selectedProvider, setSelectedProvider] = useState('')
+  const [apiKey, setApiKey] = useState('')
+  const [imageryProvider, setImageryProvider] = useState<'none' | 'esri-world-imagery'>('none')
   const [plan, setPlan] = useState<{
     identity: PlanIdentity
     selectionTiles: { col: number; row: number; bounds: { west: number; south: number; east: number; north: number }; areaSqm: number }[]
@@ -534,9 +536,20 @@ function DownloadAreaImport({ client, busy, onClose }: { client: EngineClient; b
     void (async () => {
       try {
         const result = await listTerrainSources(client)
-        setProviders(result.providers.map((p) => ({ providerId: p.providerId, displayName: p.displayName, attribution: p.attribution })))
-        if (result.providers.length > 0 && !selectedProvider) {
-          setSelectedProvider(result.providers[0]!.providerId)
+        const mapped = result.providers.map((p) => ({
+          providerId: p.providerId,
+          displayName: p.displayName,
+          attribution: p.attribution,
+          requiresAuth: p.requiresAuth,
+        }))
+        setProviders(mapped)
+        if (mapped.length > 0 && !selectedProvider) {
+          const first = mapped[0]!.providerId
+          setSelectedProvider(first)
+          try {
+            const savedKey = localStorage.getItem(`infraforge:apikey:${first}`) ?? ''
+            setApiKey(savedKey)
+          } catch {}
         }
       } catch {
         // Providers will be empty; user can still draw but not download.
@@ -563,6 +576,7 @@ function DownloadAreaImport({ client, busy, onClose }: { client: EngineClient; b
           area,
           tileSize,
           [...selectedIndices],
+          apiKey,
         )
         if (cancelled) return
         if (!result.plan) {
@@ -609,7 +623,7 @@ function DownloadAreaImport({ client, busy, onClose }: { client: EngineClient; b
       }
     })()
     return () => { cancelled = true }
-  }, [client, area, tileSize, selectedIndices, selectedProvider])
+  }, [client, area, tileSize, selectedIndices, selectedProvider, apiKey])
 
   const handleAreaDraw = (drawnArea: GeoBounds) => {
     // Validate the drawn area (BLOCKER 15: native validation also runs).
@@ -679,6 +693,8 @@ function DownloadAreaImport({ client, busy, onClose }: { client: EngineClient; b
         tileSize,
         [...selectedIndices],
         displayName.trim(),
+        apiKey,
+        imageryProvider === 'none' ? '' : imageryProvider,
       )
       setStartedJobId(jobId)
     } catch (err) {
@@ -731,7 +747,12 @@ function DownloadAreaImport({ client, busy, onClose }: { client: EngineClient; b
             className="form-input"
             value={selectedProvider}
             onChange={(e) => {
-              setSelectedProvider(e.target.value)
+              const nextId = e.target.value
+              setSelectedProvider(nextId)
+              try {
+                const savedKey = localStorage.getItem(`infraforge:apikey:${nextId}`) ?? ''
+                setApiKey(savedKey)
+              } catch {}
               // IMPORTANT 4: Reset selection when provider changes — the
               // new provider may have different coverage/resolution.
               setSelectedIndices(new Set())
@@ -748,6 +769,43 @@ function DownloadAreaImport({ client, busy, onClose }: { client: EngineClient; b
           {selectedProviderInfo && selectedProviderInfo.attribution ? (
             <AttributionDisplay attribution={selectedProviderInfo.attribution} />
           ) : null}
+        </div>
+      </div>
+
+      {selectedProviderInfo?.requiresAuth && (
+        <div className="form-row api-key-row">
+          <span className="form-label">API Key</span>
+          <div className="provider-controls">
+            <input
+              type="password"
+              className="form-input"
+              value={apiKey}
+              onChange={(e) => {
+                const key = e.target.value
+                setApiKey(key)
+                try {
+                  localStorage.setItem(`infraforge:apikey:${selectedProvider}`, key)
+                } catch {}
+              }}
+              placeholder="Enter API Key / Token"
+              disabled={startedJobId !== null}
+            />
+          </div>
+        </div>
+      )}
+
+      <div className="form-row imagery-row">
+        <span className="form-label">Satellite Imagery</span>
+        <div className="provider-controls">
+          <select
+            className="form-input"
+            value={imageryProvider}
+            onChange={(e) => setImageryProvider(e.target.value as any)}
+            disabled={startedJobId !== null}
+          >
+            <option value="none">None (Elevation only)</option>
+            <option value="esri-world-imagery">Esri World Imagery (High-Res Satellite Orthophoto)</option>
+          </select>
         </div>
       </div>
 

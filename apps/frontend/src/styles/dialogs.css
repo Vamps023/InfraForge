@@ -50,8 +50,10 @@
 }
 
 .dialog {
-  width: 460px;
+  width: 540px;
   max-width: calc(100vw - 48px);
+  max-height: calc(100dvh - 48px);
+  overflow-y: auto;
   padding: var(--if-space-10) var(--if-space-10) var(--if-space-8);
   border: 1px solid var(--if-border-strong);
   border-radius: var(--if-radius-lg);

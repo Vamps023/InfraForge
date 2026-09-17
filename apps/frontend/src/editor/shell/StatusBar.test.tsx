@@ -3,6 +3,7 @@ import { render, screen } from '@testing-library/react'
 import { StatusBar } from './StatusBar'
 import { useProjectStore } from '../../features/project/projectStore'
 import { useViewportStore } from '../../features/viewport/viewportStore'
+import { useToolStore } from '../tools/toolStore'
 import { create } from '@bufbuild/protobuf'
 import { ProjectSummarySchema, type ProjectSummary } from '@infraforge/protocol'
 import type { EngineSessionStatus } from '../../lib/engineSession'
@@ -79,5 +80,16 @@ describe('StatusBar', () => {
   it('does not permanently show camera instructions', () => {
     render(<StatusBar engineStatus={readyEngine} />)
     expect(screen.queryByText(/MMB Pan/)).not.toBeInTheDocument()
+  })
+
+  it('renders active tool status hint when a tool is active', () => {
+    useToolStore.getState().activateTool({
+      id: 'test-tool',
+      workspaceId: 'roads',
+      statusHint: 'Click to place control point',
+    })
+    render(<StatusBar engineStatus={readyEngine} />)
+    expect(screen.getByText('Click to place control point')).toBeInTheDocument()
+    useToolStore.getState().clearTool()
   })
 })

@@ -84,6 +84,12 @@ a:hover {
   background: transparent;
 }
 
+/* Utility: monospaced content (coordinate entry, logs) */
+.mono {
+  font-family: ui-monospace, "Cascadia Mono", Consolas, "Courier New", monospace;
+  font-variant-numeric: tabular-nums;
+}
+
 /* Utility: screen-reader-only text */
 .if-sr-only {
   position: absolute;

@@ -12,22 +12,25 @@ import { useUiStore } from './state/uiStore'
 
 import { AppHeader } from './editor/shell/AppHeader'
 import { WorkspaceRail } from './editor/shell/WorkspaceRail'
-import { ContextToolbar } from './editor/shell/ContextToolbar'
+import { ContextToolShelf } from './editor/shell/ContextToolShelf'
 import { StatusBar } from './editor/shell/StatusBar'
 import { BottomPanel } from './editor/shell/BottomPanel'
 import { useWorkspaceStore } from './editor/shell/workspaceStore'
 import { EditorLayout } from './editor/layout/EditorLayout'
-import { Outliner } from './editor/outliner/Outliner'
+import { Navigator } from './editor/navigator/Navigator'
 import { Inspector } from './editor/inspector/Inspector'
 import { registerBuiltinCommands, unregisterBuiltinCommands } from './editor/commands/builtinCommands'
 import { CommandPalette } from './editor/commands/CommandPalette'
 import { registerProjectOverviewSection, unregisterProjectOverviewSection } from './editor/inspector/projectOverviewSection'
+import { registerWorldInspectorSection, unregisterWorldInspectorSection } from './features/world/worldInspectorSection'
 import { registerProjectRootProjection, unregisterProjectRootProjection } from './editor/outliner/projectRootProjection'
 import { useCommandContext, useCommandShortcuts } from './editor/commands/useCommands'
 import { useShellUiStore } from './editor/shell/shellUiStore'
 import { useProblemDiagnostics } from './editor/problems/useProblemDiagnostics'
+import { ContextEditorHost, useActiveContextEditor } from './editor/contextEditor/ContextEditorHost'
 
 import { ImportTerrainDialog } from './features/terrain/ImportTerrainDialog'
+import { ExportTerrainDialog } from './features/terrain/ExportTerrainDialog'
 import { DiagnosticsDialog } from './editor/shell/DiagnosticsDialog'
 import { registerTerrainCommands, unregisterTerrainCommands } from './features/terrain/terrainCommands'
 import { registerTerrainOutlinerProjection, unregisterTerrainOutlinerProjection } from './features/terrain/terrainOutlinerProjection'
@@ -35,12 +38,34 @@ import { registerTerrainInspectorSection, unregisterTerrainInspectorSection } fr
 import { subscribeTerrainEvents, setTerrainScenePublisher } from './features/terrain/terrainEvents'
 import { fetchTerrainScene } from './features/terrain/terrainApi'
 
+import { registerRoadCommands, unregisterRoadCommands } from './features/road/roadCommands'
+import { registerRoadOutlinerProjection, unregisterRoadOutlinerProjection } from './features/road/roadOutlinerProjection'
+import { registerRoadInspectorSection, unregisterRoadInspectorSection } from './features/road/roadInspectorSection'
+import { registerRoadProfileContextEditor, unregisterRoadProfileContextEditor } from './features/road/RoadProfileEditor'
+import { subscribeRoadEvents, setRoadScenePublisher } from './features/road/roadEvents'
+import { listRoads, fetchRoadScene, moveRoadControl, insertRoadControl } from './features/road/roadApi'
+import { CreateRoadDialog } from './features/road/CreateRoadDialog'
+import { RenameRoadDialog } from './features/road/RenameRoadDialog'
+import { useRoadToolStore } from './features/road/roadToolStore'
+import { useToolStore } from './editor/tools/toolStore'
+import { useSelectionStore } from './editor/selection/selectionStore'
+import { useRoadStore } from './features/road/roadStore'
+import { getRoad } from './features/road/roadApi'
+
 export function App() {
   const engineStatus = useUiStore((state) => state.engineStatus)
   const setEngineStatus = useUiStore((state) => state.setEngineStatus)
   const [engineSession, setEngineSession] = useState<EngineSession | null>(null)
   const disposersRef = useRef<(() => void) | null>(null)
   const viewportHostRef = useRef<HTMLDivElement | null>(null)
+  const roadToolMode = useRoadToolStore((state) => state.mode)
+  const roadDraftPoints = useRoadToolStore((state) => state.points)
+
+  useEffect(() => {
+    window.infraforgeDesktop?.setRoadPreview?.(
+      roadToolMode === 'drawing' ? roadDraftPoints : [],
+    )
+  }, [roadToolMode, roadDraftPoints])
 
   const openDialog = useShellUiStore((state) => state.openDialog)
   const closeDialog = useShellUiStore((state) => state.closeDialog)
@@ -51,17 +76,27 @@ export function App() {
   useEffect(() => {
     registerBuiltinCommands({ getEngineClient: () => engineSessionRef.current?.client ?? null })
     registerProjectOverviewSection()
+    registerWorldInspectorSection()
     registerProjectRootProjection()
     registerTerrainCommands({ getEngineClient: () => engineSessionRef.current?.client ?? null })
     registerTerrainOutlinerProjection()
     registerTerrainInspectorSection({ getEngineClient: () => engineSessionRef.current?.client ?? null })
+    registerRoadCommands({ getEngineClient: () => engineSessionRef.current?.client ?? null })
+    registerRoadOutlinerProjection()
+    registerRoadInspectorSection({ getEngineClient: () => engineSessionRef.current?.client ?? null })
+    registerRoadProfileContextEditor({ getEngineClient: () => engineSessionRef.current?.client ?? null })
     return () => {
       unregisterBuiltinCommands()
       unregisterProjectOverviewSection()
+      unregisterWorldInspectorSection()
       unregisterProjectRootProjection()
       unregisterTerrainCommands()
       unregisterTerrainOutlinerProjection()
       unregisterTerrainInspectorSection()
+      unregisterRoadCommands()
+      unregisterRoadOutlinerProjection()
+      unregisterRoadInspectorSection()
+      unregisterRoadProfileContextEditor()
     }
   }, [])
 
@@ -75,6 +110,59 @@ export function App() {
   const commandContext = useCommandContext(engineStatus, engineSession)
   useCommandShortcuts(commandContext)
   useProblemDiagnostics()
+
+  // Centralized selection synchronization: when canonical selection changes,
+  // ensure roadStore reflects the selected road and hydrates its details
+  // consistently regardless of whether selection originated from Viewport,
+  // Outliner, Sources, or commands.
+  useEffect(() => {
+    return useSelectionStore.subscribe((state, prevState) => {
+      if (state.primaryId === prevState.primaryId) {
+        return
+      }
+      const primaryId = state.primaryId
+      const client = engineSessionRef.current?.client
+      if (primaryId && primaryId.startsWith('road:')) {
+        const roadId = primaryId.slice('road:'.length)
+        useRoadStore.getState().selectRoad(roadId)
+        if (client) {
+          void getRoad(client, roadId).catch(() => undefined)
+        }
+      } else {
+        useRoadStore.getState().selectRoad(null)
+        useRoadStore.getState().setDetails(null)
+      }
+    })
+  }, [])
+
+  useEffect(() => window.infraforgeDesktop?.onViewportInteraction?.((interaction) => {
+    const activeTool = useToolStore.getState()
+    if (activeTool.viewportHandler) {
+      activeTool.viewportHandler(interaction)
+      return
+    }
+
+    const tool = useRoadToolStore.getState()
+    if (interaction.kind === 'primary-click' && tool.mode === 'drawing') {
+      useRoadToolStore.getState().append({
+        easting: interaction.easting, northing: interaction.northing,
+      })
+    } else if (interaction.kind === 'primary-click' &&
+      (tool.mode === 'move-control' || tool.mode === 'insert-control')) {
+      const client = engineSessionRef.current?.client
+      if (!client || !tool.editRoadId || tool.controlIndex === null) return
+      const operation = tool.mode === 'move-control'
+        ? moveRoadControl(client, tool.editRoadId, tool.controlIndex,
+            interaction.easting, interaction.northing)
+        : insertRoadControl(client, tool.editRoadId, tool.controlIndex,
+            interaction.easting, interaction.northing)
+      void operation.then(() => getRoad(client, tool.editRoadId!))
+        .finally(() => useRoadToolStore.getState().cancel())
+    } else if (interaction.kind === 'primary-click') {
+      const selectionId = interaction.roadId ? `road:${interaction.roadId}` : null
+      useSelectionStore.getState().select(selectionId ? [selectionId] : [])
+    }
+  }), [])
 
   // Help menu → Diagnostics: the desktop shell sends menu:diagnostics when
   // the user clicks Help → Diagnostics or Help → About. Open the same dialog
@@ -134,6 +222,7 @@ export function App() {
       const unsubscribe = subscribeProjectEvents(result.session.client)
       const unsubscribeShell = subscribeShellEvents(result.session.client)
       const unsubscribeTerrain = subscribeTerrainEvents(result.session.client)
+      const unsubscribeRoad = subscribeRoadEvents(result.session.client)
 
       // Wire the terrain scene publisher: when terrain work settles, fetch
       // the updated scene projection and forward it to the native viewport
@@ -147,11 +236,24 @@ export function App() {
         })()
       })
 
+      // Wire the road scene publisher: when road work settles, fetch the
+      // updated road scene projection and forward it to the native viewport.
+      setRoadScenePublisher(() => {
+        void (async () => {
+          const scene = await fetchRoadScene(result.session.client).catch(() => null)
+          if (scene) {
+            window.infraforgeDesktop?.setViewportScene?.(scene as Record<string, unknown>)
+          }
+        })()
+      })
+
       const disposeSession = () => {
         unsubscribe()
         unsubscribeShell()
         unsubscribeTerrain()
+        unsubscribeRoad()
         setTerrainScenePublisher(null)
+        setRoadScenePublisher(null)
         result.session.dispose()
       }
 
@@ -184,6 +286,8 @@ export function App() {
     }
   }, [setEngineStatus])
 
+  const activeContextEditor = useActiveContextEditor()
+
   return (
     <div className="app-shell">
       <AppHeader context={commandContext} />
@@ -191,7 +295,7 @@ export function App() {
         <WorkspaceRail />
         <div className="app-editor-area">
           {projectOpen && activeWorkspace !== 'home' ? (
-            <ContextToolbar context={commandContext} />
+            <ContextToolShelf context={commandContext} />
           ) : null}
           <EditorLayout
             viewportHostRef={viewportHostRef}
@@ -202,7 +306,8 @@ export function App() {
                 commandContext={commandContext}
               />
             }
-            leftPanel={<Outliner />}
+            leftPanel={<Navigator />}
+            contextEditor={activeContextEditor ? <ContextEditorHost /> : undefined}
             rightPanel={<Inspector />}
             bottomPanel={<BottomPanel />}
           />
@@ -235,8 +340,27 @@ export function App() {
           onClose={() => closeDialog()}
         />
       ) : null}
+      {openDialog === 'export-terrain' && engineSession && projectOpen ? (
+        <ExportTerrainDialog
+          client={engineSession.client}
+          busy={busy}
+          onClose={() => closeDialog()}
+        />
+      ) : null}
       {openDialog === 'diagnostics' ? (
         <DiagnosticsDialog onClose={() => closeDialog()} />
+      ) : null}
+      {openDialog === 'create-road' && engineSession && projectOpen ? (
+        <CreateRoadDialog
+          client={engineSession.client}
+          onClose={() => closeDialog()}
+        />
+      ) : null}
+      {openDialog === 'rename-road' && engineSession && projectOpen ? (
+        <RenameRoadDialog
+          client={engineSession.client}
+          onClose={() => closeDialog()}
+        />
       ) : null}
     </div>
   )

@@ -4,6 +4,9 @@ import {
   JobListCommandSchema,
   GeoBoundsSchema,
   TerrainDownloadSelectedCommandSchema,
+  TerrainExportCommandSchema,
+  TerrainExportFormat,
+  TerrainAlbedoExportFormat,
   TerrainGetDatasetCommandSchema,
   TerrainGetSceneCommandSchema,
   TerrainImportDatasetCommandSchema,
@@ -15,6 +18,7 @@ import {
   type CommandEnvelope,
   type JobRecord,
   type TerrainDatasetInfo,
+  type TerrainExportResult,
   type TerrainListSourcesResult,
   type TerrainPlanDownloadResult,
   type TerrainProbeSourceResult,
@@ -173,6 +177,7 @@ export async function planTerrainDownload(
   area: { west: number; south: number; east: number; north: number },
   tileSizeMetres: number,
   selectedIndices: number[],
+  apiKey = '',
 ): Promise<TerrainPlanDownloadResult> {
   const outcome = await sendTerrainCommand(client, {
     case: 'terrainPlanDownload',
@@ -181,6 +186,7 @@ export async function planTerrainDownload(
       area: create(GeoBoundsSchema, area),
       tileSizeMetres,
       selectedIndices,
+      apiKey,
     }),
   })
   if (outcome.case !== 'terrainPlanDownloadResult') {
@@ -196,6 +202,8 @@ export async function downloadSelectedTerrain(
   tileSizeMetres: number,
   selectedIndices: number[],
   displayName: string,
+  apiKey = '',
+  imageryProviderId = '',
 ): Promise<string> {
   const outcome = await sendTerrainCommand(client, {
     case: 'terrainDownloadSelected',
@@ -205,6 +213,8 @@ export async function downloadSelectedTerrain(
       tileSizeMetres,
       selectedIndices,
       displayName,
+      apiKey,
+      imageryProviderId,
     }),
   })
   if (outcome.case !== 'jobStarted') {
@@ -212,3 +222,36 @@ export async function downloadSelectedTerrain(
   }
   return outcome.value.jobId
 }
+
+export interface TerrainExportOptions {
+  datasetUuid: string
+  outputDirectory: string
+  heightmapFormat?: TerrainExportFormat
+  albedoFormat?: TerrainAlbedoExportFormat
+  targetResolution?: number
+  targetCrs?: string
+  exportPerTile?: boolean
+}
+
+export async function exportTerrain(
+  client: EngineClient,
+  options: TerrainExportOptions,
+): Promise<TerrainExportResult> {
+  const outcome = await sendTerrainCommand(client, {
+    case: 'terrainExport',
+    value: create(TerrainExportCommandSchema, {
+      datasetUuid: options.datasetUuid,
+      outputDirectory: options.outputDirectory,
+      heightmapFormat: options.heightmapFormat ?? TerrainExportFormat.GEOTIFF_FLOAT32,
+      albedoFormat: options.albedoFormat ?? TerrainAlbedoExportFormat.NONE,
+      targetResolution: options.targetResolution ?? 0,
+      targetCrs: options.targetCrs ?? 'auto',
+      exportPerTile: options.exportPerTile ?? false,
+    }),
+  })
+  if (outcome.case !== 'terrainExportResult') {
+    throw expectFailure(outcome)
+  }
+  return outcome.value
+}
+

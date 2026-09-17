@@ -313,7 +313,7 @@ TEST_SUITE("canonical spatial index") {
     TEST_CASE("each invalidation class is distinct, named, and mask-composable") {
         using world::InvalidationClass;
 
-        CHECK(world::invalidationClassCount() == 5);
+        CHECK(world::invalidationClassCount() == 6);
         for (auto i = std::size_t{0}; i < world::invalidationClassCount(); ++i) {
             const auto cls = static_cast<InvalidationClass>(i);
             const auto parsed = world::invalidationClassFromName(world::invalidationClassName(cls));
@@ -326,7 +326,8 @@ TEST_SUITE("canonical spatial index") {
             | world::InvalidationMask::of(InvalidationClass::Material)
             | world::InvalidationMask::of(InvalidationClass::Topology)
             | world::InvalidationMask::of(InvalidationClass::Terrain)
-            | world::InvalidationMask::of(InvalidationClass::Simulation);
+            | world::InvalidationMask::of(InvalidationClass::Simulation)
+            | world::InvalidationMask::of(InvalidationClass::Road);
         for (auto i = std::size_t{0}; i < world::invalidationClassCount(); ++i) {
             CHECK(all.contains(static_cast<InvalidationClass>(i)));
         }

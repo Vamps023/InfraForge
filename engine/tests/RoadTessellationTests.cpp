@@ -1,6 +1,7 @@
 #include "infraforge/domain/road/AlignmentPrimitives.hpp"
 #include "infraforge/domain/road/ReferenceAlignment.hpp"
 #include "infraforge/domain/road/RoadTessellation.hpp"
+#include "infraforge/domain/road/RoadWidthProfile.hpp"
 #include "infraforge/domain/road/VerticalProfiles.hpp"
 
 #include <doctest/doctest.h>
@@ -122,12 +123,36 @@ TEST_CASE("tessellateRoad applies superelevation profile") {
     auto tess = tessellateRoad(alignment, {}, *superelevation, params);
     REQUIRE(tess.crossSectionCount() >= 2);
 
-    // At station 50, superelevation = 0.1, halfWidth = 5.0.
-    // leftHeight = height + 0.1 * 5 = 0 + 0.5 = 0.5
-    // rightHeight = height - 0.1 * 5 = 0 - 0.5 = -0.5
+    // Superelevation is an angle, so transverse height uses tan(angle).
     CHECK(tess.crossSections[5].crossSlope == doctest::Approx(0.1));
-    CHECK(tess.crossSections[5].leftHeight == doctest::Approx(0.5));
-    CHECK(tess.crossSections[5].rightHeight == doctest::Approx(-0.5));
+    CHECK(tess.crossSections[5].leftHeight == doctest::Approx(std::tan(0.1) * 5.0));
+    CHECK(tess.crossSections[5].rightHeight == doctest::Approx(-std::tan(0.1) * 5.0));
+}
+
+TEST_CASE("tessellateRoad interpolates asymmetric station-aware widths") {
+    auto alignment = makeStraightAlignment(100.0);
+    auto width = buildRoadWidthProfile({{0.0, 3.0, 4.0}, {100.0, 7.0, 2.0}});
+    REQUIRE(width.has_value());
+
+    RoadTessellationParams params;
+    params.stationInterval = 50.0;
+    auto tess = tessellateRoad(alignment, {}, {}, *width, params);
+    REQUIRE(tess.crossSectionCount() == 3);
+
+    CHECK(tess.crossSections[0].leftWidth == doctest::Approx(3.0));
+    CHECK(tess.crossSections[0].rightWidth == doctest::Approx(4.0));
+    CHECK(tess.crossSections[1].leftWidth == doctest::Approx(5.0));
+    CHECK(tess.crossSections[1].rightWidth == doctest::Approx(3.0));
+    CHECK(tess.crossSections[1].leftEdge.northing == doctest::Approx(5.0));
+    CHECK(tess.crossSections[1].rightEdge.northing == doctest::Approx(-3.0));
+    CHECK(tess.crossSections[2].leftWidth == doctest::Approx(7.0));
+    CHECK(tess.crossSections[2].rightWidth == doctest::Approx(2.0));
+}
+
+TEST_CASE("RoadWidthProfile rejects invalid breakpoints") {
+    CHECK_FALSE(buildRoadWidthProfile({{0.0, -1.0, 5.0}}).has_value());
+    CHECK_FALSE(buildRoadWidthProfile({{0.0, 5.0, 5.0}, {0.0, 6.0, 6.0}}).has_value());
+    CHECK_FALSE(buildRoadWidthProfile({{std::numeric_limits<double>::quiet_NaN(), 5.0, 5.0}}).has_value());
 }
 
 TEST_CASE("tessellateRoad indices form valid triangle strip") {

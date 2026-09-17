@@ -66,6 +66,7 @@ struct RoadRecord {
     std::vector<RoadSegmentRecord> segments;
     std::vector<ProfileBreakpoint> elevationBreakpoints;
     std::vector<ProfileBreakpoint> superelevationBreakpoints;
+    std::vector<RoadWidthBreakpoint> widthBreakpoints;
     // Source geometry/provenance (absent for authored roads).
     bool hasSource{false};
     SourceProvider provider{SourceProvider::Authored};

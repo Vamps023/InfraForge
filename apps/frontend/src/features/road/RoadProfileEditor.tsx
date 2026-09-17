@@ -1,13 +1,13 @@
 import { useEffect, useState } from 'react'
 import { useRoadStore } from './roadStore'
 import { useSelectionStore } from '../../editor/selection/selectionStore'
-import { getRoad, updateRoadElevation, updateRoadSuperelevation } from './roadApi'
+import { getRoad, updateRoadElevation, updateRoadSuperelevation, updateRoadWidth } from './roadApi'
 import { contextEditorRegistry } from '../../editor/contextEditor/contextEditorRegistry'
 import type { EngineClient } from '../../lib/engineSession'
 
 export interface RoadProfileEditorProps { getEngineClient: () => EngineClient | null }
-type ProfileKind = 'elevation' | 'superelevation'
-interface DraftBreakpoint { station: string; value: string }
+type ProfileKind = 'elevation' | 'superelevation' | 'width'
+interface DraftBreakpoint { station: string; value: string; rightValue?: string }
 
 export function registerRoadProfileContextEditor(deps: RoadProfileEditorProps): void {
   contextEditorRegistry.register({
@@ -20,6 +20,13 @@ export function registerRoadProfileContextEditor(deps: RoadProfileEditorProps): 
 export function unregisterRoadProfileContextEditor(): void { contextEditorRegistry.unregister('road-profile') }
 
 function projectedRows(kind: ProfileKind, details: NonNullable<ReturnType<typeof useRoadStore.getState>['details']>): DraftBreakpoint[] {
+  if (kind === 'width') {
+    return details.widthBreakpoints.map((breakpoint) => ({
+      station: String(breakpoint.station),
+      value: String(breakpoint.leftWidth),
+      rightValue: String(breakpoint.rightWidth),
+    }))
+  }
   const source = kind === 'elevation' ? details.elevationBreakpoints : details.superelevationBreakpoints
   return source.map((breakpoint) => ({ station: String(breakpoint.station), value: String(breakpoint.value) }))
 }
@@ -50,7 +57,11 @@ export function RoadProfileEditor({ getEngineClient }: RoadProfileEditorProps) {
   const addRow = () => {
     const lastStation = Number(rows.at(-1)?.station ?? 0)
     const nextStation = rows.length === 0 ? 0 : Math.min(road.length, lastStation + 10)
-    setRows((current) => [...current, { station: String(nextStation), value: '0' }])
+    setRows((current) => [...current, {
+      station: String(nextStation),
+      value: kind === 'width' ? '5' : '0',
+      ...(kind === 'width' ? { rightValue: '5' } : {}),
+    }])
   }
 
   const save = async () => {
@@ -58,8 +69,13 @@ export function RoadProfileEditor({ getEngineClient }: RoadProfileEditorProps) {
     if (!client || !matchingDetails) return
     const stations = rows.map((row) => Number(row.station))
     const values = rows.map((row) => Number(row.value))
-    if (stations.some((station) => !Number.isFinite(station)) || values.some((value) => !Number.isFinite(value))) {
+    const rightValues = rows.map((row) => Number(row.rightValue))
+    if (stations.some((station) => !Number.isFinite(station)) || values.some((value) => !Number.isFinite(value))
+      || (kind === 'width' && rightValues.some((value) => !Number.isFinite(value)))) {
       setFeedback('Every station and value must be a finite number.'); return
+    }
+    if (kind === 'width' && (values.some((value) => value < 0) || rightValues.some((value) => value < 0))) {
+      setFeedback('Road widths cannot be negative.'); return
     }
     if (stations.some((station) => station < 0 || station > road.length)) {
       setFeedback(`Stations must be between 0 and ${road.length.toFixed(3)}.`); return
@@ -70,10 +86,12 @@ export function RoadProfileEditor({ getEngineClient }: RoadProfileEditorProps) {
     setSubmitting(true); setFeedback(null)
     try {
       if (kind === 'elevation') await updateRoadElevation(client, roadId, stations, values)
-      else await updateRoadSuperelevation(client, roadId, stations, values)
+      else if (kind === 'superelevation') await updateRoadSuperelevation(client, roadId, stations, values)
+      else await updateRoadWidth(client, roadId, stations, values, rightValues)
       if (useSelectionStore.getState().primaryId === `road:${roadId}`) {
         await getRoad(client, roadId)
-        setFeedback(`${kind === 'elevation' ? 'Elevation' : 'Superelevation'} profile saved.`)
+        const label = kind === 'elevation' ? 'Elevation' : kind === 'superelevation' ? 'Superelevation' : 'Width'
+        setFeedback(`${label} profile saved.`)
       }
     } catch (error) { setFeedback(error instanceof Error ? error.message : String(error)) }
     finally { setSubmitting(false) }
@@ -88,19 +106,21 @@ export function RoadProfileEditor({ getEngineClient }: RoadProfileEditorProps) {
     <div className="profile-controls-row" role="tablist" aria-label="Road profile type">
       <button type="button" role="tab" aria-selected={kind === 'elevation'} onClick={() => setKind('elevation')}>Elevation</button>
       <button type="button" role="tab" aria-selected={kind === 'superelevation'} onClick={() => setKind('superelevation')}>Superelevation</button>
+      <button type="button" role="tab" aria-selected={kind === 'width'} onClick={() => setKind('width')}>Width</button>
       <button type="button" className="button secondary" onClick={addRow} disabled={submitting || !matchingDetails}>Add breakpoint</button>
       <button type="button" className="button primary" onClick={() => void save()} disabled={submitting || !matchingDetails}>{submitting ? 'Saving…' : !matchingDetails ? 'Loading details…' : 'Save profile'}</button>
       {feedback ? <span className="profile-feedback" role="status">{feedback}</span> : null}
     </div>
     {matchingDetails ? <div className="profile-breakpoint-table-wrap"><table className="profile-breakpoint-table">
-      <thead><tr><th>Station (project units)</th><th>{kind === 'elevation' ? 'Elevation (project units)' : 'Superelevation (radians)'}</th><th>Action</th></tr></thead>
+      <thead><tr><th>Station (project units)</th><th>{kind === 'elevation' ? 'Elevation (project units)' : kind === 'superelevation' ? 'Superelevation (radians)' : 'Left width'}</th>{kind === 'width' ? <th>Right width</th> : null}<th>Action</th></tr></thead>
       <tbody>
         {rows.map((row, index) => <tr key={index}>
           <td><input aria-label={`Breakpoint ${index + 1} station`} type="number" min="0" max={road.length} step="0.1" value={row.station} onChange={(event) => updateRow(index, 'station', event.target.value)} /></td>
-          <td><input aria-label={`Breakpoint ${index + 1} value`} type="number" step={kind === 'elevation' ? '0.1' : '0.001'} value={row.value} onChange={(event) => updateRow(index, 'value', event.target.value)} /></td>
+          <td><input aria-label={`Breakpoint ${index + 1} value`} type="number" min={kind === 'width' ? 0 : undefined} step={kind === 'superelevation' ? '0.001' : '0.1'} value={row.value} onChange={(event) => updateRow(index, 'value', event.target.value)} /></td>
+          {kind === 'width' ? <td><input aria-label={`Breakpoint ${index + 1} right width`} type="number" min="0" step="0.1" value={row.rightValue ?? ''} onChange={(event) => updateRow(index, 'rightValue', event.target.value)} /></td> : null}
           <td><button type="button" onClick={() => setRows((current) => current.filter((_, rowIndex) => rowIndex !== index))}>Remove</button></td>
         </tr>)}
-        {rows.length === 0 ? <tr><td colSpan={3}>No authored breakpoints. The canonical profile evaluates to zero.</td></tr> : null}
+        {rows.length === 0 ? <tr><td colSpan={kind === 'width' ? 4 : 3}>{kind === 'width' ? 'No authored breakpoints. The canonical surface uses the default five-unit width on each side.' : 'No authored breakpoints. The canonical profile evaluates to zero.'}</td></tr> : null}
       </tbody>
     </table></div> : <div className="context-editor-empty">Loading canonical road profile…</div>}
   </div>

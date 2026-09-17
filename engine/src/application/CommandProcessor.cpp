@@ -197,6 +197,8 @@ std::string_view commandName(const ProtocolFrame& frame) {
         return "road.update_elevation";
     case protocol::v1::CommandEnvelope::kUpdateRoadSuperelevation:
         return "road.update_superelevation";
+    case protocol::v1::CommandEnvelope::kUpdateRoadWidth:
+        return "road.update_width";
     case protocol::v1::CommandEnvelope::kUndoRoad:
         return "road.undo";
     case protocol::v1::CommandEnvelope::kRedoRoad:
@@ -643,6 +645,9 @@ void CommandProcessor::processCommand(
             break;
         case protocol::v1::CommandEnvelope::kUpdateRoadSuperelevation:
             handleUpdateRoadSuperelevation(connectionId, frame);
+            break;
+        case protocol::v1::CommandEnvelope::kUpdateRoadWidth:
+            handleUpdateRoadWidth(connectionId, frame);
             break;
         case protocol::v1::CommandEnvelope::kUndoRoad:
             handleUndoRoad(connectionId, frame);
@@ -1646,6 +1651,12 @@ void fillRoadDetails(protocol::v1::RoadDetails* out, const RoadDetails& d) {
         projected->set_station(breakpoint.station);
         projected->set_value(breakpoint.value);
     }
+    for (const auto& breakpoint : d.widthBreakpoints) {
+        auto* projected = out->add_width_breakpoints();
+        projected->set_station(breakpoint.station);
+        projected->set_left_width(breakpoint.leftWidth);
+        projected->set_right_width(breakpoint.rightWidth);
+    }
     for (const auto& control : d.controlPoints) {
         auto* projected = out->add_control_points();
         projected->set_easting(control.easting);
@@ -1834,6 +1845,29 @@ void CommandProcessor::handleUpdateRoadSuperelevation(const std::string& connect
     ProtocolFrame response;
     response.set_request_id(frame.request_id());
     fillRoadSummary(response.mutable_result()->mutable_update_road_superelevation_result()->mutable_road(), summary);
+    sink_.sendToConnection(connectionId, response);
+}
+
+void CommandProcessor::handleUpdateRoadWidth(const std::string& connectionId, const ProtocolFrame& frame) {
+    const auto& command = frame.command().update_road_width();
+    if (command.stations_size() != command.left_widths_size()
+        || command.stations_size() != command.right_widths_size()) {
+        throw CommandFailure{CommandFailureCode::InvalidArgument,
+            "stations, left widths, and right widths must have the same length"};
+    }
+
+    UpdateWidthInput input;
+    input.roadId = command.road_id();
+    for (int i = 0; i < command.stations_size(); ++i) {
+        input.stations.push_back(command.stations(i));
+        input.leftWidths.push_back(command.left_widths(i));
+        input.rightWidths.push_back(command.right_widths(i));
+    }
+    auto summary = roadService_->updateWidth(input);
+
+    ProtocolFrame response;
+    response.set_request_id(frame.request_id());
+    fillRoadSummary(response.mutable_result()->mutable_update_road_width_result()->mutable_road(), summary);
     sink_.sendToConnection(connectionId, response);
 }
 

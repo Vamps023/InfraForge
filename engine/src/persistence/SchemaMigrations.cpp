@@ -11,7 +11,7 @@
 namespace infraforge::persistence {
 namespace {
 
-constexpr std::array<MigrationDefinition, 10> kCanonicalMigrations{{
+constexpr std::array<MigrationDefinition, 11> kCanonicalMigrations{{
     {
         .id = 1,
         .name = "core project foundation",
@@ -229,6 +229,21 @@ SELECT road_id, vertex_index, x, y, z FROM road_source_vertices;
         .name = "road protected anchor continuity boundaries",
         .sql = R"sql(
 ALTER TABLE roads ADD COLUMN anchor_boundary_segments TEXT NOT NULL DEFAULT '[]';
+)sql",
+    },
+    {
+        .id = 11,
+        .name = "road surface width profile",
+        .sql = R"sql(
+CREATE TABLE road_width_breakpoints (
+    road_id TEXT NOT NULL,
+    breakpoint_index INTEGER NOT NULL CHECK (breakpoint_index >= 0),
+    station REAL NOT NULL CHECK (station >= 0),
+    left_width REAL NOT NULL CHECK (left_width >= 0),
+    right_width REAL NOT NULL CHECK (right_width >= 0),
+    PRIMARY KEY (road_id, breakpoint_index),
+    FOREIGN KEY (road_id) REFERENCES roads(id) ON DELETE CASCADE
+);
 )sql",
     },
 }};

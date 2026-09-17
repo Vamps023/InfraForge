@@ -3,6 +3,7 @@
 #include "infraforge/domain/road/RoadTypes.hpp"
 #include "infraforge/domain/road/ReferenceAlignment.hpp"
 #include "infraforge/domain/road/VerticalProfiles.hpp"
+#include "infraforge/domain/road/RoadWidthProfile.hpp"
 
 #include <cstdint>
 #include <vector>
@@ -30,6 +31,8 @@ struct RoadCrossSection {
     Curvature curvature{0.0};
     double height{0.0};
     double crossSlope{0.0};
+    double leftWidth{5.0};
+    double rightWidth{5.0};
     // Left/right edge points (offset perpendicular to heading).
     AlignmentPoint leftEdge{};
     AlignmentPoint rightEdge{};
@@ -69,6 +72,19 @@ struct RoadTessellation {
     const ReferenceAlignment& alignment,
     const ElevationProfile& elevation,
     const SuperelevationProfile& superelevation,
+    const RoadWidthProfile& width,
     const RoadTessellationParams& params = {});
+
+// Compatibility overload for callers that intentionally use the canonical
+// default 5 m side widths.
+[[nodiscard]] inline RoadTessellation tessellateRoad(
+    const ReferenceAlignment& alignment,
+    const ElevationProfile& elevation,
+    const SuperelevationProfile& superelevation,
+    const RoadTessellationParams& params = {}) {
+    return tessellateRoad(alignment, elevation, superelevation,
+        RoadWidthProfile{{RoadWidthBreakpoint{.station = 0.0,
+            .leftWidth = params.halfWidth, .rightWidth = params.halfWidth}}}, params);
+}
 
 } // namespace infraforge::domain::road

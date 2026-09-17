@@ -240,6 +240,13 @@ TEST_CASE_FIXTURE(RoadAcceptanceFixture, "Refit preserves display name and profi
     elevInput.elevations = {10.0, 20.0};
     (void)roadService->updateElevation(elevInput);
 
+    UpdateWidthInput widthInput;
+    widthInput.roadId = summary.roadId;
+    widthInput.stations = {0.0, 100.0};
+    widthInput.leftWidths = {3.0, 7.0};
+    widthInput.rightWidths = {4.0, 2.0};
+    (void)roadService->updateWidth(widthInput);
+
     // Refit.
     FitSourceInput fitInput;
     fitInput.roadId = summary.roadId;
@@ -253,6 +260,9 @@ TEST_CASE_FIXTURE(RoadAcceptanceFixture, "Refit preserves display name and profi
     auto details = roadService->getRoad(summary.roadId);
     REQUIRE(details.has_value());
     CHECK(details->elevationBreakpointCount >= 2);
+    REQUIRE(details->widthBreakpoints.size() == 2);
+    CHECK(details->widthBreakpoints[1].leftWidth == doctest::Approx(7.0));
+    CHECK(details->widthBreakpoints[1].rightWidth == doctest::Approx(2.0));
 }
 
 // Blocker 4: Protected anchors cannot be moved or deleted.

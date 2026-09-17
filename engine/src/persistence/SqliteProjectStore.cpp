@@ -821,6 +821,15 @@ std::vector<domain::road::RoadRecord> SqliteProjectStore::roadsImpl() const {
                 {supRows.columnDouble(0), supRows.columnDouble(1)});
         }
 
+        SqliteStatement widthRows{*connection_,
+            "SELECT station, left_width, right_width FROM road_width_breakpoints "
+            "WHERE road_id = ? ORDER BY breakpoint_index"};
+        widthRows.bindText(1, roadRows.columnText(0));
+        while (widthRows.step()) {
+            road.widthBreakpoints.push_back({widthRows.columnDouble(0),
+                widthRows.columnDouble(1), widthRows.columnDouble(2)});
+        }
+
         // Source.
         SqliteStatement srcRows{*connection_,
             "SELECT provider, source_id, source_crs, imported_at, tags "
@@ -983,6 +992,20 @@ domain::road::RoadRecord SqliteProjectStore::insertRoadImpl(
             (void)insertBp.step();
         }
 
+        for (std::size_t i = 0; i < road.widthBreakpoints.size(); ++i) {
+            const auto& breakpoint = road.widthBreakpoints[i];
+            SqliteStatement insertWidth{*connection_,
+                "INSERT INTO road_width_breakpoints "
+                "(road_id, breakpoint_index, station, left_width, right_width) "
+                "VALUES (?, ?, ?, ?, ?)"};
+            insertWidth.bindText(1, roadIdText);
+            insertWidth.bindInt64(2, static_cast<std::int64_t>(i));
+            insertWidth.bindDouble(3, breakpoint.station);
+            insertWidth.bindDouble(4, breakpoint.leftWidth);
+            insertWidth.bindDouble(5, breakpoint.rightWidth);
+            (void)insertWidth.step();
+        }
+
         // Source.
         if (road.hasSource) {
             nlohmann::json tagsJson = nlohmann::json::array();
@@ -1106,6 +1129,11 @@ domain::road::RoadRecord SqliteProjectStore::updateRoadImpl(
         delSup.bindText(1, roadIdText);
         (void)delSup.step();
 
+        SqliteStatement delWidth{*connection_,
+            "DELETE FROM road_width_breakpoints WHERE road_id = ?"};
+        delWidth.bindText(1, roadIdText);
+        (void)delWidth.step();
+
         SqliteStatement delElev{*connection_,
             "DELETE FROM road_elevation_breakpoints WHERE road_id = ?"};
         delElev.bindText(1, roadIdText);
@@ -1182,6 +1210,20 @@ domain::road::RoadRecord SqliteProjectStore::updateRoadImpl(
             insertBp.bindDouble(3, bp.station);
             insertBp.bindDouble(4, bp.value);
             (void)insertBp.step();
+        }
+
+        for (std::size_t i = 0; i < road.widthBreakpoints.size(); ++i) {
+            const auto& breakpoint = road.widthBreakpoints[i];
+            SqliteStatement insertWidth{*connection_,
+                "INSERT INTO road_width_breakpoints "
+                "(road_id, breakpoint_index, station, left_width, right_width) "
+                "VALUES (?, ?, ?, ?, ?)"};
+            insertWidth.bindText(1, roadIdText);
+            insertWidth.bindInt64(2, static_cast<std::int64_t>(i));
+            insertWidth.bindDouble(3, breakpoint.station);
+            insertWidth.bindDouble(4, breakpoint.leftWidth);
+            insertWidth.bindDouble(5, breakpoint.rightWidth);
+            (void)insertWidth.step();
         }
 
         // Re-insert source.

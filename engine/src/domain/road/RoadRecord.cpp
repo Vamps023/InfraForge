@@ -29,6 +29,7 @@ RoadRecord toRecord(const Road& road) {
     // Profiles.
     record.elevationBreakpoints = road.elevation().breakpoints();
     record.superelevationBreakpoints = road.superelevation().breakpoints();
+    record.widthBreakpoints = road.width().breakpoints();
 
     // Source.
     const auto& source = road.source();
@@ -97,6 +98,10 @@ std::expected<Road, std::vector<RoadDiagnostic>> fromRecord(const RoadRecord& re
     if (!superelevation.has_value()) {
         return std::unexpected(std::vector<RoadDiagnostic>{superelevation.error()});
     }
+    auto width = buildRoadWidthProfile(record.widthBreakpoints);
+    if (!width.has_value()) {
+        return std::unexpected(std::vector<RoadDiagnostic>{width.error()});
+    }
 
     // Reconstruct source.
     RoadSource source;
@@ -120,6 +125,7 @@ std::expected<Road, std::vector<RoadDiagnostic>> fromRecord(const RoadRecord& re
         .alignment = std::move(*alignment),
         .elevation = std::move(*elevation),
         .superelevation = std::move(*superelevation),
+        .width = std::move(*width),
         .source = std::move(source),
     };
     return Road::build(std::move(input));

@@ -624,6 +624,69 @@ RoadSummary RoadService::updateSuperelevation(const UpdateSuperelevationInput& i
     return toSummary(record);
 }
 
+RoadSummary RoadService::updateWidth(const UpdateWidthInput& input) {
+    auto found = findRoad(input.roadId);
+    if (!found.has_value()) {
+        throw CommandFailure{CommandFailureCode::NotFound, "road not found: " + input.roadId};
+    }
+    if (input.stations.size() != input.leftWidths.size()
+        || input.stations.size() != input.rightWidths.size()) {
+        throw CommandFailure{CommandFailureCode::InvalidArgument,
+            "stations, left widths, and right widths must have the same length"};
+    }
+    double alignmentLength = 0.0;
+    for (const auto& segment : found->segments) alignmentLength += segment.length;
+    std::vector<domain::road::RoadWidthBreakpoint> breakpoints;
+    breakpoints.reserve(input.stations.size());
+    for (std::size_t i = 0; i < input.stations.size(); ++i) {
+        if (!std::isfinite(input.stations[i]) || !std::isfinite(input.leftWidths[i])
+            || !std::isfinite(input.rightWidths[i])) {
+            throw CommandFailure{CommandFailureCode::InvalidArgument,
+                "road width breakpoint values must be finite"};
+        }
+        if (input.stations[i] < 0.0 || input.stations[i] > alignmentLength) {
+            throw CommandFailure{CommandFailureCode::InvalidArgument,
+                "road width station is outside the alignment range"};
+        }
+        if (input.leftWidths[i] < 0.0 || input.rightWidths[i] < 0.0) {
+            throw CommandFailure{CommandFailureCode::InvalidArgument,
+                "road side widths must be non-negative"};
+        }
+        if (i > 0 && input.stations[i] <= input.stations[i - 1]) {
+            throw CommandFailure{CommandFailureCode::InvalidArgument,
+                "road width stations must be strictly increasing"};
+        }
+        breakpoints.push_back({input.stations[i], input.leftWidths[i], input.rightWidths[i]});
+    }
+    const auto validated = domain::road::buildRoadWidthProfile(breakpoints);
+    if (!validated.has_value()) {
+        throw CommandFailure{CommandFailureCode::InvalidArgument, validated.error().message};
+    }
+
+    const auto before = *found;
+    auto record = before;
+    record.widthBreakpoints = std::move(breakpoints);
+    (void)rebuildRoad(record);
+    record = store_.updateRoad(record);
+    recordHistory(HistoryEntry{.roadId = input.roadId, .before = before,
+        .after = record, .existedBefore = true});
+
+    std::vector<ChunkCoord> affectedChunks;
+    if (world_.isReady()) {
+        auto mutation = world_.update(record.id, computeRoadBounds(record),
+            InvalidationMask::of(InvalidationClass::Road));
+        affectedChunks = mutation.dirtyChunks;
+        const auto oldChunks = world_.chunksIntersecting(computeRoadBounds(before));
+        affectedChunks.insert(affectedChunks.end(), oldChunks.begin(), oldChunks.end());
+        std::sort(affectedChunks.begin(), affectedChunks.end());
+        affectedChunks.erase(std::unique(affectedChunks.begin(), affectedChunks.end()), affectedChunks.end());
+    }
+    sceneMeshCache_.erase(input.roadId);
+    eventSink_(RoadServiceEvent{RoadServiceEvent::Kind::GeometryChanged, input.roadId,
+        store_.current().revision, affectedChunks});
+    return toSummary(record);
+}
+
 RoadHistoryResult RoadService::undo(const std::string& roadId) {
     // Blocker 10: global chronological undo. An empty road ID means undo the
     // most recent road command across ALL roads, determined by sequence
@@ -800,7 +863,7 @@ std::optional<domain::road::RoadTessellation> RoadService::getRoadTessellation(
 
     auto road = rebuildRoad(*found);
     return domain::road::tessellateRoad(
-        road.alignment(), road.elevation(), road.superelevation(), params);
+        road.alignment(), road.elevation(), road.superelevation(), road.width(), params);
 }
 
 RoadSceneProjection RoadService::roadSceneProjection() const {
@@ -824,7 +887,7 @@ RoadSceneProjection RoadService::roadSceneProjection() const {
         }
         auto road = rebuildRoad(roadRecord);
         auto tess = domain::road::tessellateRoad(
-            road.alignment(), road.elevation(), road.superelevation(), {});
+            road.alignment(), road.elevation(), road.superelevation(), road.width(), {});
 
         if (tess.isEmpty()) continue;
 
@@ -1099,11 +1162,12 @@ SpatialBounds RoadService::computeRoadBounds(const RoadRecord& road) const {
             maxN = std::max(maxN, sample.position.northing);
         }
     }
-    // Blocker 14: expand by the actual road cross-section half-width
-    // (RoadTessellationParams::halfWidth default = 5.0) plus a small
-    // conservative numerical margin (1.0 m) for tessellation sampling.
-    const double halfWidth = 5.0;
-    const double margin = halfWidth + 1.0;
+    double maximumSideWidth = 5.0;
+    for (const auto& breakpoint : road.widthBreakpoints) {
+        maximumSideWidth = std::max({maximumSideWidth,
+            breakpoint.leftWidth, breakpoint.rightWidth});
+    }
+    const double margin = maximumSideWidth + 1.0;
     return SpatialBounds{minE - margin, minN - margin, maxE + margin, maxN + margin};
 }
 
@@ -1150,6 +1214,7 @@ RoadDetails RoadService::toDetails(const RoadRecord& road) const {
     for (const auto& breakpoint : road.superelevationBreakpoints) {
         d.superelevationBreakpoints.push_back({breakpoint.station, breakpoint.value});
     }
+    d.widthBreakpoints = road.widthBreakpoints;
     d.controlPoints.reserve(road.controlVertices.size());
     for (std::size_t i = 0; i < road.controlVertices.size(); ++i) {
         const auto& vertex = road.controlVertices[i];
@@ -1427,6 +1492,10 @@ RoadRecord RoadService::refitRoad(
         existing.superelevationBreakpoints);
     if (superelevProfile.has_value()) {
         roadInput.superelevation = std::move(*superelevProfile);
+    }
+    auto widthProfile = buildRoadWidthProfile(existing.widthBreakpoints);
+    if (widthProfile.has_value()) {
+        roadInput.width = std::move(*widthProfile);
     }
 
     auto road = Road::build(std::move(roadInput));

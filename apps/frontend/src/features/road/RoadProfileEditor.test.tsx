@@ -39,6 +39,10 @@ describe('RoadProfileEditor stale details protection & selection sync', () => {
       { station: 0, value: 0 },
       { station: 100, value: 0.02 },
     ],
+    widthBreakpoints: [
+      { station: 0, leftWidth: 3, rightWidth: 4 },
+      { station: 100, leftWidth: 7, rightWidth: 2 },
+    ],
     controlPoints: [
       { easting: 0, northing: 0, elevation: 10, protectedAnchor: false },
       { easting: 50, northing: 0, elevation: 12, protectedAnchor: false },
@@ -153,5 +157,17 @@ describe('RoadProfileEditor stale details protection & selection sync', () => {
     await userEvent.click(screen.getByRole('tab', { name: 'Superelevation' }))
     await userEvent.click(screen.getByRole('button', { name: 'Save profile' }))
     expect(updateSpy).toHaveBeenCalledWith(expect.anything(), 'road-A', [0, 100], [0, 0.02])
+  })
+
+  it('switches to and saves asymmetric width breakpoints', async () => {
+    const updateSpy = vi.spyOn(roadApi, 'updateRoadWidth').mockResolvedValue(undefined as any)
+    vi.spyOn(roadApi, 'getRoad').mockResolvedValue(undefined as any)
+    useSelectionStore.getState().select(['road:road-A'])
+    useRoadStore.getState().setDetails(detailsA)
+    render(<RoadProfileEditor getEngineClient={() => ({} as any)} />)
+
+    await userEvent.click(screen.getByRole('tab', { name: 'Width' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Save profile' }))
+    expect(updateSpy).toHaveBeenCalledWith(expect.anything(), 'road-A', [0, 100], [3, 7], [4, 2])
   })
 })

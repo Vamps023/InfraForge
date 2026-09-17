@@ -23,6 +23,7 @@ RoadTessellation tessellateRoad(
     const ReferenceAlignment& alignment,
     const ElevationProfile& elevation,
     const SuperelevationProfile& superelevation,
+    const RoadWidthProfile& width,
     const RoadTessellationParams& params) {
 
     RoadTessellation tess;
@@ -48,7 +49,6 @@ RoadTessellation tessellateRoad(
 
     // Clamp station interval to a safe minimum and ensure at least 2 samples.
     const double interval = std::max(params.stationInterval, 1e-3);
-    const double halfWidth = params.halfWidth;
 
     // Sample the alignment at regular station intervals.
     // Always include station 0 and the final station.
@@ -77,14 +77,17 @@ RoadTessellation tessellateRoad(
         // Vertical profiles.
         cs.height = elevation.evaluate(s);
         cs.crossSlope = superelevation.evaluate(s);
+        const RoadSurfaceWidth surfaceWidth = width.evaluate(s);
+        cs.leftWidth = surfaceWidth.left;
+        cs.rightWidth = surfaceWidth.right;
 
         // Compute left/right edges perpendicular to the heading.
         // The cross-slope tilts the road surface: left edge rises when
         // crossSlope > 0 (positive superelevation banks to the left).
-        cs.leftEdge = offsetPerpendicular(cs.center, cs.heading, halfWidth);
-        cs.rightEdge = offsetPerpendicular(cs.center, cs.heading, -halfWidth);
-        cs.leftHeight = cs.height + cs.crossSlope * halfWidth;
-        cs.rightHeight = cs.height - cs.crossSlope * halfWidth;
+        cs.leftEdge = offsetPerpendicular(cs.center, cs.heading, cs.leftWidth);
+        cs.rightEdge = offsetPerpendicular(cs.center, cs.heading, -cs.rightWidth);
+        cs.leftHeight = cs.height + std::tan(cs.crossSlope) * cs.leftWidth;
+        cs.rightHeight = cs.height - std::tan(cs.crossSlope) * cs.rightWidth;
 
         tess.crossSections.push_back(cs);
     }

@@ -84,6 +84,7 @@ struct RoadDetails {
     };
     std::vector<ProfileBreakpoint> elevationBreakpoints;
     std::vector<ProfileBreakpoint> superelevationBreakpoints;
+    std::vector<domain::road::RoadWidthBreakpoint> widthBreakpoints;
 };
 
 // One vertex of a road scene mesh, in render-local float coordinates.
@@ -176,6 +177,13 @@ struct UpdateSuperelevationInput {
     std::vector<double> superelevations;
 };
 
+struct UpdateWidthInput {
+    std::string roadId;
+    std::vector<double> stations;
+    std::vector<double> leftWidths;
+    std::vector<double> rightWidths;
+};
+
 // Application boundary of the Road domain: canonical road CRUD, fitting,
 // editing, undo/redo, and projection. Runs on the single application
 // executor; all mutations go through the ProjectStore transactionally.
@@ -200,6 +208,7 @@ public:
     [[nodiscard]] RoadSummary fitSource(const FitSourceInput& input);
     [[nodiscard]] RoadSummary updateElevation(const UpdateElevationInput& input);
     [[nodiscard]] RoadSummary updateSuperelevation(const UpdateSuperelevationInput& input);
+    [[nodiscard]] RoadSummary updateWidth(const UpdateWidthInput& input);
 
     // ---- Undo/Redo ----
 

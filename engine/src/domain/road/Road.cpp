@@ -20,6 +20,9 @@ std::expected<Road, std::vector<RoadDiagnostic>> Road::build(BuildInput input) {
     if (auto d = input.superelevation.validate()) {
         diagnostics.push_back(*d);
     }
+    if (auto d = input.width.validate()) {
+        diagnostics.push_back(*d);
+    }
     if (input.id.isNull()) {
         diagnostics.push_back({RoadErrorCode::InvalidArgument, "road id must not be null"});
     }

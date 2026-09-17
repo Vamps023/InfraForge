@@ -388,6 +388,51 @@ TEST_CASE_FIXTURE(RoadServiceTestFixture, "update superelevation profile") {
     CHECK(details->superelevationBreakpoints[2].station == doctest::Approx(100.0));
 }
 
+TEST_CASE_FIXTURE(RoadServiceTestFixture, "update width profile persists and participates in undo") {
+    CreateRoadInput input;
+    input.name = "Variable Width Road";
+    input.sourcePoints = makeStraightPolyline(0.0, 0.0, 0.0, 100.0, 10);
+    input.positionTolerance = 1.0;
+    auto summary = roadService->createRoad(input);
+
+    UpdateWidthInput widthInput;
+    widthInput.roadId = summary.roadId;
+    widthInput.stations = {0.0, 50.0, 100.0};
+    widthInput.leftWidths = {3.0, 5.0, 7.0};
+    widthInput.rightWidths = {4.0, 3.0, 2.0};
+    (void)roadService->updateWidth(widthInput);
+
+    auto details = roadService->getRoad(summary.roadId);
+    REQUIRE(details.has_value());
+    REQUIRE(details->widthBreakpoints.size() == 3);
+    CHECK(details->widthBreakpoints[1].leftWidth == doctest::Approx(5.0));
+    CHECK(details->widthBreakpoints[1].rightWidth == doctest::Approx(3.0));
+
+    const auto undone = roadService->undo(summary.roadId);
+    REQUIRE(undone);
+    details = roadService->getRoad(summary.roadId);
+    REQUIRE(details.has_value());
+    CHECK(details->widthBreakpoints.empty());
+    REQUIRE(roadService->redo(summary.roadId));
+
+    (void)store.save();
+    roadService.reset();
+    store.close();
+    (void)store.open(projectDirectory);
+    auto project = transforms.resolveProjectGeoreference(store.current().georeference);
+    world.resetForProject(project);
+    roadService.emplace(store, world,
+        [this](const RoadServiceEvent& e) { events.push_back(e); });
+    roadService->onProjectOpened();
+
+    details = roadService->getRoad(summary.roadId);
+    REQUIRE(details.has_value());
+    REQUIRE(details->widthBreakpoints.size() == 3);
+    CHECK(details->widthBreakpoints[2].leftWidth == doctest::Approx(7.0));
+    CHECK(details->widthBreakpoints[2].rightWidth == doctest::Approx(2.0));
+
+}
+
 TEST_CASE_FIXTURE(RoadServiceTestFixture, "save and reopen preserves road") {
     CreateRoadInput input;
     input.name = "Persistent Road";

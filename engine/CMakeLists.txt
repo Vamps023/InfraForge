@@ -60,6 +60,7 @@ add_library(infraforge_core STATIC
     src/domain/road/Road.cpp
     src/domain/road/RoadRecord.cpp
     src/domain/road/RoadTessellation.cpp
+    src/domain/road/RoadWidthProfile.cpp
     src/domain/road/RoadTypes.cpp
     src/domain/road/VerticalProfiles.cpp
     src/domain/world/ChunkGrid.cpp

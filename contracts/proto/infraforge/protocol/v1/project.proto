@@ -301,6 +301,7 @@ message CommandEnvelope {
     GetRoadSceneCommand get_road_scene = 35;
     // Protocol 1.6 terrain export.
     TerrainExportCommand terrain_export = 36;
+    UpdateRoadWidthCommand update_road_width = 37;
   }
 }
 
@@ -340,6 +341,7 @@ message ResultEnvelope {
     RoadSceneResult road_scene_result = 29;
     // Protocol 1.6 terrain export.
     TerrainExportResult terrain_export_result = 30;
+    UpdateRoadWidthResult update_road_width_result = 31;
   }
 }
 

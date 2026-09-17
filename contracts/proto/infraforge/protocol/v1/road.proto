@@ -42,6 +42,12 @@ message RoadProfileBreakpoint {
   double value = 2;
 }
 
+message RoadWidthBreakpoint {
+  double station = 1;
+  double left_width = 2;
+  double right_width = 3;
+}
+
 // Detailed road projection for the inspector.
 message RoadDetails {
   string road_id = 1;
@@ -65,6 +71,7 @@ message RoadDetails {
   optional double max_curvature = 19;
   repeated RoadProfileBreakpoint elevation_breakpoints = 20;
   repeated RoadProfileBreakpoint superelevation_breakpoints = 21;
+  repeated RoadWidthBreakpoint width_breakpoints = 22;
 }
 
 // Editable fitting control projected for the inspector. This is not the
@@ -168,6 +175,13 @@ message UpdateRoadSuperelevationCommand {
   repeated double superelevations = 3;
 }
 
+message UpdateRoadWidthCommand {
+  string road_id = 1;
+  repeated double stations = 2;
+  repeated double left_widths = 3;
+  repeated double right_widths = 4;
+}
+
 // Undo the last road command.
 message UndoRoadCommand {
   // If empty, undoes the last command of any road.
@@ -222,6 +236,10 @@ message UpdateRoadElevationResult {
 }
 
 message UpdateRoadSuperelevationResult {
+  RoadSummary road = 1;
+}
+
+message UpdateRoadWidthResult {
   RoadSummary road = 1;
 }
 

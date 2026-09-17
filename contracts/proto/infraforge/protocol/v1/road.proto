@@ -182,6 +182,16 @@ message UpdateRoadWidthCommand {
   repeated double right_widths = 4;
 }
 
+// Rebuild the canonical elevation profile by sampling terrain along the
+// canonical alignment. An empty dataset_id uses TerrainService's deterministic
+// most-recent-covering-dataset rule.
+message ConformRoadToTerrainCommand {
+  string road_id = 1;
+  string dataset_id = 2;
+  double station_interval = 3;
+  double vertical_offset = 4;
+}
+
 // Undo the last road command.
 message UndoRoadCommand {
   // If empty, undoes the last command of any road.
@@ -240,6 +250,10 @@ message UpdateRoadSuperelevationResult {
 }
 
 message UpdateRoadWidthResult {
+  RoadSummary road = 1;
+}
+
+message ConformRoadToTerrainResult {
   RoadSummary road = 1;
 }
 

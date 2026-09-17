@@ -81,8 +81,8 @@ describe('RoadProfileEditor stale details protection & selection sync', () => {
 
     expect(screen.getByText('Road Alpha')).toBeInTheDocument()
     expect(screen.getByText('100.00 project units')).toBeInTheDocument()
-    expect(screen.getByDisplayValue('10')).toBeInTheDocument()
-    expect(screen.getByDisplayValue('15')).toBeInTheDocument()
+    expect(screen.getByLabelText('Breakpoint 1 value')).toHaveValue(10)
+    expect(screen.getByLabelText('Breakpoint 2 value')).toHaveValue(15)
   })
 
   it('protects against using Road A details when Road B is selected', async () => {
@@ -169,5 +169,23 @@ describe('RoadProfileEditor stale details protection & selection sync', () => {
     await userEvent.click(screen.getByRole('tab', { name: 'Width' }))
     await userEvent.click(screen.getByRole('button', { name: 'Save profile' }))
     expect(updateSpy).toHaveBeenCalledWith(expect.anything(), 'road-A', [0, 100], [3, 7], [4, 2])
+  })
+
+  it('conforms the selected road to terrain with explicit sampling controls', async () => {
+    const conformSpy = vi.spyOn(roadApi, 'conformRoadToTerrain').mockResolvedValue(undefined as any)
+    vi.spyOn(roadApi, 'getRoad').mockResolvedValue(undefined as any)
+    useSelectionStore.getState().select(['road:road-A'])
+    useRoadStore.getState().setDetails(detailsA)
+    render(<RoadProfileEditor getEngineClient={() => ({} as any)} />)
+
+    const interval = screen.getByLabelText('Terrain conformance interval')
+    const offset = screen.getByLabelText('Terrain conformance offset')
+    await userEvent.clear(interval)
+    await userEvent.type(interval, '5')
+    await userEvent.clear(offset)
+    await userEvent.type(offset, '0.2')
+    await userEvent.click(screen.getByRole('button', { name: 'Conform to terrain' }))
+
+    expect(conformSpy).toHaveBeenCalledWith(expect.anything(), 'road-A', 5, 0.2)
   })
 })

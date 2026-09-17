@@ -11,6 +11,7 @@
 #include "infraforge/ports/ProjectStore.hpp"
 
 #include <cstdint>
+#include <expected>
 #include <functional>
 #include <optional>
 #include <string>
@@ -184,6 +185,15 @@ struct UpdateWidthInput {
     std::vector<double> rightWidths;
 };
 
+struct ConformRoadToTerrainInput {
+    std::string roadId;
+    double stationInterval{10.0};
+    double verticalOffset{0.1};
+};
+
+using TerrainHeightSampler = std::function<std::expected<double, std::string>(
+    const domain::road::AlignmentPoint&)>;
+
 // Application boundary of the Road domain: canonical road CRUD, fitting,
 // editing, undo/redo, and projection. Runs on the single application
 // executor; all mutations go through the ProjectStore transactionally.
@@ -209,6 +219,8 @@ public:
     [[nodiscard]] RoadSummary updateElevation(const UpdateElevationInput& input);
     [[nodiscard]] RoadSummary updateSuperelevation(const UpdateSuperelevationInput& input);
     [[nodiscard]] RoadSummary updateWidth(const UpdateWidthInput& input);
+    [[nodiscard]] RoadSummary conformToTerrain(
+        const ConformRoadToTerrainInput& input, const TerrainHeightSampler& sampleHeight);
 
     // ---- Undo/Redo ----
 

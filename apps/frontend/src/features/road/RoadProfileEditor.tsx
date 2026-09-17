@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useRoadStore } from './roadStore'
 import { useSelectionStore } from '../../editor/selection/selectionStore'
-import { getRoad, updateRoadElevation, updateRoadSuperelevation, updateRoadWidth } from './roadApi'
+import { conformRoadToTerrain, getRoad, updateRoadElevation, updateRoadSuperelevation, updateRoadWidth } from './roadApi'
 import { contextEditorRegistry } from '../../editor/contextEditor/contextEditorRegistry'
 import type { EngineClient } from '../../lib/engineSession'
 
@@ -42,6 +42,8 @@ export function RoadProfileEditor({ getEngineClient }: RoadProfileEditorProps) {
   const [rows, setRows] = useState<DraftBreakpoint[]>([])
   const [submitting, setSubmitting] = useState(false)
   const [feedback, setFeedback] = useState<string | null>(null)
+  const [terrainInterval, setTerrainInterval] = useState('10')
+  const [terrainOffset, setTerrainOffset] = useState('0.1')
 
   useEffect(() => {
     setRows(matchingDetails ? projectedRows(kind, matchingDetails) : [])
@@ -97,6 +99,26 @@ export function RoadProfileEditor({ getEngineClient }: RoadProfileEditorProps) {
     finally { setSubmitting(false) }
   }
 
+  const applyTerrainConformance = async () => {
+    const client = getEngineClient()
+    if (!client || !matchingDetails) return
+    const interval = Number(terrainInterval)
+    const offset = Number(terrainOffset)
+    if (!Number.isFinite(interval) || interval <= 0 || !Number.isFinite(offset)) {
+      setFeedback('Terrain interval must be positive and offset must be finite.'); return
+    }
+    setSubmitting(true); setFeedback(null)
+    try {
+      await conformRoadToTerrain(client, roadId, interval, offset)
+      if (useSelectionStore.getState().primaryId === `road:${roadId}`) {
+        await getRoad(client, roadId)
+        setKind('elevation')
+        setFeedback('Elevation profile conformed to terrain.')
+      }
+    } catch (error) { setFeedback(error instanceof Error ? error.message : String(error)) }
+    finally { setSubmitting(false) }
+  }
+
   return <div className="road-profile-editor" aria-label="Road profile editor">
     <div className="profile-metrics-bar">
       <span className="profile-metric"><strong>Road:</strong> {road.name}</span>
@@ -109,6 +131,9 @@ export function RoadProfileEditor({ getEngineClient }: RoadProfileEditorProps) {
       <button type="button" role="tab" aria-selected={kind === 'width'} onClick={() => setKind('width')}>Width</button>
       <button type="button" className="button secondary" onClick={addRow} disabled={submitting || !matchingDetails}>Add breakpoint</button>
       <button type="button" className="button primary" onClick={() => void save()} disabled={submitting || !matchingDetails}>{submitting ? 'Saving…' : !matchingDetails ? 'Loading details…' : 'Save profile'}</button>
+      <label>Terrain interval <input aria-label="Terrain conformance interval" type="number" min="0.01" step="1" value={terrainInterval} onChange={(event) => setTerrainInterval(event.target.value)} /></label>
+      <label>Surface offset <input aria-label="Terrain conformance offset" type="number" step="0.1" value={terrainOffset} onChange={(event) => setTerrainOffset(event.target.value)} /></label>
+      <button type="button" className="button secondary" onClick={() => void applyTerrainConformance()} disabled={submitting || !matchingDetails}>Conform to terrain</button>
       {feedback ? <span className="profile-feedback" role="status">{feedback}</span> : null}
     </div>
     {matchingDetails ? <div className="profile-breakpoint-table-wrap"><table className="profile-breakpoint-table">

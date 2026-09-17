@@ -140,6 +140,7 @@ private:
     void handleUpdateRoadElevation(const std::string& connectionId, const protocol::v1::Frame& frame);
     void handleUpdateRoadSuperelevation(const std::string& connectionId, const protocol::v1::Frame& frame);
     void handleUpdateRoadWidth(const std::string& connectionId, const protocol::v1::Frame& frame);
+    void handleConformRoadToTerrain(const std::string& connectionId, const protocol::v1::Frame& frame);
     void handleUndoRoad(const std::string& connectionId, const protocol::v1::Frame& frame);
     void handleRedoRoad(const std::string& connectionId, const protocol::v1::Frame& frame);
     void handleListRoads(const std::string& connectionId, const protocol::v1::Frame& frame);

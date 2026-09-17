@@ -433,6 +433,62 @@ TEST_CASE_FIXTURE(RoadServiceTestFixture, "update width profile persists and par
 
 }
 
+TEST_CASE_FIXTURE(RoadServiceTestFixture, "terrain conformance authors an undoable elevation profile") {
+    CreateRoadInput input;
+    input.name = "Terrain Conformance Road";
+    input.sourcePoints = makeStraightPolyline(0.0, 0.0, 0.0, 100.0, 10);
+    input.positionTolerance = 1.0;
+    const auto summary = roadService->createRoad(input);
+
+    ConformRoadToTerrainInput conform;
+    conform.roadId = summary.roadId;
+    conform.stationInterval = 20.0;
+    conform.verticalOffset = 0.25;
+    (void)roadService->conformToTerrain(conform,
+        [](const AlignmentPoint& point) -> std::expected<double, std::string> {
+            return point.easting * 0.1;
+        });
+
+    auto details = roadService->getRoad(summary.roadId);
+    REQUIRE(details.has_value());
+    REQUIRE(details->elevationBreakpoints.size() == 6);
+    CHECK(details->elevationBreakpoints.front().value == doctest::Approx(0.25));
+    CHECK(details->elevationBreakpoints.back().value == doctest::Approx(10.25));
+
+    REQUIRE(roadService->undo(summary.roadId));
+    details = roadService->getRoad(summary.roadId);
+    REQUIRE(details.has_value());
+    CHECK(details->elevationBreakpoints.empty());
+}
+
+TEST_CASE_FIXTURE(RoadServiceTestFixture, "terrain conformance is atomic when coverage is incomplete") {
+    CreateRoadInput input;
+    input.name = "Partial Coverage Road";
+    input.sourcePoints = makeStraightPolyline(0.0, 0.0, 0.0, 100.0, 10);
+    input.positionTolerance = 1.0;
+    const auto summary = roadService->createRoad(input);
+
+    ConformRoadToTerrainInput conform;
+    conform.roadId = summary.roadId;
+    conform.stationInterval = 20.0;
+    bool threw = false;
+    try {
+        (void)roadService->conformToTerrain(conform,
+            [](const AlignmentPoint& point) -> std::expected<double, std::string> {
+                if (point.easting > 50.0) return std::unexpected("outside test coverage");
+                return 2.0;
+            });
+    } catch (const CommandFailure& failure) {
+        threw = true;
+        CHECK(failure.code() == CommandFailureCode::InvalidArgument);
+        CHECK(std::string{failure.what()}.find("station") != std::string::npos);
+    }
+    CHECK(threw);
+    const auto details = roadService->getRoad(summary.roadId);
+    REQUIRE(details.has_value());
+    CHECK(details->elevationBreakpoints.empty());
+}
+
 TEST_CASE_FIXTURE(RoadServiceTestFixture, "save and reopen preserves road") {
     CreateRoadInput input;
     input.name = "Persistent Road";

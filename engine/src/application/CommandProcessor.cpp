@@ -199,6 +199,8 @@ std::string_view commandName(const ProtocolFrame& frame) {
         return "road.update_superelevation";
     case protocol::v1::CommandEnvelope::kUpdateRoadWidth:
         return "road.update_width";
+    case protocol::v1::CommandEnvelope::kConformRoadToTerrain:
+        return "road.conform_to_terrain";
     case protocol::v1::CommandEnvelope::kUndoRoad:
         return "road.undo";
     case protocol::v1::CommandEnvelope::kRedoRoad:
@@ -648,6 +650,9 @@ void CommandProcessor::processCommand(
             break;
         case protocol::v1::CommandEnvelope::kUpdateRoadWidth:
             handleUpdateRoadWidth(connectionId, frame);
+            break;
+        case protocol::v1::CommandEnvelope::kConformRoadToTerrain:
+            handleConformRoadToTerrain(connectionId, frame);
             break;
         case protocol::v1::CommandEnvelope::kUndoRoad:
             handleUndoRoad(connectionId, frame);
@@ -1868,6 +1873,36 @@ void CommandProcessor::handleUpdateRoadWidth(const std::string& connectionId, co
     ProtocolFrame response;
     response.set_request_id(frame.request_id());
     fillRoadSummary(response.mutable_result()->mutable_update_road_width_result()->mutable_road(), summary);
+    sink_.sendToConnection(connectionId, response);
+}
+
+void CommandProcessor::handleConformRoadToTerrain(
+    const std::string& connectionId, const ProtocolFrame& frame) {
+    const auto& command = frame.command().conform_road_to_terrain();
+    ConformRoadToTerrainInput input;
+    input.roadId = command.road_id();
+    input.stationInterval = command.station_interval();
+    input.verticalOffset = command.vertical_offset();
+
+    const auto summary = roadService_->conformToTerrain(input,
+        [this, &command](const domain::road::AlignmentPoint& point)
+            -> std::expected<double, std::string> {
+            const auto sampled = terrainService_->sample(
+                command.dataset_id(), point.easting, point.northing);
+            switch (sampled.sample.status) {
+            case domain::terrain::TerrainSampleStatus::Height:
+                return sampled.sample.height;
+            case domain::terrain::TerrainSampleStatus::NoData:
+                return std::unexpected("terrain sample is NoData");
+            case domain::terrain::TerrainSampleStatus::OutsideCoverage:
+                return std::unexpected("road lies outside terrain coverage");
+            }
+            return std::unexpected("terrain sample status is unsupported");
+        });
+
+    ProtocolFrame response;
+    response.set_request_id(frame.request_id());
+    fillRoadSummary(response.mutable_result()->mutable_conform_road_to_terrain_result()->mutable_road(), summary);
     sink_.sendToConnection(connectionId, response);
 }
 

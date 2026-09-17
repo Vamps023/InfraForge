@@ -10,6 +10,7 @@ import {
   UpdateRoadElevationCommandSchema,
   UpdateRoadSuperelevationCommandSchema,
   UpdateRoadWidthCommandSchema,
+  ConformRoadToTerrainCommandSchema,
   ListRoadsCommandSchema,
   GetRoadCommandSchema,
   GetRoadSceneCommandSchema,
@@ -251,6 +252,26 @@ export async function updateRoadWidth(
     const command = create(UpdateRoadWidthCommandSchema, { roadId, stations, leftWidths, rightWidths })
     const outcome = await sendRoadCommand(client, { case: 'updateRoadWidth', value: command })
     if (outcome.case !== 'updateRoadWidthResult' || !outcome.value.road) {
+      throw expectFailure(outcome)
+    }
+    useRoadStore.getState().upsertRoad(outcome.value.road)
+    return outcome.value.road
+  })
+}
+
+export async function conformRoadToTerrain(
+  client: EngineClient,
+  roadId: string,
+  stationInterval: number,
+  verticalOffset: number,
+  datasetId = '',
+): Promise<RoadSummary> {
+  return withRoadError(async () => {
+    const command = create(ConformRoadToTerrainCommandSchema, {
+      roadId, datasetId, stationInterval, verticalOffset,
+    })
+    const outcome = await sendRoadCommand(client, { case: 'conformRoadToTerrain', value: command })
+    if (outcome.case !== 'conformRoadToTerrainResult' || !outcome.value.road) {
       throw expectFailure(outcome)
     }
     useRoadStore.getState().upsertRoad(outcome.value.road)

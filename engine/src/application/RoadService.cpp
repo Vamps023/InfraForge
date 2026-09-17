@@ -687,6 +687,58 @@ RoadSummary RoadService::updateWidth(const UpdateWidthInput& input) {
     return toSummary(record);
 }
 
+RoadSummary RoadService::conformToTerrain(
+    const ConformRoadToTerrainInput& input, const TerrainHeightSampler& sampleHeight) {
+    if (!std::isfinite(input.stationInterval) || input.stationInterval <= 0.0) {
+        throw CommandFailure{CommandFailureCode::InvalidArgument,
+            "terrain conformance station interval must be finite and positive"};
+    }
+    if (!std::isfinite(input.verticalOffset)) {
+        throw CommandFailure{CommandFailureCode::InvalidArgument,
+            "terrain conformance vertical offset must be finite"};
+    }
+    if (!sampleHeight) {
+        throw CommandFailure{CommandFailureCode::InvalidArgument,
+            "terrain conformance requires a height sampler"};
+    }
+
+    const auto found = findRoad(input.roadId);
+    if (!found.has_value()) {
+        throw CommandFailure{CommandFailureCode::NotFound, "road not found: " + input.roadId};
+    }
+    const auto road = rebuildRoad(*found);
+    domain::road::RoadTessellationParams params;
+    params.stationInterval = input.stationInterval;
+    const auto tessellation = domain::road::tessellateRoad(
+        road.alignment(), road.elevation(), road.superelevation(), road.width(), params);
+    if (tessellation.isEmpty()) {
+        throw CommandFailure{CommandFailureCode::InvalidArgument,
+            "road terrain conformance could not produce sampling stations"};
+    }
+
+    UpdateElevationInput elevation;
+    elevation.roadId = input.roadId;
+    elevation.stations.reserve(tessellation.crossSections.size());
+    elevation.elevations.reserve(tessellation.crossSections.size());
+    for (const auto& section : tessellation.crossSections) {
+        auto sampled = sampleHeight(section.center);
+        if (!sampled.has_value()) {
+            throw CommandFailure{CommandFailureCode::InvalidArgument,
+                "terrain conformance failed at station " + std::to_string(section.station)
+                    + ": " + sampled.error()};
+        }
+        const double conformedHeight = *sampled + input.verticalOffset;
+        if (!std::isfinite(conformedHeight)) {
+            throw CommandFailure{CommandFailureCode::InvalidArgument,
+                "terrain conformance produced a non-finite height at station "
+                    + std::to_string(section.station)};
+        }
+        elevation.stations.push_back(section.station);
+        elevation.elevations.push_back(conformedHeight);
+    }
+    return updateElevation(elevation);
+}
+
 RoadHistoryResult RoadService::undo(const std::string& roadId) {
     // Blocker 10: global chronological undo. An empty road ID means undo the
     // most recent road command across ALL roads, determined by sequence

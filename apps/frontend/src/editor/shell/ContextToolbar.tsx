@@ -7,12 +7,16 @@ import {
 } from '../commands/useCommands'
 import { useRoadToolStore } from '../../features/road/roadToolStore'
 
-// ContextToolbar — context-aware toolbar that shows workspace-specific
-// actions. Only renders actions for the active workspace that have real
+// ContextToolbar — context-aware toolbar organized into labeled tool groups
+// (reference-informed composition: acquire/author/history sections, an
+// explicit drawing-mode group while authoring, and consistent tool-button
+// styling). Only renders actions for the active workspace that have real
 // functionality. No fake buttons.
 //
-// Terrain workspace: Import (local file), Download Area, Georeference.
-// Roads workspace: Create, Delete, Rename, Refit, Undo, Redo.
+// Terrain workspace groups: Acquire (Import, Download Area), Manage
+// (Export, Georeference).
+// Roads workspace groups: Draw (live drawing state), Author (Create, Delete,
+// Rename, Refit), History (Undo, Redo).
 // Other workspaces: no actions yet (future modules).
 //
 // All buttons route through the central command registry via
@@ -46,46 +50,51 @@ function TerrainContextToolbar({ context }: { context: CommandContext }) {
     <div className="context-toolbar" aria-label="Terrain workspace actions">
       <span className="context-toolbar-label">Terrain</span>
       <div className="context-toolbar-divider" />
-      <Tooltip label={importLocal.availability.disabledReason ?? 'Import a local GeoTIFF DEM file'}>
-        <button
-          type="button"
-          className="tool-button"
-          disabled={!importLocal.availability.enabled}
-          onClick={() => void importLocal.run()}
-        >
-          <FolderOpen size={14} /> Import
-        </button>
-      </Tooltip>
-      <Tooltip label={downloadArea.availability.disabledReason ?? 'Download terrain DEM for a selected area'}>
-        <button
-          type="button"
-          className="tool-button"
-          disabled={!downloadArea.availability.enabled}
-          onClick={() => void downloadArea.run()}
-        >
-          <Download size={14} /> Download Area
-        </button>
-      </Tooltip>
-      <Tooltip label={exportTerrainCmd.availability.disabledReason ?? 'Export terrain heightmaps and albedo textures'}>
-        <button
-          type="button"
-          className="tool-button"
-          disabled={!exportTerrainCmd.availability.enabled}
-          onClick={() => void exportTerrainCmd.run()}
-        >
-          <Upload size={14} /> Export
-        </button>
-      </Tooltip>
-      <Tooltip label={georeference.availability.disabledReason ?? 'Open canonical georeference settings'}>
-        <button
-          type="button"
-          className="tool-button"
-          disabled={!georeference.availability.enabled}
-          onClick={() => void georeference.run()}
-        >
-          <MapPin size={14} /> Georeference
-        </button>
-      </Tooltip>
+      <div className="context-toolbar-group" role="group" aria-label="Terrain acquisition">
+        <Tooltip label={importLocal.availability.disabledReason ?? 'Import a local GeoTIFF DEM file'}>
+          <button
+            type="button"
+            className="tool-button"
+            disabled={!importLocal.availability.enabled}
+            onClick={() => void importLocal.run()}
+          >
+            <FolderOpen size={14} /> Import
+          </button>
+        </Tooltip>
+        <Tooltip label={downloadArea.availability.disabledReason ?? 'Download terrain DEM for a selected area'}>
+          <button
+            type="button"
+            className="tool-button"
+            disabled={!downloadArea.availability.enabled}
+            onClick={() => void downloadArea.run()}
+          >
+            <Download size={14} /> Download Area
+          </button>
+        </Tooltip>
+      </div>
+      <div className="context-toolbar-divider" />
+      <div className="context-toolbar-group" role="group" aria-label="Terrain management">
+        <Tooltip label={exportTerrainCmd.availability.disabledReason ?? 'Export terrain heightmaps and albedo textures'}>
+          <button
+            type="button"
+            className="tool-button"
+            disabled={!exportTerrainCmd.availability.enabled}
+            onClick={() => void exportTerrainCmd.run()}
+          >
+            <Upload size={14} /> Export
+          </button>
+        </Tooltip>
+        <Tooltip label={georeference.availability.disabledReason ?? 'Open canonical georeference settings'}>
+          <button
+            type="button"
+            className="tool-button"
+            disabled={!georeference.availability.enabled}
+            onClick={() => void georeference.run()}
+          >
+            <MapPin size={14} /> Georeference
+          </button>
+        </Tooltip>
+      </div>
     </div>
   )
 }
@@ -106,75 +115,81 @@ function RoadsContextToolbar({ context }: { context: CommandContext }) {
     <div className="context-toolbar" aria-label="Roads workspace actions">
       <span className="context-toolbar-label">Roads</span>
       <div className="context-toolbar-divider" />
-      {drawing ? <>
-        <span className="context-toolbar-label">{pointCount} control points</span>
-        <button type="button" className="tool-button" disabled={!finishDrawing.availability.enabled}
-          onClick={() => void finishDrawing.run()}><Check size={14} /> Finish</button>
-        <button type="button" className="tool-button" disabled={!cancelDrawing.availability.enabled}
-          onClick={() => void cancelDrawing.run()}><X size={14} /> Cancel</button>
-        <div className="context-toolbar-divider" />
-      </> : null}
-      <Tooltip label={createRoad.availability.disabledReason ?? 'Create a new road from a source polyline'}>
-        <button
-          type="button"
-          className="tool-button"
-          disabled={!createRoad.availability.enabled}
-          onClick={() => void createRoad.run()}
-        >
-          <Plus size={14} /> Create Road
-        </button>
-      </Tooltip>
-      <Tooltip label={deleteRoad.availability.disabledReason ?? 'Delete the selected road'}>
-        <button
-          type="button"
-          className="tool-button"
-          disabled={!deleteRoad.availability.enabled}
-          onClick={() => void deleteRoad.run()}
-        >
-          <Trash2 size={14} /> Delete
-        </button>
-      </Tooltip>
-      <Tooltip label={renameRoad.availability.disabledReason ?? 'Rename the selected road'}>
-        <button
-          type="button"
-          className="tool-button"
-          disabled={!renameRoad.availability.enabled}
-          onClick={() => void renameRoad.run()}
-        >
-          Rename
-        </button>
-      </Tooltip>
-      <Tooltip label={refitRoad.availability.disabledReason ?? 'Refit road geometry from source polyline'}>
-        <button
-          type="button"
-          className="tool-button"
-          disabled={!refitRoad.availability.enabled}
-          onClick={() => void refitRoad.run()}
-        >
-          <RefreshCw size={14} /> Refit
-        </button>
-      </Tooltip>
+      {drawing ? (
+        <div className="context-toolbar-group context-toolbar-group--drawing" role="group" aria-label="Road drawing mode">
+          <span className="context-toolbar-hint">{pointCount} control points</span>
+          <button type="button" className="tool-button active" disabled={!finishDrawing.availability.enabled}
+            onClick={() => void finishDrawing.run()}><Check size={14} /> Finish</button>
+          <button type="button" className="tool-button" disabled={!cancelDrawing.availability.enabled}
+            onClick={() => void cancelDrawing.run()}><X size={14} /> Cancel</button>
+        </div>
+      ) : null}
+      {drawing ? <div className="context-toolbar-divider" /> : null}
+      <div className="context-toolbar-group" role="group" aria-label="Road authoring">
+        <Tooltip label={createRoad.availability.disabledReason ?? 'Create a new road from a source polyline'}>
+          <button
+            type="button"
+            className="tool-button"
+            disabled={!createRoad.availability.enabled}
+            onClick={() => void createRoad.run()}
+          >
+            <Plus size={14} /> Create Road
+          </button>
+        </Tooltip>
+        <Tooltip label={deleteRoad.availability.disabledReason ?? 'Delete the selected road'}>
+          <button
+            type="button"
+            className="tool-button"
+            disabled={!deleteRoad.availability.enabled}
+            onClick={() => void deleteRoad.run()}
+          >
+            <Trash2 size={14} /> Delete
+          </button>
+        </Tooltip>
+        <Tooltip label={renameRoad.availability.disabledReason ?? 'Rename the selected road'}>
+          <button
+            type="button"
+            className="tool-button"
+            disabled={!renameRoad.availability.enabled}
+            onClick={() => void renameRoad.run()}
+          >
+            Rename
+          </button>
+        </Tooltip>
+        <Tooltip label={refitRoad.availability.disabledReason ?? 'Refit road geometry from source polyline'}>
+          <button
+            type="button"
+            className="tool-button"
+            disabled={!refitRoad.availability.enabled}
+            onClick={() => void refitRoad.run()}
+          >
+            <RefreshCw size={14} /> Refit
+          </button>
+        </Tooltip>
+      </div>
       <div className="context-toolbar-divider" />
-      <Tooltip label={undoRoad.availability.disabledReason ?? 'Undo the last road edit'}>
-        <button
-          type="button"
-          className="tool-button"
-          disabled={!undoRoad.availability.enabled}
-          onClick={() => void undoRoad.run()}
-        >
-          <Undo2 size={14} /> Undo
-        </button>
-      </Tooltip>
-      <Tooltip label={redoRoad.availability.disabledReason ?? 'Redo the last undone road edit'}>
-        <button
-          type="button"
-          className="tool-button"
-          disabled={!redoRoad.availability.enabled}
-          onClick={() => void redoRoad.run()}
-        >
-          <Redo2 size={14} /> Redo
-        </button>
-      </Tooltip>
+      <div className="context-toolbar-group" role="group" aria-label="Road edit history">
+        <Tooltip label={undoRoad.availability.disabledReason ?? 'Undo the last road edit'}>
+          <button
+            type="button"
+            className="tool-button"
+            disabled={!undoRoad.availability.enabled}
+            onClick={() => void undoRoad.run()}
+          >
+            <Undo2 size={14} /> Undo
+          </button>
+        </Tooltip>
+        <Tooltip label={redoRoad.availability.disabledReason ?? 'Redo the last undone road edit'}>
+          <button
+            type="button"
+            className="tool-button"
+            disabled={!redoRoad.availability.enabled}
+            onClick={() => void redoRoad.run()}
+          >
+            <Redo2 size={14} /> Redo
+          </button>
+        </Tooltip>
+      </div>
     </div>
   )
 }

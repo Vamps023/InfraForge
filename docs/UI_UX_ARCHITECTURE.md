@@ -40,7 +40,7 @@ AppShell (grid: 40px / 1fr / 26px)
 │   │   └── Simulation (disabled — future)
 │   │
 │   └── EditorArea (flex column)
-│       ├── ContextToolbar (36px, workspace-specific actions)
+│       ├── ContextToolbar (grouped tool sections, min 36px, wraps on narrow windows)
 │       └── EditorLayout (dockable/resizable)
 │           ├── LeftPanel (Outliner)
 │           ├── CenterViewport (native Vulkan HWND + overlays)
@@ -76,10 +76,35 @@ Workspaces are the primary navigation metaphor. Each workspace represents a doma
 
 **v0.1 status:**
 - **Home**: functional — shows the project start screen when no project is open, and also when the user explicitly navigates to the Home workspace (even with a project open). Navigating to Home hides the native viewport and shows the home screen overlay; switching back to Terrain restores the native viewport.
-- **Terrain**: functional — the only authoring workspace with real actions (Import, Download Area, Georeference)
-- **Roads, Rail, Environment, Traffic, Simulation**: disabled — clearly marked as "Coming later"
+- **Terrain**: functional — grouped context toolbar (Acquire: Import, Download Area; Manage: Export, Georeference)
+- **Roads**: functional — grouped context toolbar (Draw: live drawing state with Finish/Cancel; Author: Create, Delete, Rename, Refit; History: Undo, Redo), road outliner projection, and road inspector section. Lane/junction authoring is future work (GitHub issue #8).
+- **Rail, Environment, Traffic, Simulation**: disabled — clearly marked as "Coming later"
 
 Future workspaces are rendered as disabled buttons with `aria-disabled="true"` and a tooltip explaining they are future modules. They do not execute any action when clicked.
+
+## Context Toolbar Conventions
+
+The context toolbar is organized into labeled tool **groups** (a composition
+convention informed by OpenGeoStudio's contextual tool system; InfraForge
+implements it natively against its own command registry):
+
+1. A workspace label (`Terrain`, `Roads`) anchors the toolbar.
+2. Each group is a `role="group"` container with an accessible group label
+   (e.g. "Road authoring", "Terrain acquisition") separated by dividers.
+3. Transient authoring modes (road drawing) render as a distinct
+   accent-tinted group (`context-toolbar-group--drawing`) so live tool state
+   is visually unmistakable from persistent actions.
+4. Every button routes through the central command registry
+   (`executeCommand()`); disabled states derive from
+   `resolveCommandAvailability()` so the toolbar cannot drift from the menu,
+   shortcuts, and command palette.
+5. No fake buttons: future capabilities are absent, not mocked.
+
+All dialogs use the shared dialog system (`.dialog` container, `.dialog-header`
+with close affordance, `.dialog-body`, `.dialog-actions`) with `.form-row` /
+`.form-label` / `.form-input` form fields. Dialog code must not introduce
+parallel dialog markup classes (a past divergence left the road dialogs
+unstyled; the shared classes are the canonical surface).
 
 ## Design Tokens
 

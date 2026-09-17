@@ -9,8 +9,9 @@ interface CreateRoadDialogProps {
   onClose: () => void
 }
 
-// Road creation dialog: the user enters a road name and a source polyline
-// (as easting/northing pairs in canonical project coordinates). The
+// Create Road dialog — uses the shared dialog system (dialogs.css). The
+// user enters a road name and a source polyline (easting/northing pairs in
+// canonical project coordinates), or draws directly in the viewport. The
 // engine runs the deterministic alignment fitter to produce a canonical
 // ReferenceAlignment. The dialog never fabricates geometry.
 export function CreateRoadDialog({ client, onClose }: CreateRoadDialogProps) {
@@ -83,8 +84,8 @@ export function CreateRoadDialog({ client, onClose }: CreateRoadDialogProps) {
   }
 
   return (
-    <div className="dialog-overlay" role="dialog" aria-label="Create Road">
-      <div className="dialog-panel">
+    <div className="dialog-overlay" role="dialog" aria-modal="true" aria-label="Create Road">
+      <div className="dialog">
         <div className="dialog-header">
           <h2>Create Road</h2>
           <button className="dialog-close" type="button" onClick={onClose} aria-label="Close">
@@ -92,45 +93,51 @@ export function CreateRoadDialog({ client, onClose }: CreateRoadDialogProps) {
           </button>
         </div>
         <div className="dialog-body">
-          <div className="form-field">
-            <label htmlFor="road-name">Road Name</label>
+          <label className="form-row" htmlFor="road-name">
+            <span className="form-label">Road name</span>
             <input
               id="road-name"
+              className="form-input"
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="e.g. Highway 101"
               autoFocus
             />
-          </div>
-          <div className="form-field">
-            <label htmlFor="road-coordinates">Source Polyline (Easting, Northing per line)</label>
+          </label>
+          <label className="form-row" htmlFor="road-coordinates">
+            <span className="form-label">Source polyline (easting, northing per line)</span>
             <textarea
               id="road-coordinates"
               value={coordinates}
               onChange={(e) => setCoordinates(e.target.value)}
               placeholder={'e.g.\n0 0\n100 0\n200 50'}
               rows={8}
-              className="mono"
+              className="form-input mono"
             />
-          </div>
-          <div className="form-field">
-            <label htmlFor="road-tolerance">Position Tolerance (project units)</label>
+          </label>
+          <label className="form-row" htmlFor="road-tolerance">
+            <span className="form-label">Position tolerance (project units)</span>
             <input
               id="road-tolerance"
+              className="form-input"
               type="text"
               value={tolerance}
               onChange={(e) => setTolerance(e.target.value)}
               placeholder="1.0"
             />
-          </div>
-          {error ? <div className="dialog-error">{error}</div> : null}
+          </label>
+          {error ? (
+            <div className="form-error" role="alert">
+              <p>{error}</p>
+            </div>
+          ) : null}
         </div>
-        <div className="dialog-footer">
-          <button className="button secondary" type="button" onClick={onClose} disabled={creating}>
+        <div className="dialog-actions">
+          <button className="button" type="button" onClick={onClose} disabled={creating}>
             Cancel
           </button>
-          <button className="button secondary" type="button" onClick={() => void handleCreate()} disabled={creating}>
+          <button className="button" type="button" onClick={() => void handleCreate()} disabled={creating}>
             {creating ? 'Creating…' : 'Create from coordinates'}
           </button>
           <button className="button primary" type="button" onClick={handleDraw} disabled={creating}>

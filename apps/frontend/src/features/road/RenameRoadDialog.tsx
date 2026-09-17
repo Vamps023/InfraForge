@@ -39,8 +39,8 @@ export function RenameRoadDialog({ client, onClose }: RenameRoadDialogProps) {
   }
 
   return (
-    <div className="dialog-overlay" role="dialog" aria-label="Rename Road">
-      <div className="dialog-panel">
+    <div className="dialog-overlay" role="dialog" aria-modal="true" aria-label="Rename Road">
+      <div className="dialog">
         <div className="dialog-header">
           <h2>Rename Road</h2>
           <button className="dialog-close" type="button" onClick={onClose} aria-label="Close">
@@ -48,21 +48,26 @@ export function RenameRoadDialog({ client, onClose }: RenameRoadDialogProps) {
           </button>
         </div>
         <div className="dialog-body">
-          <div className="form-field">
-            <label htmlFor="road-rename-name">New Name</label>
+          <label className="form-row" htmlFor="road-rename-name">
+            <span className="form-label">New name</span>
             <input
               id="road-rename-name"
+              className="form-input"
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="e.g. Highway 101"
               autoFocus
             />
-          </div>
-          {error ? <div className="dialog-error">{error}</div> : null}
+          </label>
+          {error ? (
+            <div className="form-error" role="alert">
+              <p>{error}</p>
+            </div>
+          ) : null}
         </div>
-        <div className="dialog-footer">
-          <button className="button secondary" type="button" onClick={onClose} disabled={renaming}>
+        <div className="dialog-actions">
+          <button className="button" type="button" onClick={onClose} disabled={renaming}>
             Cancel
           </button>
           <button className="button primary" type="button" onClick={() => void handleRename()} disabled={renaming}>

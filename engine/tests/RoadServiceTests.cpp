@@ -488,6 +488,28 @@ TEST_CASE_FIXTURE(RoadServiceTestFixture, "road scene projection produces mesh d
     CHECK(hasNonZeroCoord);
 }
 
+TEST_CASE_FIXTURE(RoadServiceTestFixture, "road scene normals use superelevation angle") {
+    CreateRoadInput input;
+    input.name = "Banked Scene Road";
+    input.sourcePoints = makeStraightPolyline(0.0, 0.0, 0.0, 100.0, 10);
+    input.positionTolerance = 1.0;
+    auto summary = roadService->createRoad(input);
+
+    UpdateSuperelevationInput bank;
+    bank.roadId = summary.roadId;
+    bank.stations = {0.0, 100.0};
+    bank.superelevations = {0.1, 0.1};
+    (void)roadService->updateSuperelevation(bank);
+
+    const auto projection = roadService->roadSceneProjection();
+    REQUIRE(projection.meshes.size() == 1);
+    REQUIRE_FALSE(projection.meshes[0].vertices.empty());
+    const auto& normal = projection.meshes[0].vertices.front();
+    CHECK(normal.nx == doctest::Approx(0.0).epsilon(1e-5));
+    CHECK(normal.ny == doctest::Approx(-std::sin(0.1)).epsilon(1e-5));
+    CHECK(normal.nz == doctest::Approx(std::cos(0.1)).epsilon(1e-5));
+}
+
 TEST_CASE_FIXTURE(RoadServiceTestFixture, "undo redo after reopen") {
     CreateRoadInput input;
     input.name = "Undo Road";

@@ -5,7 +5,9 @@
 #include "infraforge/domain/road/VerticalProfiles.hpp"
 
 #include <doctest/doctest.h>
+#include <algorithm>
 #include <cmath>
+#include <ranges>
 
 namespace infraforge::domain::road {
 namespace {
@@ -178,12 +180,61 @@ TEST_CASE("tessellateRoad handles arc alignment") {
     params.halfWidth = 5.0;
 
     auto tess = tessellateRoad(alignment, {}, {}, params);
-    CHECK(tess.crossSectionCount() == 6);  // 0, 10, 20, 30, 40, 50
-    CHECK(tess.triangleCount() == 10);
+    CHECK(tess.crossSectionCount() == 11);  // 5 m refinement satisfies 5 cm surface error.
+    CHECK(tess.triangleCount() == 20);
 
     // The arc curves to the left (positive curvature), so the centerline
     // should move north as station increases.
     CHECK(tess.crossSections[1].center.northing > doctest::Approx(0.0));
+}
+
+TEST_CASE("adaptive tessellation enforces surface chord error on arcs") {
+    auto alignment = makeArcAlignment(25.0, 50.0);
+    RoadTessellationParams params;
+    params.stationInterval = 20.0;
+    params.maximumSurfaceError = 0.01;
+
+    auto tess = tessellateRoad(alignment, {}, {}, params);
+    REQUIRE(tess.crossSectionCount() > 4);
+    for (std::size_t i = 0; i + 1 < tess.crossSections.size(); ++i) {
+        const auto& start = tess.crossSections[i];
+        const auto& end = tess.crossSections[i + 1];
+        const auto actual = alignment.evaluate((start.station + end.station) * 0.5).position;
+        const double deviation = std::hypot(
+            actual.easting - (start.center.easting + end.center.easting) * 0.5,
+            actual.northing - (start.center.northing + end.center.northing) * 0.5);
+        CHECK(deviation <= params.maximumSurfaceError + 1e-12);
+    }
+}
+
+TEST_CASE("adaptive tessellation preserves authored profile and segment boundaries") {
+    LineSegment first{.start = {0.0, 0.0}, .heading = 0.0, .length = 40.0};
+    LineSegment second{.start = {40.0, 0.0}, .heading = 0.0, .length = 60.0};
+    auto alignment = ReferenceAlignment::build({first, second});
+    REQUIRE(alignment.has_value());
+    auto elevation = buildElevationProfile({{0.0, 0.0}, {37.0, 4.0}, {100.0, 8.0}});
+    REQUIRE(elevation.has_value());
+    auto width = buildRoadWidthProfile({{0.0, 3.0, 3.0}, {63.0, 8.0, 2.0}});
+    REQUIRE(width.has_value());
+
+    RoadTessellationParams params;
+    params.stationInterval = 50.0;
+    auto tess = tessellateRoad(*alignment, *elevation, {}, *width, params);
+    const auto hasStation = [&](const double station) {
+        return std::ranges::any_of(tess.crossSections,
+            [station](const auto& section) { return section.station == doctest::Approx(station); });
+    };
+    CHECK(hasStation(37.0));
+    CHECK(hasStation(40.0));
+    CHECK(hasStation(63.0));
+}
+
+TEST_CASE("adaptive tessellation fails safely when its cross-section budget is exceeded") {
+    auto alignment = makeStraightAlignment(100.0);
+    RoadTessellationParams params;
+    params.stationInterval = 1.0;
+    params.maximumCrossSections = 10;
+    CHECK(tessellateRoad(alignment, {}, {}, params).isEmpty());
 }
 
 TEST_CASE("tessellateRoad with small interval produces more samples") {

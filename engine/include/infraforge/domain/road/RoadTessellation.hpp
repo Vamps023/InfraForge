@@ -14,8 +14,8 @@ namespace infraforge::domain::road {
 // ReferenceAlignment and vertical profiles. This is derived data — the
 // renderer consumes it, but road truth remains in the alignment/profiles.
 //
-// The tessellation is a simple centerline + cross-section ribbon:
-//   - Cross-sections are sampled at regular station intervals.
+// The tessellation is a centerline + cross-section ribbon:
+//   - Cross-sections are sampled adaptively from a world-space error bound.
 //   - Each cross-section has left/right edge offsets from the centerline.
 //   - The mesh is a triangle strip between adjacent cross-sections.
 //
@@ -42,8 +42,14 @@ struct RoadCrossSection {
 
 // Tessellation parameters. All values in canonical project units.
 struct RoadTessellationParams {
-    // Station sampling interval along the alignment.
+    // Maximum station spacing along the alignment. Straight, flat portions
+    // use this spacing; curved/banked/tapered portions refine further.
     double stationInterval{10.0};
+    // Maximum permitted midpoint deviation between the evaluated road surface
+    // and its tessellated chord, measured in canonical project units.
+    double maximumSurfaceError{0.05};
+    // Hard safety bound for pathological inputs.
+    std::size_t maximumCrossSections{1'000'000};
     // Half-width of the road surface (distance from centerline to each edge).
     double halfWidth{5.0};
 };
@@ -61,12 +67,12 @@ struct RoadTessellation {
 };
 
 // Generates a road tessellation from a reference alignment and vertical
-// profiles. The alignment is sampled at regular station intervals; each
-// sample produces a cross-section with left/right edges offset perpendicular
-// to the tangent heading. Heights come from the elevation profile; cross-
-// slopes from the superelevation profile.
+// profiles. Sampling includes every alignment segment and authored profile
+// breakpoint, then recursively refines until the center and both surface
+// edges satisfy maximumSurfaceError.
 //
-// The stationInterval must be positive; halfWidth must be non-negative.
+// stationInterval and maximumSurfaceError must be positive; halfWidth must be
+// non-negative and maximumCrossSections must be at least two.
 // Returns an empty tessellation for an empty alignment.
 [[nodiscard]] RoadTessellation tessellateRoad(
     const ReferenceAlignment& alignment,

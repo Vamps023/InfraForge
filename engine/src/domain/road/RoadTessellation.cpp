@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <numbers>
+#include <numeric>
 
 namespace infraforge::domain::road {
 
@@ -15,6 +16,63 @@ AlignmentPoint offsetPerpendicular(const AlignmentPoint& center, Heading heading
     const double perpX = std::cos(heading + std::numbers::pi / 2.0);
     const double perpY = std::sin(heading + std::numbers::pi / 2.0);
     return AlignmentPoint{center.easting + perpX * offset, center.northing + perpY * offset};
+}
+
+RoadCrossSection evaluateCrossSection(
+    const ReferenceAlignment& alignment,
+    const ElevationProfile& elevation,
+    const SuperelevationProfile& superelevation,
+    const RoadWidthProfile& width,
+    const Station station) noexcept {
+    const auto sample = alignment.evaluate(station);
+    RoadCrossSection section;
+    section.station = station;
+    section.center = sample.position;
+    section.heading = sample.heading;
+    section.curvature = sample.curvature;
+    section.height = elevation.evaluate(station);
+    section.crossSlope = superelevation.evaluate(station);
+    const auto surfaceWidth = width.evaluate(station);
+    section.leftWidth = surfaceWidth.left;
+    section.rightWidth = surfaceWidth.right;
+    section.leftEdge = offsetPerpendicular(section.center, section.heading, section.leftWidth);
+    section.rightEdge = offsetPerpendicular(section.center, section.heading, -section.rightWidth);
+    section.leftHeight = section.height + std::tan(section.crossSlope) * section.leftWidth;
+    section.rightHeight = section.height - std::tan(section.crossSlope) * section.rightWidth;
+    return section;
+}
+
+double midpointDeviation(
+    const AlignmentPoint& start, const double startHeight,
+    const AlignmentPoint& midpoint, const double midpointHeight,
+    const AlignmentPoint& end, const double endHeight) noexcept {
+    return std::hypot(midpoint.easting - (start.easting + end.easting) * 0.5,
+        midpoint.northing - (start.northing + end.northing) * 0.5,
+        midpointHeight - (startHeight + endHeight) * 0.5);
+}
+
+double surfaceDeviation(
+    const RoadCrossSection& start,
+    const RoadCrossSection& midpoint,
+    const RoadCrossSection& end) noexcept {
+    return std::max({
+        midpointDeviation(start.center, start.height, midpoint.center, midpoint.height,
+            end.center, end.height),
+        midpointDeviation(start.leftEdge, start.leftHeight, midpoint.leftEdge, midpoint.leftHeight,
+            end.leftEdge, end.leftHeight),
+        midpointDeviation(start.rightEdge, start.rightHeight, midpoint.rightEdge, midpoint.rightHeight,
+            end.rightEdge, end.rightHeight),
+    });
+}
+
+template <typename Breakpoint>
+void appendBreakpointStations(std::vector<Station>& stations,
+    const std::vector<Breakpoint>& breakpoints, const double totalLength) {
+    for (const auto& breakpoint : breakpoints) {
+        if (breakpoint.station > 0.0 && breakpoint.station < totalLength) {
+            stations.push_back(breakpoint.station);
+        }
+    }
 }
 
 } // namespace
@@ -37,59 +95,82 @@ RoadTessellation tessellateRoad(
         return tess;
     }
 
-    // Blocker 13: harden tessellation inputs. Reject non-finite and
-    // negative parameters rather than silently clamping them — a NaN
-    // interval or negative width would produce undefined geometry.
+    // Reject malformed controls rather than silently clamping them.
     if (!std::isfinite(params.stationInterval) || params.stationInterval <= 0.0) {
+        return tess;
+    }
+    if (!std::isfinite(params.maximumSurfaceError) || params.maximumSurfaceError <= 0.0
+        || params.maximumCrossSections < 2) {
         return tess;
     }
     if (!std::isfinite(params.halfWidth) || params.halfWidth < 0.0) {
         return tess;
     }
+    if (elevation.validate().has_value() || superelevation.validate().has_value()
+        || width.validate().has_value()) return tess;
 
-    // Clamp station interval to a safe minimum and ensure at least 2 samples.
-    const double interval = std::max(params.stationInterval, 1e-3);
-
-    // Sample the alignment at regular station intervals.
-    // Always include station 0 and the final station.
-    std::vector<Station> stations;
-    const std::size_t approxCount = static_cast<std::size_t>(std::ceil(totalLength / interval)) + 1;
-    stations.reserve(approxCount);
-    for (double s = 0.0; s < totalLength; s += interval) {
-        stations.push_back(s);
+    // Preserve all canonical boundaries so refinement never bridges an
+    // alignment primitive or an authored profile/taper breakpoint.
+    std::vector<Station> stations{0.0, totalLength};
+    for (const auto& stationed : alignment.segments()) {
+        const double boundary = stationed.stationRange().end;
+        if (boundary > 0.0 && boundary < totalLength) stations.push_back(boundary);
     }
-    // Ensure the final station is included exactly.
-    if (stations.empty() || stations.back() < totalLength) {
-        stations.push_back(totalLength);
+    appendBreakpointStations(stations, elevation.breakpoints(), totalLength);
+    appendBreakpointStations(stations, superelevation.breakpoints(), totalLength);
+    appendBreakpointStations(stations, width.breakpoints(), totalLength);
+    std::sort(stations.begin(), stations.end());
+    stations.erase(std::unique(stations.begin(), stations.end()), stations.end());
+
+    std::vector<Station> seededStations;
+    seededStations.reserve(stations.size());
+    seededStations.push_back(stations.front());
+    for (std::size_t index = 0; index + 1 < stations.size(); ++index) {
+        const double start = stations[index];
+        const double span = stations[index + 1] - start;
+        const double piecesRequired = std::ceil(span / params.stationInterval);
+        const std::size_t remaining = params.maximumCrossSections - seededStations.size();
+        if (!std::isfinite(piecesRequired) || piecesRequired < 1.0
+            || piecesRequired > static_cast<double>(remaining)) return tess;
+        const std::size_t pieces = static_cast<std::size_t>(piecesRequired);
+        for (std::size_t piece = 1; piece <= pieces; ++piece) {
+            seededStations.push_back(start + span * static_cast<double>(piece) / static_cast<double>(pieces));
+        }
     }
+    stations = std::move(seededStations);
 
-    // Build cross-sections.
-    tess.crossSections.reserve(stations.size());
-    for (const Station s : stations) {
-        RoadCrossSection cs;
-        cs.station = s;
+    struct Interval { RoadCrossSection start; RoadCrossSection end; };
+    tess.crossSections.reserve(std::min(params.maximumCrossSections, stations.size() * 2));
+    tess.crossSections.push_back(evaluateCrossSection(
+        alignment, elevation, superelevation, width, stations.front()));
 
-        const auto horiz = alignment.evaluate(s);
-        cs.center = horiz.position;
-        cs.heading = horiz.heading;
-        cs.curvature = horiz.curvature;
-
-        // Vertical profiles.
-        cs.height = elevation.evaluate(s);
-        cs.crossSlope = superelevation.evaluate(s);
-        const RoadSurfaceWidth surfaceWidth = width.evaluate(s);
-        cs.leftWidth = surfaceWidth.left;
-        cs.rightWidth = surfaceWidth.right;
-
-        // Compute left/right edges perpendicular to the heading.
-        // The cross-slope tilts the road surface: left edge rises when
-        // crossSlope > 0 (positive superelevation banks to the left).
-        cs.leftEdge = offsetPerpendicular(cs.center, cs.heading, cs.leftWidth);
-        cs.rightEdge = offsetPerpendicular(cs.center, cs.heading, -cs.rightWidth);
-        cs.leftHeight = cs.height + std::tan(cs.crossSlope) * cs.leftWidth;
-        cs.rightHeight = cs.height - std::tan(cs.crossSlope) * cs.rightWidth;
-
-        tess.crossSections.push_back(cs);
+    for (std::size_t index = 0; index + 1 < stations.size(); ++index) {
+        std::vector<Interval> pending;
+        pending.push_back({
+            evaluateCrossSection(alignment, elevation, superelevation, width, stations[index]),
+            evaluateCrossSection(alignment, elevation, superelevation, width, stations[index + 1]),
+        });
+        while (!pending.empty()) {
+            Interval interval = std::move(pending.back());
+            pending.pop_back();
+            const double midpointStation = std::midpoint(interval.start.station, interval.end.station);
+            const auto midpoint = evaluateCrossSection(
+                alignment, elevation, superelevation, width, midpointStation);
+            const bool requiresRefinement = surfaceDeviation(
+                interval.start, midpoint, interval.end) > params.maximumSurfaceError;
+            if (requiresRefinement && midpointStation > interval.start.station
+                && midpointStation < interval.end.station) {
+                if (tess.crossSections.size() + pending.size() + 2 > params.maximumCrossSections) {
+                    return {};
+                }
+                // LIFO: push right first so output remains station ordered.
+                pending.push_back({midpoint, interval.end});
+                pending.push_back({interval.start, midpoint});
+            } else {
+                tess.crossSections.push_back(interval.end);
+                if (tess.crossSections.size() > params.maximumCrossSections) return {};
+            }
+        }
     }
 
     // Build triangle indices. Each pair of adjacent cross-sections produces

@@ -938,9 +938,9 @@ RoadSceneProjection RoadService::roadSceneProjection() const {
             double tz = grade;
 
             // Cross-section direction: perpendicular to heading, tilted by
-            // cross-slope (superelevation). The cross-slope is the tangent
-            // of the bank angle. Left edge is to the left of the heading.
-            const double crossSlope = cs.crossSlope;
+            // cross-slope (superelevation). The canonical value is a bank
+            // angle in radians, so its vertical rise/run is tan(angle).
+            const double crossSlope = std::tan(cs.crossSlope);
             // Perpendicular to heading in the horizontal plane.
             double px = -sinH;
             double py = cosH;

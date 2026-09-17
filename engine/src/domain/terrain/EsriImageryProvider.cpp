@@ -99,12 +99,15 @@ std::filesystem::path EsriImageryProvider::fetchImageryForBounds(
                         const int destY = (ty - minTileY) * tilePixels;
                         for (int bandIdx = 1; bandIdx <= std::min(3, tileDs->GetRasterCount()); ++bandIdx) {
                             std::vector<GByte> bandData(tilePixels * tilePixels);
-                            tileDs->GetRasterBand(bandIdx)->RasterIO(
+                            const CPLErr readErr = tileDs->GetRasterBand(bandIdx)->RasterIO(
                                 GF_Read, 0, 0, tilePixels, tilePixels, bandData.data(),
                                 tilePixels, tilePixels, GDT_Byte, 0, 0);
-                            memDs->GetRasterBand(bandIdx)->RasterIO(
-                                GF_Write, destX, destY, tilePixels, tilePixels, bandData.data(),
-                                tilePixels, tilePixels, GDT_Byte, 0, 0);
+                            if (readErr == CE_None) {
+                                const CPLErr writeErr = memDs->GetRasterBand(bandIdx)->RasterIO(
+                                    GF_Write, destX, destY, tilePixels, tilePixels, bandData.data(),
+                                    tilePixels, tilePixels, GDT_Byte, 0, 0);
+                                (void)writeErr;
+                            }
                         }
                         GDALClose(tileDs);
                     }

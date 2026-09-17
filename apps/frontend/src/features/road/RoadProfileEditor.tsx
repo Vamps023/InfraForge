@@ -34,6 +34,8 @@ export function RoadProfileEditor({ getEngineClient }: RoadProfileEditorProps) {
   const details = useRoadStore((state) => state.details)
   const road = roads.find((r) => r.roadId === roadId)
 
+  const matchingDetails = details?.roadId === roadId ? details : null
+
   const [uniformElevation, setUniformElevation] = useState<string>('0')
   const [submitting, setSubmitting] = useState(false)
   const [feedback, setFeedback] = useState<string | null>(null)
@@ -48,7 +50,7 @@ export function RoadProfileEditor({ getEngineClient }: RoadProfileEditorProps) {
 
   const handleApplyUniformElevation = async () => {
     const client = getEngineClient()
-    if (!client || !details) {
+    if (!client || !matchingDetails || matchingDetails.roadId !== roadId) {
       return
     }
 
@@ -61,8 +63,8 @@ export function RoadProfileEditor({ getEngineClient }: RoadProfileEditorProps) {
     try {
       setSubmitting(true)
       setFeedback(null)
-      // Build stations from start station to length
-      const count = Math.max(2, details.controlPoints.length)
+      // Build stations from start station to length using matching road details
+      const count = Math.max(2, matchingDetails.controlPoints.length)
       const stations: number[] = []
       const elevations: number[] = []
       for (let i = 0; i < count; ++i) {
@@ -71,8 +73,10 @@ export function RoadProfileEditor({ getEngineClient }: RoadProfileEditorProps) {
         elevations.push(elev)
       }
       await updateRoadElevation(client, roadId, stations, elevations)
-      await getRoad(client, roadId)
-      setFeedback(`Updated profile elevation to ${elev.toFixed(2)} units.`)
+      if (useSelectionStore.getState().primaryId === `road:${roadId}`) {
+        await getRoad(client, roadId)
+        setFeedback(`Updated profile elevation to ${elev.toFixed(2)} units.`)
+      }
     } catch (err) {
       setFeedback(err instanceof Error ? err.message : String(err))
     } finally {
@@ -91,11 +95,11 @@ export function RoadProfileEditor({ getEngineClient }: RoadProfileEditorProps) {
         </span>
         <span className="profile-metric">
           <strong>Profile:</strong>{' '}
-          {details?.hasElevationProfile ? 'Authored' : 'Default flat'}
+          {matchingDetails ? (matchingDetails.hasElevationProfile ? 'Authored' : 'Default flat') : 'Loading…'}
         </span>
         <span className="profile-metric">
           <strong>Breakpoints:</strong>{' '}
-          {details?.elevationBreakpointCount ?? 0}
+          {matchingDetails?.elevationBreakpointCount ?? '…'}
         </span>
       </div>
 
@@ -108,15 +112,15 @@ export function RoadProfileEditor({ getEngineClient }: RoadProfileEditorProps) {
             step="0.5"
             value={uniformElevation}
             onChange={(e) => setUniformElevation(e.target.value)}
-            disabled={submitting}
+            disabled={submitting || !matchingDetails}
           />
           <button
             type="button"
             className="button secondary"
-            disabled={submitting}
+            disabled={submitting || !matchingDetails}
             onClick={() => void handleApplyUniformElevation()}
           >
-            {submitting ? 'Applying…' : 'Apply to Alignment'}
+            {submitting ? 'Applying…' : !matchingDetails ? 'Loading details…' : 'Apply to Alignment'}
           </button>
         </div>
         {feedback ? <span className="profile-feedback">{feedback}</span> : null}

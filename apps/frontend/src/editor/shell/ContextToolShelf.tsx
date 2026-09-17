@@ -73,6 +73,48 @@ export function ContextToolShelf({ context }: ContextToolShelfProps) {
   )
 }
 
+function RoadDrawingToolGroup({
+  group,
+  context,
+  pointCount,
+}: {
+  group: WorkspaceToolGroup
+  context: CommandContext
+  pointCount: number
+}) {
+  const finishDrawing = useCommandExecutor('road.finish-drawing', context)
+  const cancelDrawing = useCommandExecutor('road.cancel-drawing', context)
+
+  return (
+    <>
+      <div className="context-toolbar-divider" />
+      <div
+        className={`context-toolbar-group ${group.className ?? ''}`.trim()}
+        role="group"
+        aria-label={group.label}
+      >
+        <span className="context-toolbar-hint">{pointCount} control points</span>
+        <button
+          type="button"
+          className="tool-button active"
+          disabled={!finishDrawing.availability.enabled}
+          onClick={() => void finishDrawing.run()}
+        >
+          <Check size={14} /> Finish
+        </button>
+        <button
+          type="button"
+          className="tool-button"
+          disabled={!cancelDrawing.availability.enabled}
+          onClick={() => void cancelDrawing.run()}
+        >
+          <X size={14} /> Cancel
+        </button>
+      </div>
+    </>
+  )
+}
+
 function ToolGroupRenderer({
   group,
   context,
@@ -88,37 +130,12 @@ function ToolGroupRenderer({
     if (!drawing) {
       return null
     }
-
-    const finishDrawing = useCommandExecutor('road.finish-drawing', context)
-    const cancelDrawing = useCommandExecutor('road.cancel-drawing', context)
-
     return (
-      <>
-        <div className="context-toolbar-divider" />
-        <div
-          className={`context-toolbar-group ${group.className ?? ''}`.trim()}
-          role="group"
-          aria-label={group.label}
-        >
-          <span className="context-toolbar-hint">{pointCount} control points</span>
-          <button
-            type="button"
-            className="tool-button active"
-            disabled={!finishDrawing.availability.enabled}
-            onClick={() => void finishDrawing.run()}
-          >
-            <Check size={14} /> Finish
-          </button>
-          <button
-            type="button"
-            className="tool-button"
-            disabled={!cancelDrawing.availability.enabled}
-            onClick={() => void cancelDrawing.run()}
-          >
-            <X size={14} /> Cancel
-          </button>
-        </div>
-      </>
+      <RoadDrawingToolGroup
+        group={group}
+        context={context}
+        pointCount={pointCount}
+      />
     )
   }
 

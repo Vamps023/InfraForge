@@ -299,6 +299,8 @@
 }
 
 .editor-center {
+  display: flex;
+  flex-direction: column;
   flex: 1;
   min-width: 0;
   min-height: 0;
@@ -320,7 +322,8 @@
   cursor: col-resize;
 }
 
-.resize-bottom {
+.resize-bottom,
+.resize-contextEditor {
   height: 5px;
   cursor: row-resize;
 }
@@ -488,7 +491,8 @@
 
 /* ---- Context Editor Host ---- */
 .editor-viewport-slot {
-  flex: 1;
+  display: flex;
+  flex: 1 1 auto;
   min-height: 0;
   position: relative;
 }

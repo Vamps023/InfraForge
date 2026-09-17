@@ -111,6 +111,30 @@ export function App() {
   useCommandShortcuts(commandContext)
   useProblemDiagnostics()
 
+  // Centralized selection synchronization: when canonical selection changes,
+  // ensure roadStore reflects the selected road and hydrates its details
+  // consistently regardless of whether selection originated from Viewport,
+  // Outliner, Sources, or commands.
+  useEffect(() => {
+    return useSelectionStore.subscribe((state, prevState) => {
+      if (state.primaryId === prevState.primaryId) {
+        return
+      }
+      const primaryId = state.primaryId
+      const client = engineSessionRef.current?.client
+      if (primaryId && primaryId.startsWith('road:')) {
+        const roadId = primaryId.slice('road:'.length)
+        useRoadStore.getState().selectRoad(roadId)
+        if (client) {
+          void getRoad(client, roadId).catch(() => undefined)
+        }
+      } else {
+        useRoadStore.getState().selectRoad(null)
+        useRoadStore.getState().setDetails(null)
+      }
+    })
+  }, [])
+
   useEffect(() => window.infraforgeDesktop?.onViewportInteraction?.((interaction) => {
     const activeTool = useToolStore.getState()
     if (activeTool.viewportHandler) {
@@ -137,10 +161,6 @@ export function App() {
     } else if (interaction.kind === 'primary-click') {
       const selectionId = interaction.roadId ? `road:${interaction.roadId}` : null
       useSelectionStore.getState().select(selectionId ? [selectionId] : [])
-      useRoadStore.getState().selectRoad(interaction.roadId ?? null)
-      const client = engineSessionRef.current?.client
-      if (client && interaction.roadId) void getRoad(client, interaction.roadId)
-      else useRoadStore.getState().setDetails(null)
     }
   }), [])
 

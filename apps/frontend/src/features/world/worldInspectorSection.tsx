@@ -1,7 +1,10 @@
 import { inspectorSectionRegistry, type InspectorSectionContext } from '../../editor/inspector/inspectorRegistry'
 import { useProjectStore } from '../project/projectStore'
 import { useGeoStore } from '../geo/geoStore'
-import { useShellUiStore } from '../../editor/shell/shellUiStore'
+import { executeCommand, type CommandContext } from '../../editor/commands/commandRegistry'
+import { deriveAvailability } from '../../editor/availability'
+import { useUiStore } from '../../state/uiStore'
+import { useViewportStore } from '../viewport/viewportStore'
 
 export function registerWorldInspectorSection(): void {
   inspectorSectionRegistry.register({
@@ -32,13 +35,23 @@ function isWorldContext(context: InspectorSectionContext): boolean {
 function WorldGeoreferenceBody() {
   const summary = useProjectStore((state) => state.summary)
   const info = useGeoStore((state) => state.info)
-  const openDialogCommand = useShellUiStore((state) => state.openDialogCommand)
 
   if (!summary) {
     return <div className="panel-empty">No project is open.</div>
   }
 
   const config = info?.config ?? summary.georeference
+
+  const handleConfigureGeoreference = async () => {
+    const currentSummary = useProjectStore.getState().summary
+    const operation = useProjectStore.getState().operation
+    const engineStatus = useUiStore.getState().engineStatus
+    const viewportState = useViewportStore.getState().status.state
+    const context: CommandContext = {
+      availability: deriveAvailability(engineStatus, null, currentSummary, operation, viewportState),
+    }
+    await executeCommand('project.georeference', context)
+  }
 
   return (
     <div className="world-inspector-body">
@@ -72,7 +85,7 @@ function WorldGeoreferenceBody() {
         <button
           type="button"
           className="button button-secondary"
-          onClick={() => openDialogCommand('georeference')}
+          onClick={() => void handleConfigureGeoreference()}
         >
           Configure Georeference…
         </button>

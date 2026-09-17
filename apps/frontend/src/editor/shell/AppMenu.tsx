@@ -188,6 +188,15 @@ export function AppMenu({ context }: { context: CommandContext }) {
     }
   }, [openCategory])
 
+  // The Vulkan surface is a native child window and therefore cannot be
+  // covered by Chromium z-index. Hide it while a menu is open so dropdowns
+  // remain fully visible even when they extend into the viewport rectangle.
+  useEffect(() => {
+    const desktop = window.infraforgeDesktop
+    if (!desktop?.setViewportVisible) return
+    desktop.setViewportVisible(openCategory === null && !document.hidden)
+  }, [openCategory])
+
   return (
     <nav className="app-menu" aria-label="Application menu">
       {categories.map((category) => (

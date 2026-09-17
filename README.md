@@ -6,7 +6,7 @@ InfraForge is a native-first infrastructure authoring, geospatial editing, rende
 
 InfraForge is being built from a clean repository. The project deliberately does not copy OpenGeoStudio's source tree or legacy coupling. Architecture, contracts, process boundaries, persistence rules, and UI composition are established before production feature work.
 
-OpenGeoStudio remains a lessons-learned workflow reference: InfraForge may reuse proven interaction ideas such as a persistent editor, stable Navigator/Inspector regions, direct manipulation plus exact numeric editing, and contextual profile/cross-section tools, but it does not use OpenGeoStudio as a codebase or visual clone target.
+OpenGeoStudio-Qt is the workflow benchmark for InfraForge's UI refactor. InfraForge may match its productive interaction model—persistent editor, stable Navigator/Inspector regions, direct manipulation plus exact numeric editing, and contextual profile/cross-section tools—without copying its source tree, data model, renderer, transport, or process boundaries.
 
 Current implementation state is tracked in `docs/IMPLEMENTATION_STATUS.md`. A document describing a future capability does not mean that capability is implemented.
 

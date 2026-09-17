@@ -33,11 +33,13 @@
 .app-header {
   display: flex;
   align-items: center;
-  gap: var(--if-space-6);
+  gap: var(--if-space-4);
   padding: 0 var(--if-space-6);
   background: var(--if-bg-panel);
   border-bottom: 1px solid var(--if-border-default);
   height: var(--if-header-app);
+  position: relative;
+  z-index: var(--if-z-sticky);
 }
 
 .brand {
@@ -57,7 +59,7 @@
   border: 1px solid var(--if-accent-border);
   background: var(--if-accent-subtle);
   color: var(--if-accent);
-  border-radius: var(--if-radius-md);
+  border-radius: var(--if-radius-sm);
   font-size: 10px;
   font-weight: var(--if-weight-bold);
 }
@@ -304,15 +306,42 @@
 
 .menu-dropdown {
   position: absolute;
-  top: 100%;
+  top: calc(100% + 1px);
   left: 0;
   z-index: var(--if-z-dropdown);
   min-width: 220px;
+  max-width: calc(100vw - 8px);
   padding: var(--if-space-2);
   border: 1px solid var(--if-border-strong);
   border-radius: var(--if-radius-lg);
   background: var(--if-bg-elevated);
   box-shadow: var(--if-shadow-md);
+}
+
+/* Keep the shell usable in compact desktop windows and embedded previews. */
+@media (max-width: 720px) {
+  .app-header {
+    gap: var(--if-space-2);
+    padding: 0 var(--if-space-3);
+  }
+
+  .brand > span:not(.brand-mark),
+  .workspace-label,
+  .project-chip,
+  .header-search-trigger,
+  .header-status-group,
+  .build-label,
+  .app-header > .header-divider {
+    display: none;
+  }
+
+  .app-menu {
+    padding: 0;
+  }
+
+  .menu-dropdown {
+    min-width: min(220px, calc(100vw - 8px));
+  }
 }
 
 .menu-entry {

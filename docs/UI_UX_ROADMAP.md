@@ -4,12 +4,10 @@ This roadmap replaces the earlier workspace-by-workspace UI expansion plan with 
 
 ## Phase A — Shared workspace foundation
 
-<<<<<<< HEAD
 **Status:** Delivered as the initial shell. The reference-informed refinements
 below remain planned until they have production evidence.
-=======
+
 **Goal:** Make the current editor shell the stable frame for every domain.
->>>>>>> origin/main
 
 - registry-driven WorkspaceSwitcher;
 - global command placement for Project, Undo/Redo, Import, Validate, Export, Search;
@@ -22,7 +20,6 @@ below remain planned until they have production evidence.
 
 **Acceptance:** Switching workspaces never resets project state, duplicates selection/commands, or behaves like route navigation.
 
-<<<<<<< HEAD
 ## UI Direction: Reference-Informed Professional Shell
 
 **Goal:** Evolve the whole application toward a cohesive, dense professional
@@ -42,10 +39,7 @@ InfraForge's independent implementation and architecture.
 **Non-goals:** Copying OpenGeoStudio source, visual assets, data model,
 frontend-store design, Electron responsibilities, renderer, or transport.
 
-## Phase 2: Terrain Authoring UX
-=======
 ## Phase B — Terrain migration
->>>>>>> origin/main
 
 **Goal:** Prove the model with an already-real domain.
 

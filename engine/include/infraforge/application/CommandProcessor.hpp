@@ -125,6 +125,7 @@ private:
     void handleTerrainListSources(const std::string& connectionId, const protocol::v1::Frame& frame);
     void handleTerrainPlanDownload(const std::string& connectionId, const protocol::v1::Frame& frame);
     void handleTerrainDownloadSelected(const std::string& connectionId, const protocol::v1::Frame& frame);
+    void handleTerrainExport(const std::string& connectionId, const protocol::v1::Frame& frame);
     void handleJobCancel(const std::string& connectionId, const protocol::v1::Frame& frame);
     void handleJobList(const std::string& connectionId, const protocol::v1::Frame& frame);
 

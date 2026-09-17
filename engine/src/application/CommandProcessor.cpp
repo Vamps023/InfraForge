@@ -605,6 +605,9 @@ void CommandProcessor::processCommand(
         case protocol::v1::CommandEnvelope::kTerrainDownloadSelected:
             handleTerrainDownloadSelected(connectionId, frame);
             break;
+        case protocol::v1::CommandEnvelope::kTerrainExport:
+            handleTerrainExport(connectionId, frame);
+            break;
         case protocol::v1::CommandEnvelope::kJobCancel:
             handleJobCancel(connectionId, frame);
             break;
@@ -1174,6 +1177,67 @@ void CommandProcessor::handleTerrainDownloadSelected(
     event.job = record;
     event.revision = store_.isOpen() ? store_.current().revision : 0;
     publishTerrainEvent(event);
+}
+
+void CommandProcessor::handleTerrainExport(
+    const std::string& connectionId, const ProtocolFrame& frame) {
+    const auto& command = frame.command().terrain_export();
+    executeCommand([this, &connectionId, &frame, &command] {
+        TerrainExportOptions options;
+        options.datasetUuid = command.dataset_uuid();
+        options.outputDirectory = command.output_directory();
+        options.targetResolution = command.target_resolution();
+        options.targetCrs = command.target_crs().empty() ? "auto" : command.target_crs();
+
+        switch (command.heightmap_format()) {
+            case protocol::v1::TERRAIN_EXPORT_FORMAT_GEOTIFF_FLOAT32:
+                options.heightmapFormat = ExportHeightmapFormat::GeoTiffFloat32;
+                break;
+            case protocol::v1::TERRAIN_EXPORT_FORMAT_GEOTIFF_INT16:
+                options.heightmapFormat = ExportHeightmapFormat::GeoTiffInt16;
+                break;
+            case protocol::v1::TERRAIN_EXPORT_FORMAT_GEOTIFF_UINT16:
+                options.heightmapFormat = ExportHeightmapFormat::GeoTiffUInt16;
+                break;
+            case protocol::v1::TERRAIN_EXPORT_FORMAT_PNG_16:
+                options.heightmapFormat = ExportHeightmapFormat::Png16;
+                break;
+            case protocol::v1::TERRAIN_EXPORT_FORMAT_RAW_R16:
+                options.heightmapFormat = ExportHeightmapFormat::RawR16;
+                break;
+            case protocol::v1::TERRAIN_EXPORT_FORMAT_NONE:
+                options.heightmapFormat = ExportHeightmapFormat::None;
+                break;
+            default:
+                options.heightmapFormat = ExportHeightmapFormat::GeoTiffFloat32;
+                break;
+        }
+
+        switch (command.albedo_format()) {
+            case protocol::v1::TERRAIN_ALBEDO_EXPORT_FORMAT_PNG_RGB:
+                options.albedoFormat = ExportAlbedoFormat::PngRgb;
+                break;
+            case protocol::v1::TERRAIN_ALBEDO_EXPORT_FORMAT_GEOTIFF_RGB:
+                options.albedoFormat = ExportAlbedoFormat::GeoTiffRgb;
+                break;
+            default:
+                options.albedoFormat = ExportAlbedoFormat::None;
+                break;
+        }
+
+        const TerrainExportOutput output = terrainService_->exportDataset(options);
+
+        ProtocolFrame response;
+        response.set_request_id(frame.request_id());
+        auto* result = response.mutable_result()->mutable_terrain_export_result();
+        result->set_dataset_uuid(output.datasetUuid);
+        result->set_manifest_path(output.manifestPath.string());
+        for (const auto& file : output.exportedFiles) {
+            result->add_exported_files(file.string());
+        }
+        result->set_total_bytes(output.totalBytes);
+        sink_.sendToConnection(connectionId, response);
+    });
 }
 
 void CommandProcessor::handleJobCancel(

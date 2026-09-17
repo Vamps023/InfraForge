@@ -28,6 +28,7 @@ import { useShellUiStore } from './editor/shell/shellUiStore'
 import { useProblemDiagnostics } from './editor/problems/useProblemDiagnostics'
 
 import { ImportTerrainDialog } from './features/terrain/ImportTerrainDialog'
+import { ExportTerrainDialog } from './features/terrain/ExportTerrainDialog'
 import { DiagnosticsDialog } from './editor/shell/DiagnosticsDialog'
 import { registerTerrainCommands, unregisterTerrainCommands } from './features/terrain/terrainCommands'
 import { registerTerrainOutlinerProjection, unregisterTerrainOutlinerProjection } from './features/terrain/terrainOutlinerProjection'
@@ -297,6 +298,13 @@ export function App() {
       ) : null}
       {openDialog === 'import-terrain' && engineSession && projectOpen ? (
         <ImportTerrainDialog
+          client={engineSession.client}
+          busy={busy}
+          onClose={() => closeDialog()}
+        />
+      ) : null}
+      {openDialog === 'export-terrain' && engineSession && projectOpen ? (
+        <ExportTerrainDialog
           client={engineSession.client}
           busy={busy}
           onClose={() => closeDialog()}

@@ -16,7 +16,17 @@ namespace infraforge::viewport {
 namespace {
 
 constexpr std::size_t kPosFloats = 3;
-constexpr std::size_t kVertexFloats = 6;
+constexpr std::size_t kNormalFloats = 3;
+constexpr std::size_t kUvFloats = 2;
+constexpr std::size_t kVertexFloats = kPosFloats + kNormalFloats + kUvFloats; // 8 floats per vertex
+
+struct TerrainPushConstants {
+    std::array<float, 16> viewProj{};
+    float heightScale{1.0f};
+    std::uint32_t renderMode{0};
+    float minHeight{0.0f};
+    float maxHeight{1000.0f};
+};
 
 [[nodiscard]] bool isNoData(double value) noexcept {
     return std::isnan(value);
@@ -100,9 +110,9 @@ void TerrainPass::create(
     }};
 
     VkPushConstantRange pushRange{};
-    pushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    pushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     pushRange.offset = 0;
-    pushRange.size = 64; // mat4 viewProj
+    pushRange.size = static_cast<std::uint32_t>(sizeof(TerrainPushConstants));
 
     VkPipelineLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -130,7 +140,7 @@ void TerrainPass::create(
     binding.stride = static_cast<std::uint32_t>(kVertexFloats * sizeof(float));
     binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 
-    std::array<VkVertexInputAttributeDescription, 2> attributes{};
+    std::array<VkVertexInputAttributeDescription, 3> attributes{};
     attributes[0].location = 0;
     attributes[0].binding = 0;
     attributes[0].format = VK_FORMAT_R32G32B32_SFLOAT;
@@ -139,6 +149,10 @@ void TerrainPass::create(
     attributes[1].binding = 0;
     attributes[1].format = VK_FORMAT_R32G32B32_SFLOAT;
     attributes[1].offset = static_cast<std::uint32_t>(kPosFloats * sizeof(float));
+    attributes[2].location = 2;
+    attributes[2].binding = 0;
+    attributes[2].format = VK_FORMAT_R32G32_SFLOAT;
+    attributes[2].offset = static_cast<std::uint32_t>((kPosFloats + kNormalFloats) * sizeof(float));
 
     VkPipelineVertexInputStateCreateInfo vertexInput{};
     vertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
@@ -321,14 +335,22 @@ TerrainPass::TilePayload TerrainPass::buildPayload(
             const double nz = 1.0;
             const double length = std::sqrt(nx * nx + ny * ny + nz * nz);
 
+            const float u = dim > 1 ? static_cast<float>(col) / static_cast<float>(dim - 1) : 0.0f;
+            const float v = dim > 1 ? static_cast<float>(row) / static_cast<float>(dim - 1) : 0.0f;
+
             payload.vertices.push_back(position[0]);
             payload.vertices.push_back(position[1]);
             payload.vertices.push_back(position[2]);
             payload.vertices.push_back(static_cast<float>(nx / length));
             payload.vertices.push_back(static_cast<float>(ny / length));
             payload.vertices.push_back(static_cast<float>(nz / length));
+            payload.vertices.push_back(u);
+            payload.vertices.push_back(v);
         }
     }
+
+    minHeight_ = std::min(minHeight_, static_cast<float>(grid.minZ));
+    maxHeight_ = std::max(maxHeight_, static_cast<float>(grid.maxZ));
 
     // Indices: quads with any NoData corner are dropped so NoData regions
     // become holes instead of fabricated surfaces.
@@ -363,10 +385,11 @@ TerrainPass::TilePayload TerrainPass::buildPayload(
             payload.vertices.push_back(payload.vertices[base + i]);
         }
         const std::size_t last = payload.vertices.size();
-        payload.vertices[last - 4] -= skirtDepth; // lower position z
-        payload.vertices[last - 3] = 0.0F;        // skirt normal: down
-        payload.vertices[last - 2] = 0.0F;
-        payload.vertices[last - 1] = -1.0F;
+        payload.vertices[last - 6] -= skirtDepth; // lower position z
+        payload.vertices[last - 5] = 0.0F;        // skirt normal x: 0
+        payload.vertices[last - 4] = 0.0F;        // skirt normal y: 0
+        payload.vertices[last - 3] = -1.0F;       // skirt normal z: -1 (down)
+        // uv is preserved at last - 2 and last - 1 from the surface vertex
         return static_cast<std::uint32_t>(last / kVertexFloats - 1);
     };
     const auto connectSkirts = [&](std::uint32_t a, std::uint32_t b) {
@@ -709,11 +732,16 @@ void TerrainPass::record(const VkCommandBuffer command, const EditorCamera& came
     vkCmdSetViewport(command, 0, 1, &viewport);
     vkCmdSetScissor(command, 0, 1, &scissor);
 
-    std::array<float, 16> viewProj{};
-    camera.writeViewProjection(viewProj.data());
+    TerrainPushConstants constants{};
+    camera.writeViewProjection(constants.viewProj.data());
+    constants.heightScale = heightScale_;
+    constants.renderMode = renderMode_;
+    constants.minHeight = minHeight_;
+    constants.maxHeight = maxHeight_;
     vkCmdPushConstants(
-        command, pipelineLayout_.get(), VK_SHADER_STAGE_VERTEX_BIT, 0,
-        static_cast<std::uint32_t>(viewProj.size() * sizeof(float)), viewProj.data());
+        command, pipelineLayout_.get(),
+        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+        static_cast<std::uint32_t>(sizeof(TerrainPushConstants)), &constants);
 
     for (const auto& [id, payload] : payloads_) {
         if (!payload.gpu.has_value() || payload.gpu->indexCount == 0) {

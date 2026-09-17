@@ -3,6 +3,9 @@
 #include "infraforge/application/CommandFailure.hpp"
 #include "infraforge/application/TerrainTileGenerator.hpp"
 #include "infraforge/domain/geo/GeoTransformService.hpp"
+#include "infraforge/domain/terrain/EsriImageryProvider.hpp"
+#include "infraforge/domain/terrain/MapboxRgbTerrainProvider.hpp"
+#include "infraforge/domain/terrain/OpenTopoTerrainProvider.hpp"
 #include "infraforge/domain/terrain/TerrariumTerrainProvider.hpp"
 #include "infraforge/domain/terrain/TerrainTileFile.hpp"
 #include "infraforge/domain/world/Invalidation.hpp"
@@ -508,6 +511,17 @@ domain::terrain::TerrainProviderRegistry production::makeProductionTerrainProvid
     auto httpClient = std::make_shared<ports::IxHttpClient>();
     registry.registerProvider(
         std::make_unique<domain::terrain::TerrariumTerrainProvider>(httpClient));
+    registry.registerProvider(
+        std::make_unique<domain::terrain::OpenTopoTerrainProvider>(
+            httpClient, "SRTMGL1", "opentopo-srtm30", "OpenTopography SRTM GL1 30m"));
+    registry.registerProvider(
+        std::make_unique<domain::terrain::OpenTopoTerrainProvider>(
+            httpClient, "COP30", "opentopo-cop30", "OpenTopography Copernicus GLO-30"));
+    registry.registerProvider(
+        std::make_unique<domain::terrain::OpenTopoTerrainProvider>(
+            httpClient, "AW3D30", "opentopo-aw3d30", "OpenTopography ALOS World 3D 30m"));
+    registry.registerProvider(
+        std::make_unique<domain::terrain::MapboxRgbTerrainProvider>(httpClient));
     return registry;
 }
 
@@ -1787,6 +1801,26 @@ JobRecord TerrainService::startDownload(
         body, onProgress, onComplete, /*requiresFinalization=*/true);
     trackJob(record.jobId);
     return record;
+}
+
+TerrainExportOutput TerrainService::exportDataset(
+    const TerrainExportOptions& options,
+    const ExportProgressCallback& progress,
+    const ExportCancellationCallback& cancel) {
+    if (!project_.has_value()) {
+        throw CommandFailure(CommandFailureCode::ProjectNotOpen, "no project is open");
+    }
+    const auto dataset = findDataset(options.datasetUuid);
+    if (!dataset.has_value()) {
+        throw TerrainError(TerrainErrorCode::InvalidArgument, "no such terrain dataset: " + options.datasetUuid);
+    }
+    TerrainExportOptions resolvedOptions = options;
+    resolvedOptions.sourceRasterPath = projectDirectory_() / dataset->storagePath;
+    resolvedOptions.displayName = dataset->displayName;
+    resolvedOptions.minElevation = dataset->minZ;
+    resolvedOptions.maxElevation = dataset->maxZ;
+
+    return TerrainExportEngine::executeExport(resolvedOptions, progress, cancel);
 }
 
 } // namespace infraforge::application

@@ -38,6 +38,7 @@ add_library(infraforge_core STATIC
     src/application/JobSystem.cpp
     src/application/ProjectService.cpp
     src/application/RoadService.cpp
+    src/application/TerrainExportEngine.cpp
     src/application/TerrainService.cpp
     src/application/TerrainTileGenerator.cpp
     src/application/WorldState.cpp
@@ -45,10 +46,13 @@ add_library(infraforge_core STATIC
     src/domain/geo/GeoTransformService.cpp
     src/domain/geo/ProjectGeoreference.cpp
     src/domain/project/ProjectModel.cpp
+    src/domain/terrain/EsriImageryProvider.cpp
+    src/domain/terrain/MapboxRgbTerrainProvider.cpp
+    src/domain/terrain/MockTerrainProvider.cpp
+    src/domain/terrain/OpenTopoTerrainProvider.cpp
     src/domain/terrain/TerrainDataset.cpp
     src/domain/terrain/TerrainDownloadProvider.cpp
     src/domain/terrain/TerrainSampler.cpp
-    src/domain/terrain/MockTerrainProvider.cpp
     src/domain/terrain/TerrariumTerrainProvider.cpp
     src/domain/road/AlignmentFitter.cpp
     src/domain/road/AlignmentPrimitives.cpp

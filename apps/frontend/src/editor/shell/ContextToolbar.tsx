@@ -1,4 +1,4 @@
-import { Download, FolderOpen, MapPin, Plus, Trash2, Undo2, Redo2, RefreshCw, Check, X } from 'lucide-react'
+import { Download, FolderOpen, MapPin, Plus, Trash2, Undo2, Redo2, RefreshCw, Check, X, Upload } from 'lucide-react'
 import { useWorkspaceStore } from './workspaceStore'
 import { Tooltip } from '../../ui/Tooltip'
 import {
@@ -39,6 +39,7 @@ export function ContextToolbar({ context }: { context: CommandContext }) {
 function TerrainContextToolbar({ context }: { context: CommandContext }) {
   const importLocal = useCommandExecutor('terrain.import-local', context)
   const downloadArea = useCommandExecutor('terrain.download-area', context)
+  const exportTerrainCmd = useCommandExecutor('terrain.export', context)
   const georeference = useCommandExecutor('project.georeference', context)
 
   return (
@@ -63,6 +64,16 @@ function TerrainContextToolbar({ context }: { context: CommandContext }) {
           onClick={() => void downloadArea.run()}
         >
           <Download size={14} /> Download Area
+        </button>
+      </Tooltip>
+      <Tooltip label={exportTerrainCmd.availability.disabledReason ?? 'Export terrain heightmaps and albedo textures'}>
+        <button
+          type="button"
+          className="tool-button"
+          disabled={!exportTerrainCmd.availability.enabled}
+          onClick={() => void exportTerrainCmd.run()}
+        >
+          <Upload size={14} /> Export
         </button>
       </Tooltip>
       <Tooltip label={georeference.availability.disabledReason ?? 'Open canonical georeference settings'}>

@@ -296,6 +296,8 @@ message TerrainPlanDownloadCommand {
   uint32 tile_size_metres = 3;
   // Indices of selected tiles (into the deterministic grid for the area).
   repeated int32 selected_indices = 4;
+  // Optional runtime API key for authenticated providers (unpersisted).
+  string api_key = 5;
 }
 
 message TerrainPlanDownloadResult {
@@ -313,7 +315,47 @@ message TerrainDownloadSelectedCommand {
   repeated int32 selected_indices = 4;
   // Display name for the resulting terrain dataset.
   string display_name = 5;
+  // Optional runtime API key for authenticated providers (unpersisted).
+  string api_key = 6;
+  // Optional satellite imagery provider identifier (e.g. "esri-world-imagery").
+  string imagery_provider_id = 7;
 }
 
 // TerrainDownloadSelectedCommand returns JobStartedResult (the download runs
 // as a background job with real progress and cancellation).
+
+// ---- Terrain Export (Stage 3) ----
+
+enum TerrainExportFormat {
+  TERRAIN_EXPORT_FORMAT_UNSPECIFIED = 0;
+  TERRAIN_EXPORT_FORMAT_GEOTIFF_FLOAT32 = 1;
+  TERRAIN_EXPORT_FORMAT_GEOTIFF_INT16 = 2;
+  TERRAIN_EXPORT_FORMAT_GEOTIFF_UINT16 = 3;
+  TERRAIN_EXPORT_FORMAT_PNG_16 = 4;
+  TERRAIN_EXPORT_FORMAT_RAW_R16 = 5;
+  TERRAIN_EXPORT_FORMAT_NONE = 6;
+}
+
+enum TerrainAlbedoExportFormat {
+  TERRAIN_ALBEDO_EXPORT_FORMAT_UNSPECIFIED = 0;
+  TERRAIN_ALBEDO_EXPORT_FORMAT_PNG_RGB = 1;
+  TERRAIN_ALBEDO_EXPORT_FORMAT_GEOTIFF_RGB = 2;
+  TERRAIN_ALBEDO_EXPORT_FORMAT_NONE = 3;
+}
+
+message TerrainExportCommand {
+  string dataset_uuid = 1;
+  string output_directory = 2;
+  TerrainExportFormat heightmap_format = 3;
+  TerrainAlbedoExportFormat albedo_format = 4;
+  uint32 target_resolution = 5;
+  string target_crs = 6;
+  bool export_per_tile = 7;
+}
+
+message TerrainExportResult {
+  string dataset_uuid = 1;
+  string manifest_path = 2;
+  repeated string exported_files = 3;
+  uint64 total_bytes = 4;
+}

@@ -6,7 +6,7 @@ import { create } from 'zustand'
 // local useState so the command registry remains the single entry point for
 // user actions.
 
-export type ShellDialog = 'new-project' | 'georeference' | 'command-palette' | 'import-terrain' | 'diagnostics' | 'create-road' | 'rename-road' | null
+export type ShellDialog = 'new-project' | 'georeference' | 'command-palette' | 'import-terrain' | 'export-terrain' | 'diagnostics' | 'create-road' | 'rename-road' | null
 
 // When the import-terrain dialog is open, this controls which source tab
 // is initially active ('local-file' or 'download-area'). Set before opening

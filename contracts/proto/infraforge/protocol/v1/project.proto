@@ -299,6 +299,8 @@ message CommandEnvelope {
     ListRoadsCommand list_roads = 33;
     GetRoadCommand get_road = 34;
     GetRoadSceneCommand get_road_scene = 35;
+    // Protocol 1.6 terrain export.
+    TerrainExportCommand terrain_export = 36;
   }
 }
 
@@ -336,6 +338,8 @@ message ResultEnvelope {
     ListRoadsResult list_roads_result = 27;
     GetRoadResult get_road_result = 28;
     RoadSceneResult road_scene_result = 29;
+    // Protocol 1.6 terrain export.
+    TerrainExportResult terrain_export_result = 30;
   }
 }
 

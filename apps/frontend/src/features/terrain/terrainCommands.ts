@@ -61,6 +61,20 @@ export function registerTerrainCommands(deps: TerrainCommandDeps): void {
       },
     },
     {
+      id: 'terrain.export',
+      label: 'Export Terrain…',
+      description: 'Export terrain heightmap and albedo textures for game engines (Unreal, Unity) or GIS.',
+      category: 'Terrain',
+      group: 'terrain',
+      surfaces: ['menu', 'palette', 'toolbar'],
+      requiresEngine: true,
+      requiresProject: true,
+      requiresNotBusy: true,
+      execute: () => {
+        useShellUiStore.getState().openDialogCommand('export-terrain')
+      },
+    },
+    {
       id: 'terrain.regenerate-tiles',
       label: 'Regenerate Terrain Tiles',
       description: 'Regenerate missing derived terrain tiles for the selected dataset.',
@@ -95,5 +109,6 @@ export function unregisterTerrainCommands(): void {
   commandRegistry.unregister('terrain.import')
   commandRegistry.unregister('terrain.import-local')
   commandRegistry.unregister('terrain.download-area')
+  commandRegistry.unregister('terrain.export')
   commandRegistry.unregister('terrain.regenerate-tiles')
 }

@@ -1,8 +1,10 @@
 #include <doctest/doctest.h>
 
+#include "infraforge/application/TerrainExportEngine.hpp"
 #include "infraforge/domain/terrain/TerrainDataset.hpp"
 #include "infraforge/domain/terrain/TerrainTileFile.hpp"
 #include "infraforge/domain/terrain/TerrainTypes.hpp"
+#include "TerrainTestFixtures.hpp"
 
 #include <array>
 #include <cstring>
@@ -188,4 +190,83 @@ TEST_CASE("all-NoData tile round-trips with NaN heights") {
     }
 }
 
+TEST_CASE("TerrainExportEngine exports GeoTIFF, PNG16, and Raw R16 with manifest") {
+    using namespace infraforge::application;
+    const auto tempDir = std::filesystem::temp_directory_path() / "infraforge_test_terrain_export";
+    std::filesystem::create_directories(tempDir);
+
+    const auto sourceTiff = tempDir / "source_dem.tif";
+    infraforge::testhelpers::TerrainDemSpec spec;
+    spec.width = 64;
+    spec.height = 64;
+    spec.withNodata = false;
+    infraforge::testhelpers::writeDemGeoTiff(sourceTiff, spec);
+
+    SUBCASE("Export GeoTIFF Float32") {
+        const auto outDir = tempDir / "export_geotiff";
+        TerrainExportOptions options;
+        options.datasetUuid = "test-dem-uuid";
+        options.sourceRasterPath = sourceTiff;
+        options.outputDirectory = outDir;
+        options.heightmapFormat = ExportHeightmapFormat::GeoTiffFloat32;
+        options.displayName = "TestAlpine";
+        options.minElevation = 100.0;
+        options.maxElevation = 200.0;
+
+        const auto output = TerrainExportEngine::executeExport(options);
+        CHECK(std::filesystem::exists(output.manifestPath));
+        CHECK(std::filesystem::file_size(output.manifestPath) > 0);
+        REQUIRE(output.exportedFiles.size() == 2);
+        CHECK(std::filesystem::exists(output.exportedFiles[0]));
+        CHECK(output.exportedFiles[0].extension() == ".tif");
+        CHECK(output.exportedFiles[1].filename() == "manifest.json");
+        CHECK(output.totalBytes > 0);
+    }
+
+    SUBCASE("Export 16-bit PNG heightmap with resolution override") {
+        const auto outDir = tempDir / "export_png16";
+        TerrainExportOptions options;
+        options.datasetUuid = "test-dem-uuid";
+        options.sourceRasterPath = sourceTiff;
+        options.outputDirectory = outDir;
+        options.heightmapFormat = ExportHeightmapFormat::Png16;
+        options.targetResolution = 128;
+        options.displayName = "TestAlpinePng";
+        options.minElevation = 100.0;
+        options.maxElevation = 200.0;
+
+        const auto output = TerrainExportEngine::executeExport(options);
+        CHECK(std::filesystem::exists(output.manifestPath));
+        REQUIRE(output.exportedFiles.size() == 2);
+        CHECK(std::filesystem::exists(output.exportedFiles[0]));
+        CHECK(output.exportedFiles[0].extension() == ".png");
+        CHECK(output.exportedFiles[1].filename() == "manifest.json");
+    }
+
+    SUBCASE("Export Raw R16 heightmap") {
+        const auto outDir = tempDir / "export_raw16";
+        TerrainExportOptions options;
+        options.datasetUuid = "test-dem-uuid";
+        options.sourceRasterPath = sourceTiff;
+        options.outputDirectory = outDir;
+        options.heightmapFormat = ExportHeightmapFormat::RawR16;
+        options.targetResolution = 64;
+        options.displayName = "TestAlpineRaw";
+        options.minElevation = 100.0;
+        options.maxElevation = 200.0;
+
+        const auto output = TerrainExportEngine::executeExport(options);
+        CHECK(std::filesystem::exists(output.manifestPath));
+        REQUIRE(output.exportedFiles.size() == 2);
+        CHECK(std::filesystem::exists(output.exportedFiles[0]));
+        CHECK(output.exportedFiles[0].extension() == ".r16");
+        CHECK(output.exportedFiles[1].filename() == "manifest.json");
+        // 64 * 64 * 2 bytes = 8192 bytes
+        CHECK(std::filesystem::file_size(output.exportedFiles[0]) == 64 * 64 * 2);
+    }
+
+    std::filesystem::remove_all(tempDir);
+}
+
 } // TEST_SUITE
+

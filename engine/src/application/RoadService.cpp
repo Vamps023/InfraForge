@@ -708,33 +708,84 @@ RoadSummary RoadService::conformToTerrain(
     }
     const auto road = rebuildRoad(*found);
     const auto& alignment = road.alignment();
-    if (alignment.isEmpty() || alignment.totalLength() <= 0.0) {
+    if (alignment.isEmpty() || !std::isfinite(alignment.totalLength()) || alignment.totalLength() <= 0.0) {
         throw CommandFailure{CommandFailureCode::InvalidArgument,
             "road alignment is empty or degenerate"};
     }
 
+    // Safely estimate sample count to prevent pathological allocations, integer overflow,
+    // or executor blocking before station generation or sampling begins.
+    const double roughIntervalSamples = alignment.totalLength() / input.stationInterval;
+    if (!std::isfinite(roughIntervalSamples) || roughIntervalSamples < 0.0) {
+        throw CommandFailure{CommandFailureCode::InvalidArgument,
+            "invalid terrain conformance sampling interval"};
+    }
+    const double estimatedTotalSamples = roughIntervalSamples + static_cast<double>(alignment.segments().size()) + 2.0;
+    if (estimatedTotalSamples > static_cast<double>(kMaximumTerrainConformanceSamples)) {
+        throw CommandFailure{CommandFailureCode::InvalidArgument,
+            "terrain conformance requested sample count ("
+                + std::to_string(static_cast<std::size_t>(estimatedTotalSamples))
+                + ") exceeds maximum allowed limit of "
+                + std::to_string(kMaximumTerrainConformanceSamples)};
+    }
+
     // Generate conformance stations independently from the data being replaced:
     // canonical centerline/alignment boundaries + the requested sampling interval.
+    // Use integer-index-based generation to prevent floating-point accumulation or infinite loops.
     std::set<double> uniqueStations;
     uniqueStations.insert(0.0);
     double segStation = 0.0;
     for (const auto& seg : alignment.segments()) {
         const double segStart = segStation;
-        const double segEnd = segStation + segmentLength(seg.segment);
+        const double segLen = segmentLength(seg.segment);
+        const double segEnd = segStation + segLen;
         segStation = segEnd;
         uniqueStations.insert(segEnd);
 
-        for (double s = segStart + input.stationInterval; s < segEnd - 1e-4; s += input.stationInterval) {
-            uniqueStations.insert(s);
+        if (segLen > 1e-4) {
+            const double maxSpan = segLen - 1e-4;
+            const auto count = static_cast<std::size_t>(std::floor(maxSpan / input.stationInterval));
+            for (std::size_t i = 1; i <= count; ++i) {
+                const double s = segStart + static_cast<double>(i) * input.stationInterval;
+                if (s < segEnd - 1e-4) {
+                    uniqueStations.insert(s);
+                }
+            }
         }
     }
     uniqueStations.insert(alignment.totalLength());
 
+    // Deduplicate coincident stations within numerical tolerance and enforce exact totalLength end
+    std::vector<double> stations;
+    stations.reserve(uniqueStations.size());
+    for (const double s : uniqueStations) {
+        if (stations.empty()) {
+            stations.push_back(s);
+        } else if (s - stations.back() > 1e-4) {
+            stations.push_back(s);
+        } else {
+            // Close to previous station; preserve the higher (boundary) station
+            stations.back() = s;
+        }
+    }
+    if (stations.back() < alignment.totalLength() - 1e-4) {
+        stations.push_back(alignment.totalLength());
+    } else {
+        stations.back() = alignment.totalLength();
+    }
+
+    if (stations.size() > kMaximumTerrainConformanceSamples) {
+        throw CommandFailure{CommandFailureCode::InvalidArgument,
+            "terrain conformance unique station count (" + std::to_string(stations.size())
+                + ") exceeds maximum allowed limit of "
+                + std::to_string(kMaximumTerrainConformanceSamples)};
+    }
+
     UpdateElevationInput elevation;
     elevation.roadId = input.roadId;
-    elevation.stations.reserve(uniqueStations.size());
-    elevation.elevations.reserve(uniqueStations.size());
-    for (const double station : uniqueStations) {
+    elevation.stations.reserve(stations.size());
+    elevation.elevations.reserve(stations.size());
+    for (const double station : stations) {
         const auto sample = alignment.evaluate(station);
         auto sampled = sampleHeight(sample.position);
         if (!sampled.has_value()) {

@@ -191,6 +191,10 @@ struct ConformRoadToTerrainInput {
     double verticalOffset{0.1};
 };
 
+// Maximum number of stations permitted for terrain conformance to prevent
+// excessive allocations, execution stalls, or memory exhaustion.
+inline constexpr std::size_t kMaximumTerrainConformanceSamples = 10'000;
+
 using TerrainHeightSampler = std::function<std::expected<double, std::string>(
     const domain::road::AlignmentPoint&)>;
 

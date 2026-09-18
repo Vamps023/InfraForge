@@ -6,6 +6,7 @@
 #include "infraforge/domain/road/RoadSource.hpp"
 #include "infraforge/domain/road/RoadTypes.hpp"
 #include "infraforge/domain/road/VerticalProfiles.hpp"
+#include "infraforge/domain/road/RoadWidthProfile.hpp"
 
 #include <cmath>
 #include <limits>
@@ -1273,6 +1274,121 @@ TEST_CASE("source vertex with finite z is accepted by Road::build") {
     };
     auto road = Road::build(std::move(input));
     REQUIRE(road.has_value());
+}
+
+TEST_CASE("Road::build enforces canonical station bounds [0, totalLength] for all profiles") {
+    using infraforge::domain::road::LineSegment;
+    using infraforge::domain::road::PiecewiseLinearProfile;
+    using infraforge::domain::road::ProfileBreakpoint;
+    using infraforge::domain::road::ReferenceAlignment;
+    using infraforge::domain::road::Road;
+    using infraforge::domain::road::RoadErrorCode;
+    using infraforge::domain::road::RoadSource;
+    using infraforge::domain::road::RoadWidthBreakpoint;
+    using infraforge::domain::road::RoadWidthProfile;
+    using infraforge::domain::road::SourceProvider;
+
+    LineSegment line{.start = {0.0, 0.0}, .heading = 0.0, .length = 100.0};
+    auto alignment = ReferenceAlignment::build({line});
+    REQUIRE(alignment.has_value());
+
+    auto makeBaseInput = [&]() -> Road::BuildInput {
+        RoadSource source;
+        source.geometry.vertices = {{-122.4, 37.8, std::optional<double>{0.0}}};
+        source.provenance.provider = SourceProvider::Osm;
+        return Road::BuildInput{
+            .id = makeRoadId("3333aaaa-bbbb-cccc-dddd-eeeeeeeeeeee"),
+            .displayName = "Station Bounds Road",
+            .alignment = *alignment,
+            .source = source,
+        };
+    };
+
+    // 1. Normal valid road still builds
+    {
+        auto input = makeBaseInput();
+        input.elevation = PiecewiseLinearProfile({ProfileBreakpoint{0.0, 10.0}, ProfileBreakpoint{100.0, 20.0}});
+        input.superelevation = PiecewiseLinearProfile({ProfileBreakpoint{0.0, 0.0}, ProfileBreakpoint{100.0, 0.04}});
+        input.width = RoadWidthProfile({RoadWidthBreakpoint{0.0, 4.0, 4.0}, RoadWidthBreakpoint{100.0, 6.0, 6.0}});
+        auto road = Road::build(std::move(input));
+        REQUIRE(road.has_value());
+    }
+
+    // 2. Station exactly zero accepted
+    {
+        auto input = makeBaseInput();
+        input.elevation = PiecewiseLinearProfile({ProfileBreakpoint{0.0, 10.0}});
+        auto road = Road::build(std::move(input));
+        REQUIRE(road.has_value());
+    }
+
+    // 3. Station exactly at road length accepted
+    {
+        auto input = makeBaseInput();
+        input.elevation = PiecewiseLinearProfile({ProfileBreakpoint{100.0, 20.0}});
+        auto road = Road::build(std::move(input));
+        REQUIRE(road.has_value());
+    }
+
+    // 4. Negative elevation station rejected
+    {
+        auto input = makeBaseInput();
+        input.elevation = PiecewiseLinearProfile({ProfileBreakpoint{-1.0, 10.0}, ProfileBreakpoint{50.0, 20.0}});
+        auto road = Road::build(std::move(input));
+        REQUIRE_FALSE(road.has_value());
+        bool hasDiag = false;
+        for (const auto& d : road.error()) {
+            if (d.code == RoadErrorCode::InvalidProfile && d.message.find("elevation breakpoint station") != std::string::npos) {
+                hasDiag = true;
+            }
+        }
+        CHECK(hasDiag);
+    }
+
+    // 5. Negative superelevation station rejected
+    {
+        auto input = makeBaseInput();
+        input.superelevation = PiecewiseLinearProfile({ProfileBreakpoint{-0.5, 0.0}, ProfileBreakpoint{50.0, 0.02}});
+        auto road = Road::build(std::move(input));
+        REQUIRE_FALSE(road.has_value());
+        bool hasDiag = false;
+        for (const auto& d : road.error()) {
+            if (d.code == RoadErrorCode::InvalidProfile && d.message.find("superelevation breakpoint station") != std::string::npos) {
+                hasDiag = true;
+            }
+        }
+        CHECK(hasDiag);
+    }
+
+    // 6. Negative width station rejected
+    {
+        auto input = makeBaseInput();
+        input.width = RoadWidthProfile({RoadWidthBreakpoint{-2.0, 4.0, 4.0}, RoadWidthBreakpoint{50.0, 4.0, 4.0}});
+        auto road = Road::build(std::move(input));
+        REQUIRE_FALSE(road.has_value());
+        bool hasDiag = false;
+        for (const auto& d : road.error()) {
+            if (d.code == RoadErrorCode::InvalidProfile && d.message.find("width") != std::string::npos) {
+                hasDiag = true;
+            }
+        }
+        CHECK(hasDiag);
+    }
+
+    // 7. Station just materially above road length rejected
+    {
+        auto input = makeBaseInput();
+        input.elevation = PiecewiseLinearProfile({ProfileBreakpoint{0.0, 10.0}, ProfileBreakpoint{100.01, 20.0}});
+        auto road = Road::build(std::move(input));
+        REQUIRE_FALSE(road.has_value());
+        bool hasDiag = false;
+        for (const auto& d : road.error()) {
+            if (d.code == RoadErrorCode::InvalidProfile && d.message.find("elevation breakpoint station") != std::string::npos) {
+                hasDiag = true;
+            }
+        }
+        CHECK(hasDiag);
+    }
 }
 
 } // TEST_SUITE

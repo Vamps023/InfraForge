@@ -5,6 +5,25 @@
 
 namespace infraforge::domain::road {
 
+namespace {
+constexpr double kProfileStationTolerance = 1e-4;
+
+template <typename BreakpointCollection>
+void validateProfileStationRange(
+    const std::string_view profileType,
+    const BreakpointCollection& breakpoints,
+    const double totalLength,
+    std::vector<RoadDiagnostic>& diagnostics) {
+    for (const auto& bp : breakpoints) {
+        if (bp.station < 0.0 || bp.station > totalLength + kProfileStationTolerance) {
+            diagnostics.push_back({RoadErrorCode::InvalidProfile,
+                std::string(profileType) + " breakpoint station (" + std::to_string(bp.station) +
+                ") is outside alignment station range [0, " + std::to_string(totalLength) + "]"});
+        }
+    }
+}
+} // namespace
+
 std::expected<Road, std::vector<RoadDiagnostic>> Road::build(BuildInput input) {
     std::vector<RoadDiagnostic> diagnostics;
 
@@ -25,33 +44,13 @@ std::expected<Road, std::vector<RoadDiagnostic>> Road::build(BuildInput input) {
     }
     if (!input.alignment.isEmpty()) {
         const double totalLength = input.alignment.totalLength();
-        for (const auto& bp : input.elevation.breakpoints()) {
-            if (bp.station > totalLength + 1e-4) {
-                diagnostics.push_back({RoadErrorCode::InvalidProfile,
-                    "elevation breakpoint station (" + std::to_string(bp.station) +
-                    ") exceeds alignment length (" + std::to_string(totalLength) + ")"});
-            }
-        }
-        for (const auto& bp : input.superelevation.breakpoints()) {
-            if (bp.station > totalLength + 1e-4) {
-                diagnostics.push_back({RoadErrorCode::InvalidProfile,
-                    "superelevation breakpoint station (" + std::to_string(bp.station) +
-                    ") exceeds alignment length (" + std::to_string(totalLength) + ")"});
-            }
-        }
-        for (const auto& bp : input.width.breakpoints()) {
-            if (bp.station > totalLength + 1e-4) {
-                diagnostics.push_back({RoadErrorCode::InvalidProfile,
-                    "width breakpoint station (" + std::to_string(bp.station) +
-                    ") exceeds alignment length (" + std::to_string(totalLength) + ")"});
-            }
-        }
+        validateProfileStationRange("elevation", input.elevation.breakpoints(), totalLength, diagnostics);
+        validateProfileStationRange("superelevation", input.superelevation.breakpoints(), totalLength, diagnostics);
+        validateProfileStationRange("width", input.width.breakpoints(), totalLength, diagnostics);
     }
     if (input.id.isNull()) {
         diagnostics.push_back({RoadErrorCode::InvalidArgument, "road id must not be null"});
     }
-
-    // Validate protected anchors against the alignment.
     auto anchorDiagnostics = validateProtectedAnchors(input.alignment, input.source.protectedAnchors);
     for (auto& d : anchorDiagnostics) {
         diagnostics.push_back(std::move(d));

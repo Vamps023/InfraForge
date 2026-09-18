@@ -32,6 +32,9 @@ function projectedRows(kind: ProfileKind, details: NonNullable<ReturnType<typeof
   return source.map((breakpoint) => ({ station: String(breakpoint.station), value: String(breakpoint.value) }))
 }
 
+export const INHERIT_DATASET_SELECTION = '__inherit__'
+export const AUTOMATIC_DEFAULT_DATASET = '__automatic__'
+
 export function RoadProfileEditor({ getEngineClient }: RoadProfileEditorProps) {
   const primaryId = useSelectionStore((state) => state.primaryId)
   const roadId = primaryId?.startsWith('road:') ? primaryId.slice('road:'.length) : null
@@ -47,7 +50,22 @@ export function RoadProfileEditor({ getEngineClient }: RoadProfileEditorProps) {
   const [terrainOffset, setTerrainOffset] = useState('0.1')
   const datasets = useTerrainStore((state) => state.datasets)
   const selectedDatasetUuid = useTerrainStore((state) => state.selectedDatasetUuid)
-  const [selectedDatasetId, setSelectedDatasetId] = useState<string>('')
+  const sessionToken = useTerrainStore((state) => state.sessionToken)
+  const [datasetChoice, setDatasetChoice] = useState<string>(INHERIT_DATASET_SELECTION)
+
+  // Reset local dataset choice when switching projects/sessions
+  useEffect(() => {
+    setDatasetChoice(INHERIT_DATASET_SELECTION)
+  }, [sessionToken])
+
+  // If the chosen explicit dataset is removed from useTerrainStore.datasets, reset to inherit
+  useEffect(() => {
+    if (datasetChoice !== INHERIT_DATASET_SELECTION && datasetChoice !== AUTOMATIC_DEFAULT_DATASET) {
+      if (!datasets.some((d) => d.datasetUuid === datasetChoice)) {
+        setDatasetChoice(INHERIT_DATASET_SELECTION)
+      }
+    }
+  }, [datasets, datasetChoice])
 
   useEffect(() => {
     setRows(matchingDetails ? projectedRows(kind, matchingDetails) : [])
@@ -61,6 +79,7 @@ export function RoadProfileEditor({ getEngineClient }: RoadProfileEditorProps) {
   }
 
   const addRow = () => {
+    setFeedback(null)
     if (rows.length === 0) {
       setRows([{
         station: '0',
@@ -70,34 +89,92 @@ export function RoadProfileEditor({ getEngineClient }: RoadProfileEditorProps) {
       return
     }
 
-    const lastStation = Number(rows.at(-1)?.station ?? 0)
-    let nextStation: number
-    if (lastStation < road.length - 0.01) {
-      nextStation = Math.min(road.length, Number((lastStation + 10).toFixed(2)))
-    } else {
-      const sorted = rows
-        .map((r) => Number(r.station))
-        .filter((s) => Number.isFinite(s))
-        .sort((a, b) => a - b)
+    if (rows.some((r) => !Number.isFinite(Number(r.station)))) {
+      setFeedback('Please correct non-numeric stations before adding a breakpoint.')
+      return
+    }
 
-      let maxGap = -1
-      let bestMidpoint = road.length / 2
-      if (sorted.length < 2) {
-        bestMidpoint = sorted.length === 1 && sorted[0]! > 0 ? sorted[0]! / 2 : Math.min(road.length, 10)
+    const sortedStations = rows
+      .map((r) => Number(r.station))
+      .sort((a, b) => a - b)
+
+    type Gap = { start: number; end: number; span: number }
+    const gaps: Gap[] = []
+
+    if (sortedStations[0]! > 1e-4) {
+      gaps.push({ start: 0.0, end: sortedStations[0]!, span: sortedStations[0]! })
+    }
+
+    for (let i = 0; i < sortedStations.length - 1; i++) {
+      const s0 = sortedStations[i]!
+      const s1 = sortedStations[i + 1]!
+      if (s1 - s0 > 1e-4) {
+        gaps.push({ start: s0, end: s1, span: s1 - s0 })
+      }
+    }
+
+    const lastStation = sortedStations.at(-1)!
+    if (road.length - lastStation > 1e-4) {
+      gaps.push({ start: lastStation, end: road.length, span: road.length - lastStation })
+    }
+
+    let bestGap: Gap | null = null
+    for (const g of gaps) {
+      if (!bestGap || g.span > bestGap.span) {
+        bestGap = g
+      }
+    }
+
+    if (!bestGap || bestGap.span < 1e-4) {
+      setFeedback('No usable gap remains to insert a new breakpoint.')
+      return
+    }
+
+    let candidateStation: number | null = null
+    if (bestGap.start === lastStation) {
+      const target = Math.min(road.length, lastStation + 10)
+      if (target > bestGap.start && target <= bestGap.end) {
+        candidateStation = target
+      }
+    }
+
+    if (candidateStation === null) {
+      const midpoint = (bestGap.start + bestGap.end) / 2
+      const rounded2 = Number(midpoint.toFixed(2))
+      if (
+        rounded2 > bestGap.start + 1e-4 &&
+        rounded2 < bestGap.end - 1e-4 &&
+        !sortedStations.some((s) => Math.abs(s - rounded2) < 1e-4)
+      ) {
+        candidateStation = rounded2
       } else {
-        for (let i = 0; i < sorted.length - 1; i++) {
-          const gap = sorted[i + 1]! - sorted[i]!
-          if (gap > maxGap) {
-            maxGap = gap
-            bestMidpoint = sorted[i]! + gap / 2
-          }
+        const precise = Number(midpoint.toFixed(6))
+        if (
+          precise > bestGap.start &&
+          precise < bestGap.end &&
+          !sortedStations.some((s) => Math.abs(s - precise) < 1e-6)
+        ) {
+          candidateStation = precise
+        } else if (midpoint > bestGap.start && midpoint < bestGap.end) {
+          candidateStation = midpoint
         }
       }
-      nextStation = Number(bestMidpoint.toFixed(2))
+    }
+
+    if (
+      candidateStation === null ||
+      candidateStation <= bestGap.start ||
+      candidateStation >= bestGap.end ||
+      candidateStation < 0 ||
+      candidateStation > road.length ||
+      sortedStations.some((s) => Math.abs(s - candidateStation!) < 1e-6)
+    ) {
+      setFeedback('No usable gap remains to insert a new breakpoint.')
+      return
     }
 
     const newRow: DraftBreakpoint = {
-      station: String(nextStation),
+      station: String(candidateStation),
       value: kind === 'width' ? '5' : '0',
       ...(kind === 'width' ? { rightValue: '5' } : {}),
     }
@@ -151,7 +228,14 @@ export function RoadProfileEditor({ getEngineClient }: RoadProfileEditorProps) {
     }
     setSubmitting(true); setFeedback(null)
     try {
-      const targetDatasetId = selectedDatasetId || selectedDatasetUuid || ''
+      let targetDatasetId = ''
+      if (datasetChoice === AUTOMATIC_DEFAULT_DATASET) {
+        targetDatasetId = ''
+      } else if (datasetChoice === INHERIT_DATASET_SELECTION) {
+        targetDatasetId = selectedDatasetUuid ?? ''
+      } else {
+        targetDatasetId = datasetChoice
+      }
       await conformRoadToTerrain(client, roadId, interval, offset, targetDatasetId)
       if (useSelectionStore.getState().primaryId === `road:${roadId}`) {
         await getRoad(client, roadId)
@@ -179,10 +263,15 @@ export function RoadProfileEditor({ getEngineClient }: RoadProfileEditorProps) {
           Terrain dataset{' '}
           <select
             aria-label="Terrain dataset"
-            value={selectedDatasetId || selectedDatasetUuid || ''}
-            onChange={(event) => setSelectedDatasetId(event.target.value)}
+            value={datasetChoice}
+            onChange={(event) => setDatasetChoice(event.target.value)}
           >
-            <option value="">Default dataset</option>
+            <option value={INHERIT_DATASET_SELECTION}>
+              {selectedDatasetUuid
+                ? `Active selection (${datasets.find((d) => d.datasetUuid === selectedDatasetUuid)?.displayName || selectedDatasetUuid.slice(0, 8)})`
+                : 'Active selection (none)'}
+            </option>
+            <option value={AUTOMATIC_DEFAULT_DATASET}>Automatic / Default dataset</option>
             {datasets.map((dataset) => (
               <option key={dataset.datasetUuid} value={dataset.datasetUuid}>
                 {dataset.displayName || dataset.datasetUuid.slice(0, 8)}

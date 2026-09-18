@@ -891,4 +891,160 @@ TEST_CASE_FIXTURE(RoadServiceTestFixture, "sparse source elevations map to corre
     CHECK(details->elevationBreakpoints[1].value == doctest::Approx(120.0));
 }
 
+TEST_CASE_FIXTURE(RoadServiceTestFixture, "terrain conformance station bounds and atomicity") {
+    CreateRoadInput input;
+    input.name = "Conformance Bounds Road";
+    input.sourcePoints = makeStraightPolyline(0.0, 0.0, 0.0, 100.0, 2);
+    input.positionTolerance = 1.0;
+    const auto summary = roadService->createRoad(input);
+
+    UpdateElevationInput elevInput;
+    elevInput.roadId = summary.roadId;
+    elevInput.stations = {0.0, 100.0};
+    elevInput.elevations = {5.0, 5.0};
+    (void)roadService->updateElevation(elevInput);
+
+    auto detailsBefore = roadService->getRoad(summary.roadId);
+    REQUIRE(detailsBefore.has_value());
+    REQUIRE(detailsBefore->elevationBreakpoints.size() == 2);
+
+    // 1. Pathological request with tiny interval (100m / 0.005 = 20,000 samples > 10,000)
+    // must be rejected quickly without huge allocation or executor lockup
+    ConformRoadToTerrainInput conformExcessive;
+    conformExcessive.roadId = summary.roadId;
+    conformExcessive.stationInterval = 0.005;
+    conformExcessive.verticalOffset = 0.1;
+    CHECK_THROWS_AS(
+        (void)roadService->conformToTerrain(conformExcessive,
+            [](const AlignmentPoint&) -> std::expected<double, std::string> {
+                return 0.0;
+            }),
+        infraforge::application::CommandFailure);
+
+    // 2. Ultra-tiny interval (1e-12) must reject immediately without floating-point infinite loop
+    ConformRoadToTerrainInput conformTiny;
+    conformTiny.roadId = summary.roadId;
+    conformTiny.stationInterval = 1e-12;
+    conformTiny.verticalOffset = 0.1;
+    CHECK_THROWS_AS(
+        (void)roadService->conformToTerrain(conformTiny,
+            [](const AlignmentPoint&) -> std::expected<double, std::string> {
+                return 0.0;
+            }),
+        infraforge::application::CommandFailure);
+
+    // 3. Atomicity: rejected conformance must NOT mutate the road
+    auto detailsAfter = roadService->getRoad(summary.roadId);
+    REQUIRE(detailsAfter.has_value());
+    REQUIRE(detailsAfter->elevationBreakpoints.size() == 2);
+    CHECK(detailsAfter->elevationBreakpoints[0].value == doctest::Approx(5.0));
+    CHECK(detailsAfter->elevationBreakpoints[1].value == doctest::Approx(5.0));
+}
+
+TEST_CASE_FIXTURE(RoadServiceTestFixture, "terrain conformance includes boundaries and exact end station with strictly increasing stations") {
+    CreateRoadInput input;
+    input.name = "Multi-segment Conformance Road";
+    input.sourcePoints = {
+        AlignmentPoint{0.0, 0.0},
+        AlignmentPoint{0.0, 33.0},
+        AlignmentPoint{0.0, 100.0}
+    };
+    input.protectedAnchorIndices = {1};
+    input.positionTolerance = 1.0;
+    const auto summary = roadService->createRoad(input);
+    REQUIRE(summary.alignmentSegmentCount >= 2);
+
+    ConformRoadToTerrainInput conform;
+    conform.roadId = summary.roadId;
+    conform.stationInterval = 20.0;
+    conform.verticalOffset = 0.5;
+    (void)roadService->conformToTerrain(conform,
+        [](const AlignmentPoint& pt) -> std::expected<double, std::string> {
+            return pt.northing * 0.1;
+        });
+
+    auto details = roadService->getRoad(summary.roadId);
+    REQUIRE(details.has_value());
+    const auto& bps = details->elevationBreakpoints;
+    REQUIRE(bps.size() >= 4);
+
+    CHECK(bps.front().station == doctest::Approx(0.0));
+    CHECK(bps.back().station == doctest::Approx(100.0));
+
+    bool foundBoundary = false;
+    for (const auto& bp : bps) {
+        if (std::abs(bp.station - 33.0) < 1e-4) {
+            foundBoundary = true;
+            break;
+        }
+    }
+    CHECK(foundBoundary);
+
+    for (std::size_t i = 1; i < bps.size(); ++i) {
+        CHECK(bps[i].station > bps[i - 1].station);
+    }
+}
+
+TEST_CASE_FIXTURE(RoadServiceTestFixture, "undo and redo restore exact unclamped and clamped profile states across road shortening") {
+    CreateRoadInput input;
+    input.name = "Clamping Undo Redo Road";
+    input.sourcePoints = makeStraightPolyline(0.0, 0.0, 0.0, 100.0, 2);
+    input.positionTolerance = 1.0;
+    const auto summary = roadService->createRoad(input);
+
+    UpdateElevationInput elevInput;
+    elevInput.roadId = summary.roadId;
+    elevInput.stations = {0.0, 50.0, 100.0};
+    elevInput.elevations = {10.0, 15.0, 20.0};
+    (void)roadService->updateElevation(elevInput);
+
+    UpdateSuperelevationInput superInput;
+    superInput.roadId = summary.roadId;
+    superInput.stations = {0.0, 50.0, 100.0};
+    superInput.superelevations = {0.0, 0.04, 0.08};
+    (void)roadService->updateSuperelevation(superInput);
+
+    UpdateWidthInput widthInput;
+    widthInput.roadId = summary.roadId;
+    widthInput.stations = {0.0, 50.0, 100.0};
+    widthInput.leftWidths = {3.0, 4.0, 5.0};
+    widthInput.rightWidths = {3.0, 4.0, 5.0};
+    (void)roadService->updateWidth(widthInput);
+
+    // Shorten road: move point 1 from (0,100) to (0,70)
+    MoveControlInput moveInput;
+    moveInput.roadId = summary.roadId;
+    moveInput.controlIndex = 1;
+    moveInput.position = AlignmentPoint{0.0, 70.0};
+    (void)roadService->moveControl(moveInput);
+
+    auto clampedDetails = roadService->getRoad(summary.roadId);
+    REQUIRE(clampedDetails.has_value());
+    CHECK(clampedDetails->elevationBreakpoints.back().station == doctest::Approx(70.0));
+    CHECK(clampedDetails->superelevationBreakpoints.back().station == doctest::Approx(70.0));
+    CHECK(clampedDetails->widthBreakpoints.back().station == doctest::Approx(70.0));
+
+    // Undo: must restore unclamped 100m alignment and exact original breakpoints
+    REQUIRE(roadService->undo(summary.roadId));
+    auto undoneDetails = roadService->getRoad(summary.roadId);
+    REQUIRE(undoneDetails.has_value());
+    REQUIRE(undoneDetails->elevationBreakpoints.size() == 3);
+    CHECK(undoneDetails->elevationBreakpoints[2].station == doctest::Approx(100.0));
+    CHECK(undoneDetails->elevationBreakpoints[2].value == doctest::Approx(20.0));
+    REQUIRE(undoneDetails->superelevationBreakpoints.size() == 3);
+    CHECK(undoneDetails->superelevationBreakpoints[2].station == doctest::Approx(100.0));
+    CHECK(undoneDetails->superelevationBreakpoints[2].value == doctest::Approx(0.08));
+    REQUIRE(undoneDetails->widthBreakpoints.size() == 3);
+    CHECK(undoneDetails->widthBreakpoints[2].station == doctest::Approx(100.0));
+    CHECK(undoneDetails->widthBreakpoints[2].leftWidth == doctest::Approx(5.0));
+
+    // Redo: must restore clamped state
+    REQUIRE(roadService->redo(summary.roadId));
+    auto redoneDetails = roadService->getRoad(summary.roadId);
+    REQUIRE(redoneDetails.has_value());
+    CHECK(redoneDetails->elevationBreakpoints.back().station == doctest::Approx(70.0));
+    CHECK(redoneDetails->superelevationBreakpoints.back().station == doctest::Approx(70.0));
+    CHECK(redoneDetails->widthBreakpoints.back().station == doctest::Approx(70.0));
+}
+
 } // namespace infraforge::application

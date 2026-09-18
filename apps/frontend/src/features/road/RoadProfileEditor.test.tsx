@@ -215,7 +215,27 @@ describe('RoadProfileEditor stale details protection & selection sync', () => {
     expect(updateSpy).toHaveBeenCalledWith(expect.anything(), 'road-A', [0, 50, 100], [10, 0, 15])
   })
 
-  it('conforms to terrain using user-selected terrain dataset', async () => {
+  it('conforms to terrain using globally selected dataset when no local override is chosen', async () => {
+    const conformSpy = vi.spyOn(roadApi, 'conformRoadToTerrain').mockResolvedValue(undefined as any)
+    vi.spyOn(roadApi, 'getRoad').mockResolvedValue(undefined as any)
+    useSelectionStore.getState().select(['road:road-A'])
+    useRoadStore.getState().setDetails(detailsA)
+
+    const dataset1 = create(TerrainDatasetInfoSchema, {
+      datasetUuid: 'dataset-uuid-1',
+      displayName: 'LIDAR Survey 2026',
+    })
+    useTerrainStore.getState().setDatasets([dataset1])
+    useTerrainStore.getState().selectDataset('dataset-uuid-1')
+
+    render(<RoadProfileEditor getEngineClient={() => ({} as any)} />)
+
+    // No local override chosen: should inherit active global selection
+    await userEvent.click(screen.getByRole('button', { name: 'Conform to terrain' }))
+    expect(conformSpy).toHaveBeenCalledWith(expect.anything(), 'road-A', 10, 0.1, 'dataset-uuid-1')
+  })
+
+  it('conforms to terrain using user-selected terrain dataset override', async () => {
     const conformSpy = vi.spyOn(roadApi, 'conformRoadToTerrain').mockResolvedValue(undefined as any)
     vi.spyOn(roadApi, 'getRoad').mockResolvedValue(undefined as any)
     useSelectionStore.getState().select(['road:road-A'])
@@ -230,6 +250,7 @@ describe('RoadProfileEditor stale details protection & selection sync', () => {
       displayName: 'Photogrammetry DEM',
     })
     useTerrainStore.getState().setDatasets([dataset1, dataset2])
+    useTerrainStore.getState().selectDataset('dataset-uuid-1')
 
     render(<RoadProfileEditor getEngineClient={() => ({} as any)} />)
 
@@ -239,5 +260,144 @@ describe('RoadProfileEditor stale details protection & selection sync', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'Conform to terrain' }))
     expect(conformSpy).toHaveBeenCalledWith(expect.anything(), 'road-A', 10, 0.1, 'dataset-uuid-2')
+  })
+
+  it('explicit "Automatic / Default dataset" sends empty string even while global dataset is selected', async () => {
+    const conformSpy = vi.spyOn(roadApi, 'conformRoadToTerrain').mockResolvedValue(undefined as any)
+    vi.spyOn(roadApi, 'getRoad').mockResolvedValue(undefined as any)
+    useSelectionStore.getState().select(['road:road-A'])
+    useRoadStore.getState().setDetails(detailsA)
+
+    const dataset1 = create(TerrainDatasetInfoSchema, {
+      datasetUuid: 'dataset-uuid-1',
+      displayName: 'LIDAR Survey 2026',
+    })
+    useTerrainStore.getState().setDatasets([dataset1])
+    useTerrainStore.getState().selectDataset('dataset-uuid-1')
+
+    render(<RoadProfileEditor getEngineClient={() => ({} as any)} />)
+
+    const selector = screen.getByLabelText('Terrain dataset')
+    await userEvent.selectOptions(selector, '__automatic__')
+
+    await userEvent.click(screen.getByRole('button', { name: 'Conform to terrain' }))
+    expect(conformSpy).toHaveBeenCalledWith(expect.anything(), 'road-A', 10, 0.1, '')
+  })
+
+  it('resets to inherit mode when the chosen dataset disappears from store', async () => {
+    const conformSpy = vi.spyOn(roadApi, 'conformRoadToTerrain').mockResolvedValue(undefined as any)
+    vi.spyOn(roadApi, 'getRoad').mockResolvedValue(undefined as any)
+    useSelectionStore.getState().select(['road:road-A'])
+    useRoadStore.getState().setDetails(detailsA)
+
+    const dataset1 = create(TerrainDatasetInfoSchema, {
+      datasetUuid: 'dataset-uuid-1',
+      displayName: 'Dataset 1',
+    })
+    const dataset2 = create(TerrainDatasetInfoSchema, {
+      datasetUuid: 'dataset-uuid-2',
+      displayName: 'Dataset 2',
+    })
+    useTerrainStore.getState().setDatasets([dataset1, dataset2])
+
+    const { rerender } = render(<RoadProfileEditor getEngineClient={() => ({} as any)} />)
+    const selector = screen.getByLabelText('Terrain dataset')
+    await userEvent.selectOptions(selector, 'dataset-uuid-2')
+    expect(selector).toHaveValue('dataset-uuid-2')
+
+    // Remove dataset2 from store
+    useTerrainStore.getState().setDatasets([dataset1])
+    rerender(<RoadProfileEditor getEngineClient={() => ({} as any)} />)
+
+    // Should reset to inherit mode ('__inherit__') rather than keeping stale choice
+    expect(screen.getByLabelText('Terrain dataset')).toHaveValue('__inherit__')
+  })
+
+  it('session token increment resets local dataset choice', async () => {
+    useSelectionStore.getState().select(['road:road-A'])
+    useRoadStore.getState().setDetails(detailsA)
+
+    const dataset1 = create(TerrainDatasetInfoSchema, {
+      datasetUuid: 'dataset-uuid-1',
+      displayName: 'Dataset 1',
+    })
+    useTerrainStore.getState().setDatasets([dataset1])
+
+    const { rerender } = render(<RoadProfileEditor getEngineClient={() => ({} as any)} />)
+    const selector = screen.getByLabelText('Terrain dataset')
+    await userEvent.selectOptions(selector, '__automatic__')
+    expect(selector).toHaveValue('__automatic__')
+
+    // Simulate project/session switch minting new token and hydrating datasets
+    useTerrainStore.getState().beginSession()
+    useTerrainStore.getState().setDatasets([dataset1])
+    rerender(<RoadProfileEditor getEngineClient={() => ({} as any)} />)
+
+    expect(screen.getByLabelText('Terrain dataset')).toHaveValue('__inherit__')
+  })
+
+  it('inserts breakpoint with full precision in sub-centimeter gaps without duplicate stations', async () => {
+    const updateSpy = vi.spyOn(roadApi, 'updateRoadElevation').mockResolvedValue(undefined as any)
+    vi.spyOn(roadApi, 'getRoad').mockResolvedValue(undefined as any)
+
+    const denseRoad = create(RoadSummarySchema, {
+      roadId: 'road-dense',
+      name: 'Dense Road',
+      length: 0.002,
+      alignmentSegmentCount: 1,
+    })
+    const denseDetails = create(RoadDetailsSchema, {
+      roadId: 'road-dense',
+      elevationBreakpoints: [
+        { station: 0.001, value: 10 },
+        { station: 0.002, value: 12 },
+      ],
+    })
+    useRoadStore.getState().setRoads([denseRoad])
+    useSelectionStore.getState().select(['road:road-dense'])
+    useRoadStore.getState().setDetails(denseDetails)
+
+    render(<RoadProfileEditor getEngineClient={() => ({} as any)} />)
+
+    // Click Add breakpoint — gap between 0.001 and 0.002 is 0.001. Midpoint is 0.0015.
+    // In dense profile, it must not round to 0.00 and duplicate 0.
+    await userEvent.click(screen.getByRole('button', { name: 'Add breakpoint' }))
+
+    const inputs = screen.getAllByLabelText(/Breakpoint \d station/)
+    const stationValues = inputs.map((input) => (input as HTMLInputElement).value)
+    expect(stationValues).toContain('0.0005')
+
+    // Strictly increasing stations check
+    const numericStations = stationValues.map(Number)
+    for (let i = 1; i < numericStations.length; ++i) {
+      expect(numericStations[i]!).toBeGreaterThan(numericStations[i - 1]!)
+    }
+
+    await userEvent.click(screen.getByRole('button', { name: 'Save profile' }))
+    expect(updateSpy).toHaveBeenCalled()
+  })
+
+  it('safely rejects adding breakpoint when no usable gap exists', async () => {
+    const microscopicRoad = create(RoadSummarySchema, {
+      roadId: 'road-micro',
+      name: 'Microscopic Road',
+      length: 0.00001,
+      alignmentSegmentCount: 1,
+    })
+    const microscopicDetails = create(RoadDetailsSchema, {
+      roadId: 'road-micro',
+      elevationBreakpoints: [
+        { station: 0.0, value: 10 },
+        { station: 0.00001, value: 12 },
+      ],
+    })
+    useRoadStore.getState().setRoads([microscopicRoad])
+    useSelectionStore.getState().select(['road:road-micro'])
+    useRoadStore.getState().setDetails(microscopicDetails)
+
+    render(<RoadProfileEditor getEngineClient={() => ({} as any)} />)
+
+    await userEvent.click(screen.getByRole('button', { name: 'Add breakpoint' }))
+    expect(screen.getByText('No usable gap remains to insert a new breakpoint.')).toBeInTheDocument()
   })
 })

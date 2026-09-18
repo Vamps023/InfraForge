@@ -1129,4 +1129,114 @@ TEST_CASE_FIXTURE(RoadServiceTestFixture, "createClothoidRoad creates canonical 
     CHECK(details->length == doctest::Approx(80.0));
 }
 
+TEST_CASE_FIXTURE(RoadServiceTestFixture, "createStraightRoad with stickToTerrain populates elevation profile atomically and persists") {
+    CreateStraightRoadInput input;
+    input.name = "Conformed Straight";
+    input.start = AlignmentPoint{0.0, 0.0};
+    input.end = AlignmentPoint{100.0, 0.0};
+    input.stickToTerrain = true;
+    input.stationInterval = 25.0;
+    input.verticalOffset = 0.5;
+
+    // Deterministic synthetic height sampler: height = 10.0 + easting * 0.1
+    TerrainHeightSampler sampler = [](const AlignmentPoint& p) -> std::expected<double, std::string> {
+        return 10.0 + p.easting * 0.1;
+    };
+
+    const auto summary = roadService->createStraightRoad(input, sampler);
+    CHECK(summary.name == "Conformed Straight");
+    CHECK(summary.length == doctest::Approx(100.0));
+    CHECK(events.size() == 1);
+    CHECK(events[0].kind == RoadServiceEvent::Kind::Created);
+
+    auto details = roadService->getRoad(summary.roadId);
+    REQUIRE(details.has_value());
+    CHECK(details->hasElevationProfile);
+    REQUIRE(details->elevationBreakpoints.size() >= 5);
+    // At s=0, easting=0 -> height = 10.0 + 0.5 = 10.5
+    CHECK(details->elevationBreakpoints.front().station == doctest::Approx(0.0));
+    CHECK(details->elevationBreakpoints.front().value == doctest::Approx(10.5));
+    // At s=100, easting=100 -> height = 20.0 + 0.5 = 20.5
+    CHECK(details->elevationBreakpoints.back().station == doctest::Approx(100.0));
+    CHECK(details->elevationBreakpoints.back().value == doctest::Approx(20.5));
+
+    // Single undo removes the road cleanly
+    REQUIRE(roadService->undo(summary.roadId));
+    CHECK(roadService->listRoads().empty());
+}
+
+TEST_CASE_FIXTURE(RoadServiceTestFixture, "createStraightRoad with stickToTerrain fails atomically when sampler is null") {
+    CreateStraightRoadInput input;
+    input.name = "Null Sampler Road";
+    input.start = AlignmentPoint{0.0, 0.0};
+    input.end = AlignmentPoint{100.0, 0.0};
+    input.stickToTerrain = true;
+
+    CHECK_THROWS_AS((void)roadService->createStraightRoad(input, nullptr), CommandFailure);
+    CHECK(roadService->listRoads().empty());
+    CHECK(store.roads().empty());
+    CHECK(events.empty());
+}
+
+TEST_CASE_FIXTURE(RoadServiceTestFixture, "createStraightRoad with stickToTerrain fails atomically when sample is outside coverage") {
+    CreateStraightRoadInput input;
+    input.name = "Outside Coverage Road";
+    input.start = AlignmentPoint{0.0, 0.0};
+    input.end = AlignmentPoint{100.0, 0.0};
+    input.stickToTerrain = true;
+
+    TerrainHeightSampler sampler = [](const AlignmentPoint&) -> std::expected<double, std::string> {
+        return std::unexpected("road lies outside terrain coverage");
+    };
+
+    CHECK_THROWS_AS((void)roadService->createStraightRoad(input, sampler), CommandFailure);
+    CHECK(roadService->listRoads().empty());
+    CHECK(store.roads().empty());
+    CHECK(events.empty());
+}
+
+TEST_CASE_FIXTURE(RoadServiceTestFixture, "createStraightRoad with stickToTerrain fails atomically when sample is NoData") {
+    CreateStraightRoadInput input;
+    input.name = "NoData Road";
+    input.start = AlignmentPoint{0.0, 0.0};
+    input.end = AlignmentPoint{100.0, 0.0};
+    input.stickToTerrain = true;
+
+    TerrainHeightSampler sampler = [](const AlignmentPoint&) -> std::expected<double, std::string> {
+        return std::unexpected("terrain sample is NoData");
+    };
+
+    CHECK_THROWS_AS((void)roadService->createStraightRoad(input, sampler), CommandFailure);
+    CHECK(roadService->listRoads().empty());
+    CHECK(store.roads().empty());
+    CHECK(events.empty());
+}
+
+TEST_CASE_FIXTURE(RoadServiceTestFixture, "createArcRoad with stickToTerrain populates elevation profile and supports undo") {
+    CreateArcRoadInput input;
+    input.name = "Conformed Arc";
+    input.p0 = AlignmentPoint{100.0, 0.0};
+    input.p1 = AlignmentPoint{0.0, 100.0};
+    input.p2 = AlignmentPoint{-100.0, 0.0};
+    input.stickToTerrain = true;
+    input.stationInterval = 20.0;
+    input.verticalOffset = 1.0;
+
+    TerrainHeightSampler sampler = [](const AlignmentPoint&) -> std::expected<double, std::string> {
+        return 50.0;
+    };
+
+    const auto summary = roadService->createArcRoad(input, sampler);
+    CHECK(summary.name == "Conformed Arc");
+    CHECK(events.size() == 1);
+
+    auto details = roadService->getRoad(summary.roadId);
+    REQUIRE(details.has_value());
+    CHECK(details->hasElevationProfile);
+    CHECK(details->elevationBreakpoints.front().value == doctest::Approx(51.0));
+
+    REQUIRE(roadService->undo(summary.roadId));
+    CHECK(roadService->listRoads().empty());
+}
+
 } // namespace infraforge::application

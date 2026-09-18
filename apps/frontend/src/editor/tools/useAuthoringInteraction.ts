@@ -3,6 +3,8 @@ import type { EngineClient } from '../../lib/engineSession'
 import { useAuthoringDraftStore } from './authoringDraftStore'
 import { useToolStore, type ViewportInteraction } from './toolStore'
 import { useSelectionStore } from '../selection/selectionStore'
+import { useRoadStore } from '../../features/road/roadStore'
+import { useWorkspaceStore } from '../shell/workspaceStore'
 import {
   createStraightRoad,
   createArcRoad,
@@ -11,6 +13,10 @@ import {
 } from '../../features/road/roadApi'
 import { sampleArcPreview, sampleClothoidPreview } from './previewSampler'
 import { AUTHORING_TOOLS } from './authoringToolTypes'
+import {
+  resolveAuthoringPoint,
+  extractEndpointCandidates,
+} from './snapService'
 
 export interface AuthoringInteractionDeps {
   getClient: () => EngineClient | null
@@ -69,16 +75,16 @@ export function useAuthoringInteraction(deps: AuthoringInteractionDeps) {
         let len = clothoidParams.length
 
         const p1 = points[1]
-        if (points.length >= 2 && p1) {
-          const de = p1.easting - start.easting
-          const dn = p1.northing - start.northing
+        const target = p1 ?? hoverPoint
+        if (target) {
+          const de = target.easting - start.easting
+          const dn = target.northing - start.northing
           headingRad = Math.atan2(dn, de)
-          len = Math.hypot(de, dn)
-        } else if (hoverPoint) {
-          const de = hoverPoint.easting - start.easting
-          const dn = hoverPoint.northing - start.northing
-          headingRad = Math.atan2(dn, de)
-          len = Math.hypot(de, dn)
+          if (clothoidParams.mode === 'interactive') {
+            len = Math.hypot(de, dn)
+          } else {
+            len = clothoidParams.length
+          }
         }
 
         const preview = sampleClothoidPreview(
@@ -112,6 +118,26 @@ export function useAuthoringInteraction(deps: AuthoringInteractionDeps) {
     })
   }, [activeTool, clearDraft, setTool])
 
+  // Clear draft on workspace switch away from roads
+  useEffect(() => {
+    let lastWorkspace = useWorkspaceStore.getState().activeWorkspace
+    return useWorkspaceStore.subscribe((state) => {
+      if (state.activeWorkspace !== 'roads' && lastWorkspace === 'roads') {
+        clearDraft()
+        setTool('select')
+      }
+      lastWorkspace = state.activeWorkspace
+    })
+  }, [clearDraft, setTool])
+
+  // Reset viewport preview on hook unmount
+  useEffect(() => {
+    return () => {
+      clearDraft()
+      window.infraforgeDesktop?.setRoadPreview?.([])
+    }
+  }, [clearDraft])
+
   // Viewport interaction handler (primary-click)
   const handleViewportInteraction = useCallback(async (interaction: ViewportInteraction) => {
     if (interaction.kind !== 'primary-click') return
@@ -126,18 +152,33 @@ export function useAuthoringInteraction(deps: AuthoringInteractionDeps) {
       return
     }
 
-    if (!client) return
+    if (!client) {
+      useRoadStore.getState().setLastError('Engine is not connected')
+      return
+    }
 
     const currentPoints = draftPointsRef.current
     const params = roadParamsRef.current
+    const details = useRoadStore.getState().details
+    const endpointCandidates = extractEndpointCandidates(details, currentPoints)
+    const snappingConfig = useAuthoringDraftStore.getState().snappingConfig
+    const prevPoint = currentPoints.length > 0 ? currentPoints[currentPoints.length - 1] : null
+
+    // Authoritative resolution: primary click uses the exact same resolution logic as hover
+    const resolved = resolveAuthoringPoint(rawPoint, {
+      previousDraftPoint: prevPoint,
+      endpointCandidates,
+      snappingConfig,
+    })
+    const resolvedPoint = resolved.point
 
     if (tool === 'road.straight') {
       if (currentPoints.length === 0) {
-        addDraftPoint(rawPoint)
+        addDraftPoint(resolvedPoint, endpointCandidates)
       } else {
         const start = currentPoints[0]
         if (!start) return
-        const end = rawPoint
+        const end = resolvedPoint
         const name = params.name.trim() || `Road ${new Date().toLocaleTimeString()}`
         try {
           await createStraightRoad(client, {
@@ -151,19 +192,22 @@ export function useAuthoringInteraction(deps: AuthoringInteractionDeps) {
             stationInterval: params.stationInterval,
             verticalOffset: params.verticalOffset,
           })
+          useRoadStore.getState().setLastError(null)
           clearDraft()
         } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err)
+          useRoadStore.getState().setLastError(msg)
           console.error('Failed to create straight road:', err)
         }
       }
     } else if (tool === 'road.arc') {
       if (currentPoints.length < 2) {
-        addDraftPoint(rawPoint)
+        addDraftPoint(resolvedPoint, endpointCandidates)
       } else {
         const p0 = currentPoints[0]
         const p1 = currentPoints[1]
         if (!p0 || !p1) return
-        const p2 = rawPoint
+        const p2 = resolvedPoint
         const name = params.name.trim() || `Arc Road ${new Date().toLocaleTimeString()}`
         try {
           await createArcRoad(client, {
@@ -179,22 +223,26 @@ export function useAuthoringInteraction(deps: AuthoringInteractionDeps) {
             stationInterval: params.stationInterval,
             verticalOffset: params.verticalOffset,
           })
+          useRoadStore.getState().setLastError(null)
           clearDraft()
         } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err)
+          useRoadStore.getState().setLastError(msg)
           console.error('Failed to create arc road:', err)
         }
       }
     } else if (tool === 'road.clothoid') {
       const cp = clothoidParamsRef.current
       if (currentPoints.length === 0) {
-        addDraftPoint(rawPoint)
+        addDraftPoint(resolvedPoint, endpointCandidates)
       } else {
         const start = currentPoints[0]
         if (!start) return
-        const de = rawPoint.easting - start.easting
-        const dn = rawPoint.northing - start.northing
-        const headingRad = Math.atan2(dn, de)
-        const len = Math.hypot(de, dn) > 1.0 ? Math.hypot(de, dn) : cp.length
+        const de = resolvedPoint.easting - start.easting
+        const dn = resolvedPoint.northing - start.northing
+        const dist = Math.hypot(de, dn)
+        const headingRad = dist >= 1e-5 ? Math.atan2(dn, de) : (cp.startHeadingDeg * Math.PI) / 180
+        const len = cp.mode === 'interactive' ? (dist > 1e-3 ? dist : cp.length) : cp.length
         const name = params.name.trim() || `Clothoid ${new Date().toLocaleTimeString()}`
         try {
           await createClothoidRoad(client, {
@@ -210,13 +258,16 @@ export function useAuthoringInteraction(deps: AuthoringInteractionDeps) {
             stationInterval: params.stationInterval,
             verticalOffset: params.verticalOffset,
           })
+          useRoadStore.getState().setLastError(null)
           clearDraft()
         } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err)
+          useRoadStore.getState().setLastError(msg)
           console.error('Failed to create clothoid road:', err)
         }
       }
     } else if (tool === 'road.polyline') {
-      addDraftPoint(rawPoint)
+      addDraftPoint(resolvedPoint, endpointCandidates)
     }
   }, [deps, addDraftPoint, clearDraft])
 
@@ -227,7 +278,11 @@ export function useAuthoringInteraction(deps: AuthoringInteractionDeps) {
     const points = draftPointsRef.current
     const params = roadParamsRef.current
 
-    if (!client || points.length < 2) return
+    if (!client) {
+      useRoadStore.getState().setLastError('Engine is not connected')
+      return
+    }
+    if (points.length < 2) return
 
     if (tool === 'road.polyline') {
       const name = params.name.trim() || `Polyline Road ${new Date().toLocaleTimeString()}`
@@ -242,8 +297,11 @@ export function useAuthoringInteraction(deps: AuthoringInteractionDeps) {
           [],
           params.maxCurvature ?? undefined,
         )
+        useRoadStore.getState().setLastError(null)
         clearDraft()
       } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        useRoadStore.getState().setLastError(msg)
         console.error('Failed to commit polyline road:', err)
       }
     }
@@ -257,3 +315,4 @@ export function useAuthoringInteraction(deps: AuthoringInteractionDeps) {
     cancelDraft: clearDraft,
   }
 }
+

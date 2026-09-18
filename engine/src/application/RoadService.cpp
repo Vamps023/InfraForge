@@ -213,21 +213,15 @@ RoadSummary RoadService::createStraightRoad(
     ProtectedAnchor a0; a0.position = input.start; a0.station = 0.0; a0.kind = AnchorKind::Endpoint; anchors.push_back(a0);
     ProtectedAnchor a1; a1.position = input.end; a1.station = alignmentRes->totalLength(); a1.kind = AnchorKind::Endpoint; anchors.push_back(a1);
 
-    auto record = buildNewRoadRecord(input.name, *alignmentRes, polyline, anchors,
-        {}, SourceProvider::Authored, 1.0, std::nullopt, {});
-    record = store_.insertRoad(record);
-
-    if (input.stickToTerrain && sampleHeight) {
-        ConformRoadToTerrainInput conform;
-        conform.roadId = uuidTextFromRoadId(record.id);
-        conform.stationInterval = input.stationInterval;
-        conform.verticalOffset = input.verticalOffset;
-        (void)conformToTerrain(conform, sampleHeight);
-        auto refreshed = findRoad(uuidTextFromRoadId(record.id));
-        if (refreshed.has_value()) {
-            record = *refreshed;
-        }
+    std::vector<ProfileBreakpoint> conformedElevation;
+    if (input.stickToTerrain) {
+        conformedElevation = sampleElevationAlongAlignment(
+            *alignmentRes, input.stationInterval, input.verticalOffset, sampleHeight);
     }
+
+    auto record = buildNewRoadRecord(input.name, *alignmentRes, polyline, anchors,
+        {}, SourceProvider::Authored, 1.0, std::nullopt, {}, conformedElevation);
+    record = store_.insertRoad(record);
 
     const auto bounds = computeRoadBounds(record);
     std::vector<ChunkCoord> affectedChunks;
@@ -273,21 +267,15 @@ RoadSummary RoadService::createArcRoad(
     ProtectedAnchor a0; a0.position = input.p0; a0.station = 0.0; a0.kind = AnchorKind::Endpoint; anchors.push_back(a0);
     ProtectedAnchor a2; a2.position = input.p2; a2.station = alignmentRes->totalLength(); a2.kind = AnchorKind::Endpoint; anchors.push_back(a2);
 
-    auto record = buildNewRoadRecord(input.name, *alignmentRes, polyline, anchors,
-        {}, SourceProvider::Authored, 1.0, std::nullopt, {});
-    record = store_.insertRoad(record);
-
-    if (input.stickToTerrain && sampleHeight) {
-        ConformRoadToTerrainInput conform;
-        conform.roadId = uuidTextFromRoadId(record.id);
-        conform.stationInterval = input.stationInterval;
-        conform.verticalOffset = input.verticalOffset;
-        (void)conformToTerrain(conform, sampleHeight);
-        auto refreshed = findRoad(uuidTextFromRoadId(record.id));
-        if (refreshed.has_value()) {
-            record = *refreshed;
-        }
+    std::vector<ProfileBreakpoint> conformedElevation;
+    if (input.stickToTerrain) {
+        conformedElevation = sampleElevationAlongAlignment(
+            *alignmentRes, input.stationInterval, input.verticalOffset, sampleHeight);
     }
+
+    auto record = buildNewRoadRecord(input.name, *alignmentRes, polyline, anchors,
+        {}, SourceProvider::Authored, 1.0, std::nullopt, {}, conformedElevation);
+    record = store_.insertRoad(record);
 
     const auto bounds = computeRoadBounds(record);
     std::vector<ChunkCoord> affectedChunks;
@@ -334,21 +322,15 @@ RoadSummary RoadService::createClothoidRoad(
     ProtectedAnchor a0; a0.position = input.start; a0.station = 0.0; a0.kind = AnchorKind::Endpoint; anchors.push_back(a0);
     ProtectedAnchor a1; a1.position = endSample.position; a1.station = alignmentRes->totalLength(); a1.kind = AnchorKind::Endpoint; anchors.push_back(a1);
 
-    auto record = buildNewRoadRecord(input.name, *alignmentRes, polyline, anchors,
-        {}, SourceProvider::Authored, 1.0, std::nullopt, {});
-    record = store_.insertRoad(record);
-
-    if (input.stickToTerrain && sampleHeight) {
-        ConformRoadToTerrainInput conform;
-        conform.roadId = uuidTextFromRoadId(record.id);
-        conform.stationInterval = input.stationInterval;
-        conform.verticalOffset = input.verticalOffset;
-        (void)conformToTerrain(conform, sampleHeight);
-        auto refreshed = findRoad(uuidTextFromRoadId(record.id));
-        if (refreshed.has_value()) {
-            record = *refreshed;
-        }
+    std::vector<ProfileBreakpoint> conformedElevation;
+    if (input.stickToTerrain) {
+        conformedElevation = sampleElevationAlongAlignment(
+            *alignmentRes, input.stationInterval, input.verticalOffset, sampleHeight);
     }
+
+    auto record = buildNewRoadRecord(input.name, *alignmentRes, polyline, anchors,
+        {}, SourceProvider::Authored, 1.0, std::nullopt, {}, conformedElevation);
+    record = store_.insertRoad(record);
 
     const auto bounds = computeRoadBounds(record);
     std::vector<ChunkCoord> affectedChunks;
@@ -867,13 +849,16 @@ RoadSummary RoadService::updateWidth(const UpdateWidthInput& input) {
     return toSummary(record);
 }
 
-RoadSummary RoadService::conformToTerrain(
-    const ConformRoadToTerrainInput& input, const TerrainHeightSampler& sampleHeight) {
-    if (!std::isfinite(input.stationInterval) || input.stationInterval <= 0.0) {
+std::vector<ProfileBreakpoint> RoadService::sampleElevationAlongAlignment(
+    const ReferenceAlignment& alignment,
+    double stationInterval,
+    double verticalOffset,
+    const TerrainHeightSampler& sampleHeight) const {
+    if (!std::isfinite(stationInterval) || stationInterval <= 0.0) {
         throw CommandFailure{CommandFailureCode::InvalidArgument,
             "terrain conformance station interval must be finite and positive"};
     }
-    if (!std::isfinite(input.verticalOffset)) {
+    if (!std::isfinite(verticalOffset)) {
         throw CommandFailure{CommandFailureCode::InvalidArgument,
             "terrain conformance vertical offset must be finite"};
     }
@@ -881,13 +866,6 @@ RoadSummary RoadService::conformToTerrain(
         throw CommandFailure{CommandFailureCode::InvalidArgument,
             "terrain conformance requires a height sampler"};
     }
-
-    const auto found = findRoad(input.roadId);
-    if (!found.has_value()) {
-        throw CommandFailure{CommandFailureCode::NotFound, "road not found: " + input.roadId};
-    }
-    const auto road = rebuildRoad(*found);
-    const auto& alignment = road.alignment();
     if (alignment.isEmpty() || !std::isfinite(alignment.totalLength()) || alignment.totalLength() <= 0.0) {
         throw CommandFailure{CommandFailureCode::InvalidArgument,
             "road alignment is empty or degenerate"};
@@ -895,7 +873,7 @@ RoadSummary RoadService::conformToTerrain(
 
     // Safely estimate sample count to prevent pathological allocations, integer overflow,
     // or executor blocking before station generation or sampling begins.
-    const double roughIntervalSamples = alignment.totalLength() / input.stationInterval;
+    const double roughIntervalSamples = alignment.totalLength() / stationInterval;
     if (!std::isfinite(roughIntervalSamples) || roughIntervalSamples < 0.0) {
         throw CommandFailure{CommandFailureCode::InvalidArgument,
             "invalid terrain conformance sampling interval"};
@@ -924,9 +902,9 @@ RoadSummary RoadService::conformToTerrain(
 
         if (segLen > 1e-4) {
             const double maxSpan = segLen - 1e-4;
-            const auto count = static_cast<std::size_t>(std::floor(maxSpan / input.stationInterval));
+            const auto count = static_cast<std::size_t>(std::floor(maxSpan / stationInterval));
             for (std::size_t i = 1; i <= count; ++i) {
-                const double s = segStart + static_cast<double>(i) * input.stationInterval;
+                const double s = segStart + static_cast<double>(i) * stationInterval;
                 if (s < segEnd - 1e-4) {
                     uniqueStations.insert(s);
                 }
@@ -961,10 +939,8 @@ RoadSummary RoadService::conformToTerrain(
                 + std::to_string(kMaximumTerrainConformanceSamples)};
     }
 
-    UpdateElevationInput elevation;
-    elevation.roadId = input.roadId;
-    elevation.stations.reserve(stations.size());
-    elevation.elevations.reserve(stations.size());
+    std::vector<ProfileBreakpoint> breakpoints;
+    breakpoints.reserve(stations.size());
     for (const double station : stations) {
         const auto sample = alignment.evaluate(station);
         auto sampled = sampleHeight(sample.position);
@@ -973,14 +949,41 @@ RoadSummary RoadService::conformToTerrain(
                 "terrain conformance failed at station " + std::to_string(station)
                     + ": " + sampled.error()};
         }
-        const double conformedHeight = *sampled + input.verticalOffset;
+        const double conformedHeight = *sampled + verticalOffset;
         if (!std::isfinite(conformedHeight)) {
             throw CommandFailure{CommandFailureCode::InvalidArgument,
                 "terrain conformance produced a non-finite height at station "
                     + std::to_string(station)};
         }
-        elevation.stations.push_back(station);
-        elevation.elevations.push_back(conformedHeight);
+        breakpoints.push_back(ProfileBreakpoint{station, conformedHeight});
+    }
+
+    const auto profileRes = buildElevationProfile(breakpoints);
+    if (!profileRes.has_value()) {
+        throw CommandFailure{CommandFailureCode::InvalidArgument,
+            "failed to build valid elevation profile from terrain samples: " + profileRes.error().message};
+    }
+
+    return breakpoints;
+}
+
+RoadSummary RoadService::conformToTerrain(
+    const ConformRoadToTerrainInput& input, const TerrainHeightSampler& sampleHeight) {
+    const auto found = findRoad(input.roadId);
+    if (!found.has_value()) {
+        throw CommandFailure{CommandFailureCode::NotFound, "road not found: " + input.roadId};
+    }
+    const auto road = rebuildRoad(*found);
+    const auto breakpoints = sampleElevationAlongAlignment(
+        road.alignment(), input.stationInterval, input.verticalOffset, sampleHeight);
+
+    UpdateElevationInput elevation;
+    elevation.roadId = input.roadId;
+    elevation.stations.reserve(breakpoints.size());
+    elevation.elevations.reserve(breakpoints.size());
+    for (const auto& bp : breakpoints) {
+        elevation.stations.push_back(bp.station);
+        elevation.elevations.push_back(bp.value);
     }
     return updateElevation(elevation);
 }
@@ -1629,7 +1632,8 @@ RoadRecord RoadService::buildNewRoadRecord(
     SourceProvider provider,
     double positionTolerance,
     std::optional<double> maxCurvature,
-    const std::set<std::size_t>& anchorBoundarySegments) const {
+    const std::set<std::size_t>& anchorBoundarySegments,
+    const std::vector<ProfileBreakpoint>& initialElevationProfile) const {
 
     // Blocker 1: this is the ONLY place that mints a new RoadId.
     Road::BuildInput roadInput;
@@ -1645,19 +1649,28 @@ RoadRecord RoadService::buildNewRoadRecord(
         sv.y = polyline[i].position.northing;
         if (i < sourceElevations.size() && sourceElevations[i].has_value()) {
             sv.z = sourceElevations[i];
+        } else if (!initialElevationProfile.empty()) {
+            // Assign conformed height if available at matching station
+            const double s = polyline[i].sourceStation;
+            for (const auto& bp : initialElevationProfile) {
+                if (std::abs(bp.station - s) < 1e-4) {
+                    sv.z = bp.value;
+                    break;
+                }
+            }
         }
         roadInput.source.geometry.vertices.push_back(sv);
     }
     roadInput.source.provenance.provider = provider;
     roadInput.source.protectedAnchors = anchors;
 
-    // Blocker 16/20: if source elevations were supplied, build an initial
-    // elevation profile from them so the road starts with meaningful
-    // vertical geometry rather than discarding the data. Source elevations
-    // are at SOURCE polyline stations; the elevation profile uses ALIGNMENT
-    // stations. Scale source stations to the alignment's station range so
-    // breakpoints are correctly positioned on the fitted alignment.
-    if (!sourceElevations.empty()) {
+    // Conformed terrain profile takes precedence if supplied.
+    if (!initialElevationProfile.empty()) {
+        auto elevProfile = buildElevationProfile(initialElevationProfile);
+        if (elevProfile.has_value()) {
+            roadInput.elevation = std::move(*elevProfile);
+        }
+    } else if (!sourceElevations.empty()) {
         std::vector<ProfileBreakpoint> elevBreakpoints;
         double sourceTotalLength = 0.0;
         for (std::size_t i = 1; i < polyline.size(); ++i) {

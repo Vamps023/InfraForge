@@ -5,11 +5,12 @@ import {
   type SnappingConfig,
   type DraftMetrics,
   DEFAULT_SNAPPING_CONFIG,
-  resolveSnapping,
+  resolveAuthoringPoint,
   calculateDraftMetrics,
 } from './snapService'
 
 export interface ClothoidToolParams {
+  mode: 'interactive' | 'fixed-length'
   startHeadingDeg: number
   startCurvature: number
   endCurvature: number
@@ -38,7 +39,7 @@ interface AuthoringDraftState {
   metrics: DraftMetrics
 
   setTool: (tool: AuthoringToolId) => void
-  addDraftPoint: (point: Point2D) => void
+  addDraftPoint: (point: Point2D, endpointCandidates?: Point2D[]) => void
   setHoverPoint: (point: Point2D | null, existingEndpoints?: Point2D[]) => void
   removeLastDraftPoint: () => void
   clearDraft: () => void
@@ -48,6 +49,7 @@ interface AuthoringDraftState {
 }
 
 const initialClothoidParams: ClothoidToolParams = {
+  mode: 'interactive',
   startHeadingDeg: 0,
   startCurvature: 0.0,
   endCurvature: 0.005,
@@ -94,11 +96,14 @@ export const useAuthoringDraftStore = create<AuthoringDraftState>((set, get) => 
     })
   },
 
-  addDraftPoint: (point) => {
-    const { draftPoints, activeTool, snappingConfig } = get()
-    // When adding point, if snapping is active, resolve with previous point as origin
+  addDraftPoint: (point, endpointCandidates = []) => {
+    const { draftPoints, snappingConfig } = get()
     const prev = draftPoints.length > 0 ? draftPoints[draftPoints.length - 1] : null
-    const res = resolveSnapping(point, { origin: prev, config: snappingConfig })
+    const res = resolveAuthoringPoint(point, {
+      previousDraftPoint: prev,
+      endpointCandidates,
+      snappingConfig,
+    })
     const newPoints = [...draftPoints, res.point]
     const metrics = calculateDraftMetrics(newPoints, null)
 
@@ -115,11 +120,11 @@ export const useAuthoringDraftStore = create<AuthoringDraftState>((set, get) => 
     }
 
     const { draftPoints, snappingConfig } = get()
-    const origin = draftPoints.length > 0 ? draftPoints[draftPoints.length - 1] : null
-    const res = resolveSnapping(rawPoint, {
-      origin,
-      endpoints: existingEndpoints,
-      config: snappingConfig,
+    const prev = draftPoints.length > 0 ? draftPoints[draftPoints.length - 1] : null
+    const res = resolveAuthoringPoint(rawPoint, {
+      previousDraftPoint: prev,
+      endpointCandidates: existingEndpoints,
+      snappingConfig,
     })
 
     const metrics = calculateDraftMetrics(draftPoints, res.point)

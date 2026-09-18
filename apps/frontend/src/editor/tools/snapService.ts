@@ -1,3 +1,5 @@
+import type { RoadDetails } from '@infraforge/protocol'
+
 export interface Point2D {
   easting: number
   northing: number
@@ -9,7 +11,7 @@ export interface SnappingConfig {
   angleSnap: boolean
   angleStepDeg: number
   endpointSnap: boolean
-  snapRadiusMeters: number
+  snapRadius: number
 }
 
 export const DEFAULT_SNAPPING_CONFIG: SnappingConfig = {
@@ -18,7 +20,7 @@ export const DEFAULT_SNAPPING_CONFIG: SnappingConfig = {
   angleSnap: false,
   angleStepDeg: 15,
   endpointSnap: true,
-  snapRadiusMeters: 10,
+  snapRadius: 10,
 }
 
 export const GRID_STEPS = [0.5, 1, 2, 5, 10, 25, 50] as const
@@ -67,12 +69,12 @@ export function snapToAngle(
 export function snapToEndpoint(
   point: Point2D,
   endpoints: Point2D[],
-  radiusMeters: number,
+  radius: number,
 ): Point2D | null {
-  if (!endpoints.length || radiusMeters <= 0) return null
+  if (!endpoints.length || radius <= 0) return null
 
   let nearest: Point2D | null = null
-  let bestDistSq = radiusMeters * radiusMeters
+  let bestDistSq = radius * radius
 
   for (const ep of endpoints) {
     const de = ep.easting - point.easting
@@ -110,7 +112,7 @@ export function resolveSnapping(
 
   // 1. Endpoint snap
   if (config.endpointSnap && endpoints.length > 0) {
-    const ep = snapToEndpoint(rawPoint, endpoints, config.snapRadiusMeters)
+    const ep = snapToEndpoint(rawPoint, endpoints, config.snapRadius)
     if (ep) {
       return { point: ep, snappedTo: 'endpoint' }
     }
@@ -128,6 +130,53 @@ export function resolveSnapping(
   }
 
   return { point: rawPoint, snappedTo: 'none' }
+}
+
+export interface AuthoringPointResolutionOptions {
+  previousDraftPoint?: Point2D | null
+  endpointCandidates?: Point2D[]
+  snappingConfig: SnappingConfig
+}
+
+/**
+ * Canonical draft-point resolution path.
+ * Both hover preview and primary click / committed draft point MUST call
+ * this exact function so preview and commit coordinates are identical.
+ */
+export function resolveAuthoringPoint(
+  rawPoint: Point2D,
+  options: AuthoringPointResolutionOptions,
+): SnappingResolution {
+  return resolveSnapping(rawPoint, {
+    origin: options.previousDraftPoint,
+    endpoints: options.endpointCandidates,
+    config: options.snappingConfig,
+  })
+}
+
+/** Extract candidate endpoints from inspected road details and current draft */
+export function extractEndpointCandidates(
+  details?: RoadDetails | null,
+  draftPoints: Point2D[] = [],
+): Point2D[] {
+  const candidates: Point2D[] = []
+  if (details?.controlPoints && details.controlPoints.length > 0) {
+    const first = details.controlPoints[0]
+    const last = details.controlPoints[details.controlPoints.length - 1]
+    if (first) {
+      candidates.push({ easting: first.easting, northing: first.northing })
+    }
+    if (last && (last.easting !== first?.easting || last.northing !== first?.northing)) {
+      candidates.push({ easting: last.easting, northing: last.northing })
+    }
+  }
+  if (draftPoints.length >= 2) {
+    const firstDraft = draftPoints[0]
+    if (firstDraft) {
+      candidates.push(firstDraft)
+    }
+  }
+  return candidates
 }
 
 export interface DraftMetrics {

@@ -155,3 +155,32 @@
   border-left: 1px solid var(--if-border-default);
   padding-left: var(--if-space-3);
 }
+
+.authoring-error-banner {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--if-status-error-bg, rgba(239, 68, 68, 0.15));
+  color: var(--if-status-error-text, #ef4444);
+  border: 1px solid var(--if-status-error-border, rgba(239, 68, 68, 0.3));
+  padding: 2px 8px;
+  border-radius: var(--if-radius-sm);
+  font-size: var(--if-font-metadata);
+}
+
+.authoring-error-dismiss {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  padding: 0;
+  opacity: 0.8;
+}
+
+.authoring-error-dismiss:hover {
+  opacity: 1;
+}
+

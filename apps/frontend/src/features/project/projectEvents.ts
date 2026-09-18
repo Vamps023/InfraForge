@@ -5,6 +5,7 @@ import { useTerrainStore } from '../terrain/terrainStore'
 import { fetchTerrainScene, refreshTerrainDatasets, refreshTerrainJobs } from '../terrain/terrainApi'
 import { useRoadStore } from '../road/roadStore'
 import { useRoadToolStore } from '../road/roadToolStore'
+import { useAuthoringDraftStore } from '../../editor/tools/authoringDraftStore'
 import { listRoads, fetchRoadScene } from '../road/roadApi'
 import type { EngineClient } from '../../lib/engineSession'
 import type { EventEnvelope } from '@infraforge/protocol'
@@ -23,6 +24,8 @@ export function applyProjectEvent(client: EngineClient, event: EventEnvelope) {
       // project must not survive into the new one. Clear selection here so
       // the outliner/inspector resolve against the new canonical world.
       useSelectionStore.getState().clear()
+      useAuthoringDraftStore.getState().clearDraft()
+      useAuthoringDraftStore.getState().setTool('select')
       // BLOCKER 3: refresh terrain projection state for the newly opened
       // project. Datasets, jobs, and the renderer scene must be fetched
       // immediately so terrain renders after reopen without requiring a
@@ -62,6 +65,8 @@ export function applyProjectEvent(client: EngineClient, event: EventEnvelope) {
       // Project closed: canonical selections are no longer valid. Clear
       // selection so stale IDs do not resolve against a non-existent world.
       useSelectionStore.getState().clear()
+      useAuthoringDraftStore.getState().clearDraft()
+      useAuthoringDraftStore.getState().setTool('select')
       // Clear terrain projection state: datasets belong to the closed project.
       useTerrainStore.getState().reset()
       // Clear road projection state: roads belong to the closed project.

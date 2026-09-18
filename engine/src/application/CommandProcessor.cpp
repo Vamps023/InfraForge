@@ -1743,20 +1743,8 @@ void CommandProcessor::handleCreateStraightRoad(const std::string& connectionId,
     input.verticalOffset = command.vertical_offset();
 
     TerrainHeightSampler sampler = nullptr;
-    if (command.stick_to_terrain() && terrainService_) {
-        sampler = [this, datasetId = command.dataset_id()](const domain::road::AlignmentPoint& point)
-            -> std::expected<double, std::string> {
-            const auto sampled = terrainService_->sample(datasetId, point.easting, point.northing);
-            switch (sampled.sample.status) {
-            case domain::terrain::TerrainSampleStatus::Height:
-                return sampled.sample.height;
-            case domain::terrain::TerrainSampleStatus::NoData:
-                return std::unexpected("terrain sample is NoData");
-            case domain::terrain::TerrainSampleStatus::OutsideCoverage:
-                return std::unexpected("road lies outside terrain coverage");
-            }
-            return std::unexpected("terrain sample status is unsupported");
-        };
+    if (command.stick_to_terrain()) {
+        sampler = makeTerrainHeightSampler(command.dataset_id());
     }
 
     auto summary = roadService_->createStraightRoad(input, sampler);
@@ -1780,20 +1768,8 @@ void CommandProcessor::handleCreateArcRoad(const std::string& connectionId, cons
     input.verticalOffset = command.vertical_offset();
 
     TerrainHeightSampler sampler = nullptr;
-    if (command.stick_to_terrain() && terrainService_) {
-        sampler = [this, datasetId = command.dataset_id()](const domain::road::AlignmentPoint& point)
-            -> std::expected<double, std::string> {
-            const auto sampled = terrainService_->sample(datasetId, point.easting, point.northing);
-            switch (sampled.sample.status) {
-            case domain::terrain::TerrainSampleStatus::Height:
-                return sampled.sample.height;
-            case domain::terrain::TerrainSampleStatus::NoData:
-                return std::unexpected("terrain sample is NoData");
-            case domain::terrain::TerrainSampleStatus::OutsideCoverage:
-                return std::unexpected("road lies outside terrain coverage");
-            }
-            return std::unexpected("terrain sample status is unsupported");
-        };
+    if (command.stick_to_terrain()) {
+        sampler = makeTerrainHeightSampler(command.dataset_id());
     }
 
     auto summary = roadService_->createArcRoad(input, sampler);
@@ -1819,20 +1795,8 @@ void CommandProcessor::handleCreateClothoidRoad(const std::string& connectionId,
     input.verticalOffset = command.vertical_offset();
 
     TerrainHeightSampler sampler = nullptr;
-    if (command.stick_to_terrain() && terrainService_) {
-        sampler = [this, datasetId = command.dataset_id()](const domain::road::AlignmentPoint& point)
-            -> std::expected<double, std::string> {
-            const auto sampled = terrainService_->sample(datasetId, point.easting, point.northing);
-            switch (sampled.sample.status) {
-            case domain::terrain::TerrainSampleStatus::Height:
-                return sampled.sample.height;
-            case domain::terrain::TerrainSampleStatus::NoData:
-                return std::unexpected("terrain sample is NoData");
-            case domain::terrain::TerrainSampleStatus::OutsideCoverage:
-                return std::unexpected("road lies outside terrain coverage");
-            }
-            return std::unexpected("terrain sample status is unsupported");
-        };
+    if (command.stick_to_terrain()) {
+        sampler = makeTerrainHeightSampler(command.dataset_id());
     }
 
     auto summary = roadService_->createClothoidRoad(input, sampler);
@@ -2003,6 +1967,25 @@ void CommandProcessor::handleUpdateRoadWidth(const std::string& connectionId, co
     sink_.sendToConnection(connectionId, response);
 }
 
+    application::TerrainHeightSampler CommandProcessor::makeTerrainHeightSampler(const std::string& datasetId) {
+    if (!terrainService_) {
+        return nullptr;
+    }
+    return [this, datasetId](const domain::road::AlignmentPoint& point)
+        -> std::expected<double, std::string> {
+        const auto sampled = terrainService_->sample(datasetId, point.easting, point.northing);
+        switch (sampled.sample.status) {
+        case domain::terrain::TerrainSampleStatus::Height:
+            return sampled.sample.height;
+        case domain::terrain::TerrainSampleStatus::NoData:
+            return std::unexpected("terrain sample is NoData");
+        case domain::terrain::TerrainSampleStatus::OutsideCoverage:
+            return std::unexpected("road lies outside terrain coverage");
+        }
+        return std::unexpected("terrain sample status is unsupported");
+    };
+}
+
 void CommandProcessor::handleConformRoadToTerrain(
     const std::string& connectionId, const ProtocolFrame& frame) {
     const auto& command = frame.command().conform_road_to_terrain();
@@ -2011,21 +1994,8 @@ void CommandProcessor::handleConformRoadToTerrain(
     input.stationInterval = command.station_interval();
     input.verticalOffset = command.vertical_offset();
 
-    const auto summary = roadService_->conformToTerrain(input,
-        [this, &command](const domain::road::AlignmentPoint& point)
-            -> std::expected<double, std::string> {
-            const auto sampled = terrainService_->sample(
-                command.dataset_id(), point.easting, point.northing);
-            switch (sampled.sample.status) {
-            case domain::terrain::TerrainSampleStatus::Height:
-                return sampled.sample.height;
-            case domain::terrain::TerrainSampleStatus::NoData:
-                return std::unexpected("terrain sample is NoData");
-            case domain::terrain::TerrainSampleStatus::OutsideCoverage:
-                return std::unexpected("road lies outside terrain coverage");
-            }
-            return std::unexpected("terrain sample status is unsupported");
-        });
+    const auto summary = roadService_->conformToTerrain(
+        input, makeTerrainHeightSampler(command.dataset_id()));
 
     ProtocolFrame response;
     response.set_request_id(frame.request_id());

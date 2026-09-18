@@ -1,6 +1,7 @@
 import { useAuthoringDraftStore } from '../tools/authoringDraftStore'
 import { AUTHORING_TOOLS } from '../tools/authoringToolTypes'
 import { GRID_STEPS, ANGLE_STEPS } from '../tools/snapService'
+import { useRoadStore } from '../../features/road/roadStore'
 import { Check, X } from 'lucide-react'
 
 export interface ToolOptionsPanelProps {
@@ -19,6 +20,8 @@ export function ToolOptionsPanel({ onCommitPolyline }: ToolOptionsPanelProps) {
   const updateClothoidParams = useAuthoringDraftStore((state) => state.updateClothoidParams)
   const roadParams = useAuthoringDraftStore((state) => state.roadParams)
   const updateRoadParams = useAuthoringDraftStore((state) => state.updateRoadParams)
+  const lastError = useRoadStore((state) => state.lastError)
+  const setLastError = useRoadStore((state) => state.setLastError)
 
   const def = AUTHORING_TOOLS[activeTool]
 
@@ -62,7 +65,7 @@ export function ToolOptionsPanel({ onCommitPolyline }: ToolOptionsPanelProps) {
           >
             {GRID_STEPS.map((s) => (
               <option key={s} value={s}>
-                {s}m
+                {s}
               </option>
             ))}
           </select>
@@ -104,16 +107,16 @@ export function ToolOptionsPanel({ onCommitPolyline }: ToolOptionsPanelProps) {
       {metrics.totalLength > 0 && (
         <div className="authoring-metrics-group">
           <div className="authoring-metric-item">
-            Len:<span>{metrics.totalLength.toFixed(1)}m</span>
+            Len:<span>{metrics.totalLength.toFixed(1)}</span>
           </div>
           <div className="authoring-metric-item">
             Heading:<span>{metrics.headingDeg.toFixed(1)}°</span>
           </div>
           <div className="authoring-metric-item">
-            dE:<span>{metrics.deltaE > 0 ? `+${metrics.deltaE.toFixed(1)}` : metrics.deltaE.toFixed(1)}m</span>
+            dE:<span>{metrics.deltaE > 0 ? `+${metrics.deltaE.toFixed(1)}` : metrics.deltaE.toFixed(1)}</span>
           </div>
           <div className="authoring-metric-item">
-            dN:<span>{metrics.deltaN > 0 ? `+${metrics.deltaN.toFixed(1)}` : metrics.deltaN.toFixed(1)}m</span>
+            dN:<span>{metrics.deltaN > 0 ? `+${metrics.deltaN.toFixed(1)}` : metrics.deltaN.toFixed(1)}</span>
           </div>
         </div>
       )}
@@ -121,8 +124,19 @@ export function ToolOptionsPanel({ onCommitPolyline }: ToolOptionsPanelProps) {
       {/* Clothoid parameters */}
       {activeTool === 'road.clothoid' && (
         <div className="authoring-snapping-group">
+          <label className="authoring-checkbox-label" title="Clothoid definition mode">
+            Mode:
+            <select
+              className="authoring-compact-select"
+              value={clothoidParams.mode}
+              onChange={(e) => updateClothoidParams({ mode: e.target.value as 'interactive' | 'fixed-length' })}
+            >
+              <option value="interactive">Interactive</option>
+              <option value="fixed-length">Fixed Length</option>
+            </select>
+          </label>
           <label className="authoring-checkbox-label" title="Clothoid transition length">
-            L (m):
+            L:
             <input
               type="number"
               className="authoring-compact-select"
@@ -158,6 +172,21 @@ export function ToolOptionsPanel({ onCommitPolyline }: ToolOptionsPanelProps) {
           Conform Terrain
         </label>
       </div>
+
+      {/* Error banner */}
+      {lastError && (
+        <div className="authoring-error-banner" role="alert">
+          <span>{lastError}</span>
+          <button
+            type="button"
+            className="authoring-error-dismiss"
+            onClick={() => setLastError(null)}
+            title="Dismiss error"
+          >
+            <X size={12} />
+          </button>
+        </div>
+      )}
 
       {/* Action buttons */}
       <div className="authoring-action-buttons">

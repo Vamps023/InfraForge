@@ -67,7 +67,7 @@ describe('snapService', () => {
         gridSnap: true,
         gridStep: 10,
         endpointSnap: true,
-        snapRadiusMeters: 15,
+        snapRadius: 15,
       }
       const endpoints = [{ easting: 103, northing: 103 }]
       const raw = { easting: 102, northing: 101 }
@@ -87,6 +87,38 @@ describe('snapService', () => {
       const res = resolveSnapping(raw, { endpoints: [], config })
       expect(res.snappedTo).toBe('grid')
       expect(res.point).toEqual({ easting: 10, northing: 15 })
+    })
+  })
+
+  describe('resolveAuthoringPoint', () => {
+    it('guarantees hover preview and commit receive strictly identical coordinates', () => {
+      const config = {
+        ...DEFAULT_SNAPPING_CONFIG,
+        gridSnap: true,
+        gridStep: 5,
+        endpointSnap: true,
+        snapRadius: 10,
+      }
+      const endpointCandidates = [{ easting: 100, northing: 100 }]
+      const rawPoint = { easting: 101.4, northing: 99.2 }
+
+      // 1. Live preview evaluation
+      const hoverRes = resolveSnapping(rawPoint, {
+        origin: null,
+        endpoints: endpointCandidates,
+        config,
+      })
+
+      // 2. Primary click commit evaluation
+      const commitRes = resolveSnapping(rawPoint, {
+        origin: null,
+        endpoints: endpointCandidates,
+        config,
+      })
+
+      expect(commitRes.point).toEqual(hoverRes.point)
+      expect(commitRes.point).toEqual({ easting: 100, northing: 100 })
+      expect(commitRes.snappedTo).toBe('endpoint')
     })
   })
 

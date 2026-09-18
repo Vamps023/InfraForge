@@ -26,19 +26,20 @@ This document audits and classifies every authoring tool from the **OpenGeoStudi
 
 | Tool ID | Donor Name | Classification | Donor Files & Functions | Target InfraForge Subsystem |
 | :--- | :--- | :--- | :--- | :--- |
-| `select` | Select | **Partially implemented** | `src/pages/EditorPage.tsx`<br>`src/editor/tooling.ts` | `apps/frontend/src/editor/selection/`<br>`apps/frontend/src/editor/tools/` |
-| `draw-straight` | Insert Segment | **Ready to port (Milestone B / First PR)** | `src/pages/EditorPage.tsx`<br>`src/engine/xyFunctions.ts` | `engine/domain/road/AlignmentPrimitives.hpp`<br>`engine/application/RoadService.cpp`<br>`apps/frontend/src/features/road/` |
-| `draw-arc` | Insert Circle Arc | **Ready to port (Milestone B / First PR)** | `src/engine/arcFitting.ts` (`fitArcThroughPoints`)<br>`src/pages/EditorPage.tsx` | `engine/domain/road/AlignmentPrimitives.hpp`<br>`engine/application/RoadService.cpp`<br>`apps/frontend/src/features/road/` |
-| `draw-clothoid` | Insert Clothoid Arc | **Ready to port (Milestone B / First PR)** | `src/engine/clothoid.ts`<br>`src/pages/EditorPage.tsx` | `engine/domain/road/AlignmentPrimitives.hpp`<br>`engine/application/RoadService.cpp`<br>`apps/frontend/src/features/road/` |
-| `draw-polyline` | Insert Polyline | **Partially implemented (Milestone B / First PR)** | `src/pages/EditorPage.tsx`<br>`src/editor/DraftPointsToolbar.tsx` | `engine/application/RoadService.cpp` (`createRoad`)<br>`apps/frontend/src/features/road/roadToolStore.ts` |
-| `draw-bezier` | Insert Bezier | **Ready to port (Milestone E)** | `src/engine/geometry.ts`<br>`src/pages/EditorPage.tsx` | `engine/domain/road/AlignmentFitter.cpp`<br>`apps/frontend/src/features/road/` |
-| `draw-spline` | Insert ClothoidSpline | **Ready to port (Milestone E)** | `src/engine/clothoidSpline.ts`<br>`src/pages/EditorPage.tsx` | `engine/domain/road/AlignmentFitter.cpp`<br>`apps/frontend/src/features/road/` |
-| `move` | Move End / Control | **Partially implemented (Milestone C)** | `src/pages/EditorPage.tsx`<br>`src/engine/roadGeometry.ts` | `engine/application/RoadService.cpp` (`moveControl`)<br>`apps/frontend/src/features/road/` |
-| `extend` | Extend | **Ready to port (Milestone C)** | `src/pages/EditorPage.tsx`<br>`src/engine/tracks.ts` | `engine/domain/road/Road.cpp`<br>`engine/application/RoadService.cpp` |
-| `split` | Split | **Ready to port (Milestone C)** | `src/engine/tracks.ts` (`splitTrack`)<br>`src/engine/elevation.ts` | `engine/domain/road/Road.cpp`<br>`engine/application/RoadService.cpp` |
-| `delete` | Delete | **Already implemented** | `src/pages/EditorPage.tsx` | `engine/application/RoadService.cpp` (`deleteRoad`)<br>`road.proto` (`DeleteRoadCommand`) |
-| `insert-intersection`| Insert Intersection | **Blocked by missing domain** | `src/engine/intersections.ts`<br>`src/pages/EditorPage.tsx` | `engine/domain/network/` (Future topology domain) |
-| `junction` | Junction | **Blocked by missing domain** | `src/engine/junctions.ts`<br>`src/pages/EditorPage.tsx` | `engine/domain/network/` (Future topology domain) |
+| `select` | Select | **Implemented (Milestone A/B)** | `src/pages/EditorPage.tsx`<br>`src/editor/tooling.ts` | `apps/frontend/src/editor/selection/`<br>`apps/frontend/src/editor/tools/` |
+| `draw-straight` | Insert Segment | **Implemented (Milestone B / First PR)** | `src/pages/EditorPage.tsx`<br>`src/engine/xyFunctions.ts` | `engine/domain/road/AlignmentPrimitives.hpp`<br>`engine/application/RoadService.cpp`<br>`apps/frontend/src/features/road/` |
+| `draw-arc` | Insert Circle Arc | **Implemented (Milestone B / First PR)** | `src/engine/arcFitting.ts` (`fitArcThroughPoints`)<br>`src/pages/EditorPage.tsx` | `engine/domain/road/AlignmentPrimitives.hpp`<br>`engine/application/RoadService.cpp`<br>`apps/frontend/src/features/road/` |
+| `draw-clothoid` | Insert Clothoid Arc | **Implemented (Milestone B / First PR)** | `src/engine/clothoid.ts`<br>`src/pages/EditorPage.tsx` | `engine/domain/road/AlignmentPrimitives.hpp`<br>`engine/application/RoadService.cpp`<br>`apps/frontend/src/features/road/` |
+| `draw-polyline` | Insert Polyline | **Implemented (Milestone B / First PR)** | `src/pages/EditorPage.tsx`<br>`src/editor/DraftPointsToolbar.tsx` | `engine/application/RoadService.cpp` (`createRoad`)<br>`apps/frontend/src/features/road/roadToolStore.ts` |
+| `draw-bezier` | Insert Bezier | **Planned (Milestone E)** | `src/engine/geometry.ts`<br>`src/pages/EditorPage.tsx` | `engine/domain/road/AlignmentFitter.cpp`<br>`apps/frontend/src/features/road/` |
+| `draw-spline` | Insert ClothoidSpline | **Planned (Milestone E)** | `src/engine/clothoidSpline.ts`<br>`src/pages/EditorPage.tsx` | `engine/domain/road/AlignmentFitter.cpp`<br>`apps/frontend/src/features/road/` |
+| `move` | Move End / Control | **Partial / Existing Backend** | `src/pages/EditorPage.tsx`<br>`src/engine/roadGeometry.ts` | `engine/application/RoadService.cpp` (`moveControl`)<br>`apps/frontend/src/features/road/` |
+| `insert-control` | Insert Control Point | **Partial / Existing Backend** | `src/pages/EditorPage.tsx` | `engine/application/RoadService.cpp` (`insertControl`)<br>`apps/frontend/src/features/road/` |
+| `extend` | Extend | **Planned (Milestone C)** | `src/pages/EditorPage.tsx`<br>`src/engine/tracks.ts` | `engine/domain/road/Road.cpp`<br>`engine/application/RoadService.cpp` |
+| `split` | Split | **Planned (Milestone C)** | `src/engine/tracks.ts` (`splitTrack`)<br>`src/engine/elevation.ts` | `engine/domain/road/Road.cpp`<br>`engine/application/RoadService.cpp` |
+| `delete` | Delete | **Implemented** | `src/pages/EditorPage.tsx` | `engine/application/RoadService.cpp` (`deleteRoad`)<br>`road.proto` (`DeleteRoadCommand`) |
+| `insert-intersection`| Insert Intersection | **Blocked by #8 (network topology domain)** | `src/engine/intersections.ts`<br>`src/pages/EditorPage.tsx` | `engine/domain/network/` (Future topology domain) |
+| `junction` | Junction | **Blocked by #8 (network topology domain)** | `src/engine/junctions.ts`<br>`src/pages/EditorPage.tsx` | `engine/domain/network/` (Future topology domain) |
 | `lane-begin` | Begin Lane | **Blocked by missing domain** | `src/lanes/LanesPanel.tsx` | `engine/domain/lane/` (Future lane domain) |
 | `lane-end` | End Lane | **Blocked by missing domain** | `src/lanes/LanesPanel.tsx` | `engine/domain/lane/` (Future lane domain) |
 | `lane-insert` | Insert Lane | **Blocked by missing domain** | `src/lanes/LanesPanel.tsx` | `engine/domain/lane/` (Future lane domain) |

@@ -4,6 +4,8 @@ package infraforge.protocol.v1;
 
 import "infraforge/protocol/v1/project.proto";
 
+// Current protocol version: 1.7 (added direct road primitive commands:
+// CreateStraightRoadCommand, CreateArcRoadCommand, CreateClothoidRoadCommand).
 message ProtocolVersion {
   uint32 major = 1;
   uint32 minor = 2;

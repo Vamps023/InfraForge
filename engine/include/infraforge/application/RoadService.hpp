@@ -366,7 +366,16 @@ private:
         domain::road::SourceProvider provider,
         double positionTolerance,
         std::optional<double> maxCurvature,
-        const std::set<std::size_t>& anchorBoundarySegments) const;
+        const std::set<std::size_t>& anchorBoundarySegments,
+        const std::vector<domain::road::ProfileBreakpoint>& initialElevationProfile = {}) const;
+
+    // Conforms an alignment to terrain by evaluating stations and sampling heights.
+    // Throws CommandFailure if sampling fails, station count exceeds limits, or sampler is missing.
+    [[nodiscard]] std::vector<domain::road::ProfileBreakpoint> sampleElevationAlongAlignment(
+        const domain::road::ReferenceAlignment& alignment,
+        double stationInterval,
+        double verticalOffset,
+        const TerrainHeightSampler& sampleHeight) const;
 
     // Refits an existing road from its source vertices with new parameters.
     // Preserves the existing RoadId, display name, elevation/superelevation

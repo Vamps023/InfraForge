@@ -184,6 +184,186 @@ RoadSummary RoadService::createRoad(const CreateRoadInput& input) {
     return toSummary(record);
 }
 
+RoadSummary RoadService::createStraightRoad(
+    const CreateStraightRoadInput& input, const TerrainHeightSampler& sampleHeight) {
+    if (input.name.empty()) {
+        throw CommandFailure{CommandFailureCode::InvalidArgument, "road name must not be empty"};
+    }
+    auto segmentRes = constructStraightSegment(input.start, input.end);
+    if (!segmentRes.has_value()) {
+        throw CommandFailure{CommandFailureCode::InvalidArgument,
+            "failed to construct straight segment: " + segmentRes.error().message};
+    }
+    std::vector<AlignmentSegment> segments;
+    segments.emplace_back(std::move(*segmentRes));
+    auto alignmentRes = ReferenceAlignment::build(std::move(segments));
+    if (!alignmentRes.has_value()) {
+        std::string msg = "failed to build straight alignment: ";
+        for (const auto& d : alignmentRes.error()) {
+            msg += d.message + "; ";
+        }
+        throw CommandFailure{CommandFailureCode::InvalidArgument, msg};
+    }
+
+    std::vector<ConditionedVertex> polyline;
+    ConditionedVertex v0; v0.position = input.start; v0.sourceStation = 0.0; polyline.push_back(v0);
+    ConditionedVertex v1; v1.position = input.end; v1.sourceStation = alignmentRes->totalLength(); polyline.push_back(v1);
+
+    std::vector<ProtectedAnchor> anchors;
+    ProtectedAnchor a0; a0.position = input.start; a0.station = 0.0; a0.kind = AnchorKind::Endpoint; anchors.push_back(a0);
+    ProtectedAnchor a1; a1.position = input.end; a1.station = alignmentRes->totalLength(); a1.kind = AnchorKind::Endpoint; anchors.push_back(a1);
+
+    auto record = buildNewRoadRecord(input.name, *alignmentRes, polyline, anchors,
+        {}, SourceProvider::Authored, 1.0, std::nullopt, {});
+    record = store_.insertRoad(record);
+
+    if (input.stickToTerrain && sampleHeight) {
+        ConformRoadToTerrainInput conform;
+        conform.roadId = uuidTextFromRoadId(record.id);
+        conform.stationInterval = input.stationInterval;
+        conform.verticalOffset = input.verticalOffset;
+        (void)conformToTerrain(conform, sampleHeight);
+        auto refreshed = findRoad(uuidTextFromRoadId(record.id));
+        if (refreshed.has_value()) {
+            record = *refreshed;
+        }
+    }
+
+    const auto bounds = computeRoadBounds(record);
+    std::vector<ChunkCoord> affectedChunks;
+    if (world_.isReady()) {
+        auto mutation = world_.insert(record.id, bounds, InvalidationMask::of(InvalidationClass::Road));
+        affectedChunks = mutation.dirtyChunks;
+    }
+    recordHistory(HistoryEntry{
+        .roadId = uuidTextFromRoadId(record.id), .before = std::nullopt, .after = record, .existedBefore = false});
+    eventSink_(RoadServiceEvent{
+        RoadServiceEvent::Kind::Created, uuidTextFromRoadId(record.id),
+        store_.current().revision, affectedChunks});
+    return toSummary(record);
+}
+
+RoadSummary RoadService::createArcRoad(
+    const CreateArcRoadInput& input, const TerrainHeightSampler& sampleHeight) {
+    if (input.name.empty()) {
+        throw CommandFailure{CommandFailureCode::InvalidArgument, "road name must not be empty"};
+    }
+    auto segmentRes = constructCircularArcThroughPoints(input.p0, input.p1, input.p2);
+    if (!segmentRes.has_value()) {
+        throw CommandFailure{CommandFailureCode::InvalidArgument,
+            "failed to construct circular arc: " + segmentRes.error().message};
+    }
+    std::vector<AlignmentSegment> segments;
+    segments.emplace_back(std::move(*segmentRes));
+    auto alignmentRes = ReferenceAlignment::build(std::move(segments));
+    if (!alignmentRes.has_value()) {
+        std::string msg = "failed to build arc alignment: ";
+        for (const auto& d : alignmentRes.error()) {
+            msg += d.message + "; ";
+        }
+        throw CommandFailure{CommandFailureCode::InvalidArgument, msg};
+    }
+
+    std::vector<ConditionedVertex> polyline;
+    ConditionedVertex v0; v0.position = input.p0; v0.sourceStation = 0.0; polyline.push_back(v0);
+    ConditionedVertex v1; v1.position = input.p1; v1.sourceStation = alignmentRes->totalLength() * 0.5; polyline.push_back(v1);
+    ConditionedVertex v2; v2.position = input.p2; v2.sourceStation = alignmentRes->totalLength(); polyline.push_back(v2);
+
+    std::vector<ProtectedAnchor> anchors;
+    ProtectedAnchor a0; a0.position = input.p0; a0.station = 0.0; a0.kind = AnchorKind::Endpoint; anchors.push_back(a0);
+    ProtectedAnchor a2; a2.position = input.p2; a2.station = alignmentRes->totalLength(); a2.kind = AnchorKind::Endpoint; anchors.push_back(a2);
+
+    auto record = buildNewRoadRecord(input.name, *alignmentRes, polyline, anchors,
+        {}, SourceProvider::Authored, 1.0, std::nullopt, {});
+    record = store_.insertRoad(record);
+
+    if (input.stickToTerrain && sampleHeight) {
+        ConformRoadToTerrainInput conform;
+        conform.roadId = uuidTextFromRoadId(record.id);
+        conform.stationInterval = input.stationInterval;
+        conform.verticalOffset = input.verticalOffset;
+        (void)conformToTerrain(conform, sampleHeight);
+        auto refreshed = findRoad(uuidTextFromRoadId(record.id));
+        if (refreshed.has_value()) {
+            record = *refreshed;
+        }
+    }
+
+    const auto bounds = computeRoadBounds(record);
+    std::vector<ChunkCoord> affectedChunks;
+    if (world_.isReady()) {
+        auto mutation = world_.insert(record.id, bounds, InvalidationMask::of(InvalidationClass::Road));
+        affectedChunks = mutation.dirtyChunks;
+    }
+    recordHistory(HistoryEntry{
+        .roadId = uuidTextFromRoadId(record.id), .before = std::nullopt, .after = record, .existedBefore = false});
+    eventSink_(RoadServiceEvent{
+        RoadServiceEvent::Kind::Created, uuidTextFromRoadId(record.id),
+        store_.current().revision, affectedChunks});
+    return toSummary(record);
+}
+
+RoadSummary RoadService::createClothoidRoad(
+    const CreateClothoidRoadInput& input, const TerrainHeightSampler& sampleHeight) {
+    if (input.name.empty()) {
+        throw CommandFailure{CommandFailureCode::InvalidArgument, "road name must not be empty"};
+    }
+    auto segmentRes = constructClothoidSegment(
+        input.start, input.startHeading, input.startCurvature, input.endCurvature, input.length);
+    if (!segmentRes.has_value()) {
+        throw CommandFailure{CommandFailureCode::InvalidArgument,
+            "failed to construct clothoid segment: " + segmentRes.error().message};
+    }
+    std::vector<AlignmentSegment> segments;
+    segments.emplace_back(std::move(*segmentRes));
+    auto alignmentRes = ReferenceAlignment::build(std::move(segments));
+    if (!alignmentRes.has_value()) {
+        std::string msg = "failed to build clothoid alignment: ";
+        for (const auto& d : alignmentRes.error()) {
+            msg += d.message + "; ";
+        }
+        throw CommandFailure{CommandFailureCode::InvalidArgument, msg};
+    }
+
+    const auto endSample = alignmentRes->evaluate(alignmentRes->totalLength());
+    std::vector<ConditionedVertex> polyline;
+    ConditionedVertex v0; v0.position = input.start; v0.sourceStation = 0.0; polyline.push_back(v0);
+    ConditionedVertex v1; v1.position = endSample.position; v1.sourceStation = alignmentRes->totalLength(); polyline.push_back(v1);
+
+    std::vector<ProtectedAnchor> anchors;
+    ProtectedAnchor a0; a0.position = input.start; a0.station = 0.0; a0.kind = AnchorKind::Endpoint; anchors.push_back(a0);
+    ProtectedAnchor a1; a1.position = endSample.position; a1.station = alignmentRes->totalLength(); a1.kind = AnchorKind::Endpoint; anchors.push_back(a1);
+
+    auto record = buildNewRoadRecord(input.name, *alignmentRes, polyline, anchors,
+        {}, SourceProvider::Authored, 1.0, std::nullopt, {});
+    record = store_.insertRoad(record);
+
+    if (input.stickToTerrain && sampleHeight) {
+        ConformRoadToTerrainInput conform;
+        conform.roadId = uuidTextFromRoadId(record.id);
+        conform.stationInterval = input.stationInterval;
+        conform.verticalOffset = input.verticalOffset;
+        (void)conformToTerrain(conform, sampleHeight);
+        auto refreshed = findRoad(uuidTextFromRoadId(record.id));
+        if (refreshed.has_value()) {
+            record = *refreshed;
+        }
+    }
+
+    const auto bounds = computeRoadBounds(record);
+    std::vector<ChunkCoord> affectedChunks;
+    if (world_.isReady()) {
+        auto mutation = world_.insert(record.id, bounds, InvalidationMask::of(InvalidationClass::Road));
+        affectedChunks = mutation.dirtyChunks;
+    }
+    recordHistory(HistoryEntry{
+        .roadId = uuidTextFromRoadId(record.id), .before = std::nullopt, .after = record, .existedBefore = false});
+    eventSink_(RoadServiceEvent{
+        RoadServiceEvent::Kind::Created, uuidTextFromRoadId(record.id),
+        store_.current().revision, affectedChunks});
+    return toSummary(record);
+}
+
 RoadSummary RoadService::deleteRoad(const std::string& roadId) {
     auto found = findRoad(roadId);
     if (!found.has_value()) {

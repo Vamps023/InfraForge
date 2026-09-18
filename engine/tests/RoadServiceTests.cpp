@@ -1047,4 +1047,86 @@ TEST_CASE_FIXTURE(RoadServiceTestFixture, "undo and redo restore exact unclamped
     CHECK(redoneDetails->widthBreakpoints.back().station == doctest::Approx(70.0));
 }
 
+
+
+TEST_CASE_FIXTURE(RoadServiceTestFixture, "createStraightRoad creates canonical line segment and persists") {
+    CreateStraightRoadInput input;
+    input.name = "Direct Straight 1";
+    input.start = AlignmentPoint{0.0, 0.0};
+    input.end = AlignmentPoint{120.0, 50.0};
+
+    const auto summary = roadService->createStraightRoad(input);
+    CHECK(summary.name == "Direct Straight 1");
+    CHECK(summary.length == doctest::Approx(130.0));
+    CHECK(events.size() == 1);
+    CHECK(events[0].kind == RoadServiceEvent::Kind::Created);
+
+    auto details = roadService->getRoad(summary.roadId);
+    REQUIRE(details.has_value());
+    CHECK(details->name == "Direct Straight 1");
+    CHECK(details->length == doctest::Approx(130.0));
+
+    // Reopen store to verify persistence
+    roadService.reset();
+    store.close();
+    (void)store.open(projectDirectory);
+    auto project = transforms.resolveProjectGeoreference(store.current().georeference);
+    world.resetForProject(project);
+    roadService.emplace(store, world, [](const RoadServiceEvent&) {});
+    roadService->onProjectOpened();
+
+    auto reopened = roadService->getRoad(summary.roadId);
+    REQUIRE(reopened.has_value());
+    CHECK(reopened->length == doctest::Approx(130.0));
+}
+
+TEST_CASE_FIXTURE(RoadServiceTestFixture, "createArcRoad creates canonical circular arc and supports undo/redo") {
+    CreateArcRoadInput input;
+    input.name = "Direct Arc 1";
+    input.p0 = AlignmentPoint{100.0, 0.0};
+    input.p1 = AlignmentPoint{0.0, 100.0};
+    input.p2 = AlignmentPoint{-100.0, 0.0};
+
+    const auto summary = roadService->createArcRoad(input);
+    CHECK(summary.name == "Direct Arc 1");
+    const double expectedLen = 100.0 * 3.14159265358979323846;
+    CHECK(summary.length == doctest::Approx(expectedLen));
+
+    // Reject collinear points
+    CreateArcRoadInput collinearInput;
+    collinearInput.name = "Collinear Arc";
+    collinearInput.p0 = AlignmentPoint{0.0, 0.0};
+    collinearInput.p1 = AlignmentPoint{50.0, 50.0};
+    collinearInput.p2 = AlignmentPoint{100.0, 100.0};
+    CHECK_THROWS_AS((void)roadService->createArcRoad(collinearInput), CommandFailure);
+
+    // Verify undo / redo
+    REQUIRE(roadService->undo(summary.roadId));
+    auto undone = roadService->getRoad(summary.roadId);
+    CHECK(!undone.has_value());
+
+    REQUIRE(roadService->redo(summary.roadId));
+    auto redone = roadService->getRoad(summary.roadId);
+    REQUIRE(redone.has_value());
+    CHECK(redone->length == doctest::Approx(expectedLen));
+}
+
+TEST_CASE_FIXTURE(RoadServiceTestFixture, "createClothoidRoad creates canonical spiral and persists") {
+    CreateClothoidRoadInput input;
+    input.name = "Direct Clothoid 1";
+    input.start = AlignmentPoint{50.0, 50.0};
+    input.startHeading = 0.5;
+    input.startCurvature = 0.0;
+    input.endCurvature = 0.02;
+    input.length = 80.0;
+
+    const auto summary = roadService->createClothoidRoad(input);
+    CHECK(summary.name == "Direct Clothoid 1");
+    CHECK(summary.length == doctest::Approx(80.0));
+
+    auto details = roadService->getRoad(summary.roadId);
+    REQUIRE(details.has_value());
+    CHECK(details->length == doctest::Approx(80.0));
+}
+
 } // namespace infraforge::application

@@ -3,6 +3,7 @@
 #include "infraforge/domain/road/RoadTypes.hpp"
 
 #include <cstdint>
+#include <expected>
 #include <optional>
 #include <variant>
 
@@ -110,4 +111,33 @@ using AlignmentSegment = std::variant<LineSegment, CircularArcSegment, ClothoidS
 // describing the first failure. Does not silently repair invalid geometry.
 [[nodiscard]] std::optional<RoadDiagnostic> validateSegment(const AlignmentSegment& segment) noexcept;
 
+// Construction helpers for authoring tools (donor: OpenGeoStudio arcFitting.ts / roadGeometry.ts).
+
+// Derives a circular arc through three ordered points: start (P0), through/bend (P1), and end (P2).
+// Returns a CircularArcSegment on success, or a typed RoadDiagnostic on failure.
+[[nodiscard]] std::expected<CircularArcSegment, RoadDiagnostic> constructCircularArcThroughPoints(
+    const AlignmentPoint& start,
+    const AlignmentPoint& through,
+    const AlignmentPoint& end,
+    double collinearTolerance = 1e-7,
+    double minimumRadius = 0.1,
+    double maximumRadius = 1e7) noexcept;
+
+// Derives a straight line segment from start point P0 to end point P1.
+// Returns a LineSegment on success, or a typed RoadDiagnostic on failure.
+[[nodiscard]] std::expected<LineSegment, RoadDiagnostic> constructStraightSegment(
+    const AlignmentPoint& start,
+    const AlignmentPoint& end) noexcept;
+
+// Derives a clothoid transition segment from start point P0, start heading, start curvature,
+// end curvature, and arc length.
+// Returns a ClothoidSegment on success, or a typed RoadDiagnostic on failure.
+[[nodiscard]] std::expected<ClothoidSegment, RoadDiagnostic> constructClothoidSegment(
+    const AlignmentPoint& start,
+    Heading startHeading,
+    Curvature startCurvature,
+    Curvature endCurvature,
+    double length) noexcept;
+
 } // namespace infraforge::domain::road
+

@@ -1,0 +1,157 @@
+/* Authoring Tool Rail & Options Panel */
+
+.authoring-container {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+}
+
+/* Floating / Docked Tool Rail */
+.authoring-tool-rail {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px;
+  background: var(--if-bg-panel);
+  border: 1px solid var(--if-border-default);
+  border-radius: var(--if-radius-md);
+  box-shadow: var(--if-shadow-md);
+}
+
+.authoring-rail-button {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--if-radius-sm);
+  background: transparent;
+  color: var(--if-text-muted);
+  border: none;
+  cursor: pointer;
+  transition: all var(--if-transition-fast);
+}
+
+.authoring-rail-button:hover {
+  background: var(--if-bg-hover);
+  color: var(--if-text-primary);
+}
+
+.authoring-rail-button.active {
+  background: var(--if-accent);
+  color: var(--if-accent-contrast, #ffffff);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.authoring-rail-badge {
+  position: absolute;
+  bottom: 2px;
+  right: 2px;
+  font-size: 8px;
+  font-weight: bold;
+  opacity: 0.7;
+}
+
+.authoring-rail-point-count {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 16px;
+  height: 16px;
+  border-radius: 8px;
+  background: var(--if-accent);
+  color: #fff;
+  font-size: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  padding: 0 4px;
+}
+
+/* Horizontal Tool Options & Snapping Bar */
+.authoring-options-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--if-space-3);
+  padding: var(--if-space-2) var(--if-space-4);
+  background: var(--if-bg-panel);
+  border-bottom: 1px solid var(--if-border-default);
+  font-size: var(--if-font-body);
+  color: var(--if-text-secondary);
+  flex-wrap: wrap;
+}
+
+.authoring-tool-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: var(--if-weight-medium);
+  color: var(--if-accent);
+  background: var(--if-accent-subtle);
+  padding: 2px 8px;
+  border-radius: var(--if-radius-sm);
+}
+
+.authoring-status-hint {
+  color: var(--if-text-muted);
+  font-size: var(--if-font-metadata);
+  margin-right: auto;
+}
+
+.authoring-snapping-group {
+  display: flex;
+  align-items: center;
+  gap: var(--if-space-2);
+  border-left: 1px solid var(--if-border-default);
+  padding-left: var(--if-space-3);
+}
+
+.authoring-checkbox-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  user-select: none;
+  font-size: var(--if-font-metadata);
+}
+
+.authoring-compact-select {
+  padding: 1px 4px;
+  font-size: var(--if-font-metadata);
+  background: var(--if-bg-input);
+  border: 1px solid var(--if-border-default);
+  border-radius: var(--if-radius-sm);
+  color: var(--if-text-primary);
+}
+
+.authoring-metrics-group {
+  display: flex;
+  align-items: center;
+  gap: var(--if-space-3);
+  border-left: 1px solid var(--if-border-default);
+  padding-left: var(--if-space-3);
+  font-family: var(--if-font-mono, monospace);
+  font-size: var(--if-font-metadata);
+  color: var(--if-text-muted);
+}
+
+.authoring-metric-item span {
+  color: var(--if-text-primary);
+  font-weight: 500;
+  margin-left: 4px;
+}
+
+.authoring-action-buttons {
+  display: flex;
+  align-items: center;
+  gap: var(--if-space-2);
+  border-left: 1px solid var(--if-border-default);
+  padding-left: var(--if-space-3);
+}

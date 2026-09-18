@@ -1,6 +1,9 @@
 import { create } from '@bufbuild/protobuf'
 import {
   CreateRoadCommandSchema,
+  CreateStraightRoadCommandSchema,
+  CreateArcRoadCommandSchema,
+  CreateClothoidRoadCommandSchema,
   DeleteRoadCommandSchema,
   RenameRoadCommandSchema,
   InsertRoadControlCommandSchema,
@@ -61,6 +64,122 @@ export async function createRoad(
     maxCurvature,
   })
   const outcome = await sendRoadCommand(client, { case: 'createRoad', value: command })
+  if (outcome.case !== 'createRoadResult' || !outcome.value.road) {
+    const failure = expectFailure(outcome)
+    useRoadStore.getState().setLastError(failure.message)
+    throw failure
+  }
+  useRoadStore.getState().setLastError(null)
+  useRoadStore.getState().upsertRoad(outcome.value.road)
+  return outcome.value.road
+}
+
+export async function createStraightRoad(
+  client: EngineClient,
+  input: {
+    name: string
+    startEasting: number
+    startNorthing: number
+    endEasting: number
+    endNorthing: number
+    stickToTerrain?: boolean
+    datasetId?: string
+    stationInterval?: number
+    verticalOffset?: number
+  },
+): Promise<RoadSummary> {
+  const command = create(CreateStraightRoadCommandSchema, {
+    name: input.name,
+    startEasting: input.startEasting,
+    startNorthing: input.startNorthing,
+    endEasting: input.endEasting,
+    endNorthing: input.endNorthing,
+    stickToTerrain: input.stickToTerrain ?? false,
+    datasetId: input.datasetId ?? '',
+    stationInterval: input.stationInterval ?? 10.0,
+    verticalOffset: input.verticalOffset ?? 0.1,
+  })
+  const outcome = await sendRoadCommand(client, { case: 'createStraightRoad', value: command })
+  if (outcome.case !== 'createRoadResult' || !outcome.value.road) {
+    const failure = expectFailure(outcome)
+    useRoadStore.getState().setLastError(failure.message)
+    throw failure
+  }
+  useRoadStore.getState().setLastError(null)
+  useRoadStore.getState().upsertRoad(outcome.value.road)
+  return outcome.value.road
+}
+
+export async function createArcRoad(
+  client: EngineClient,
+  input: {
+    name: string
+    p0Easting: number
+    p0Northing: number
+    p1Easting: number
+    p1Northing: number
+    p2Easting: number
+    p2Northing: number
+    stickToTerrain?: boolean
+    datasetId?: string
+    stationInterval?: number
+    verticalOffset?: number
+  },
+): Promise<RoadSummary> {
+  const command = create(CreateArcRoadCommandSchema, {
+    name: input.name,
+    p0Easting: input.p0Easting,
+    p0Northing: input.p0Northing,
+    p1Easting: input.p1Easting,
+    p1Northing: input.p1Northing,
+    p2Easting: input.p2Easting,
+    p2Northing: input.p2Northing,
+    stickToTerrain: input.stickToTerrain ?? false,
+    datasetId: input.datasetId ?? '',
+    stationInterval: input.stationInterval ?? 10.0,
+    verticalOffset: input.verticalOffset ?? 0.1,
+  })
+  const outcome = await sendRoadCommand(client, { case: 'createArcRoad', value: command })
+  if (outcome.case !== 'createRoadResult' || !outcome.value.road) {
+    const failure = expectFailure(outcome)
+    useRoadStore.getState().setLastError(failure.message)
+    throw failure
+  }
+  useRoadStore.getState().setLastError(null)
+  useRoadStore.getState().upsertRoad(outcome.value.road)
+  return outcome.value.road
+}
+
+export async function createClothoidRoad(
+  client: EngineClient,
+  input: {
+    name: string
+    startEasting: number
+    startNorthing: number
+    startHeading: number
+    startCurvature: number
+    endCurvature: number
+    length: number
+    stickToTerrain?: boolean
+    datasetId?: string
+    stationInterval?: number
+    verticalOffset?: number
+  },
+): Promise<RoadSummary> {
+  const command = create(CreateClothoidRoadCommandSchema, {
+    name: input.name,
+    startEasting: input.startEasting,
+    startNorthing: input.startNorthing,
+    startHeading: input.startHeading,
+    startCurvature: input.startCurvature,
+    endCurvature: input.endCurvature,
+    length: input.length,
+    stickToTerrain: input.stickToTerrain ?? false,
+    datasetId: input.datasetId ?? '',
+    stationInterval: input.stationInterval ?? 10.0,
+    verticalOffset: input.verticalOffset ?? 0.1,
+  })
+  const outcome = await sendRoadCommand(client, { case: 'createClothoidRoad', value: command })
   if (outcome.case !== 'createRoadResult' || !outcome.value.road) {
     const failure = expectFailure(outcome)
     useRoadStore.getState().setLastError(failure.message)

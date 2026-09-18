@@ -303,6 +303,9 @@ message CommandEnvelope {
     TerrainExportCommand terrain_export = 36;
     UpdateRoadWidthCommand update_road_width = 37;
     ConformRoadToTerrainCommand conform_road_to_terrain = 38;
+    CreateStraightRoadCommand create_straight_road = 39;
+    CreateArcRoadCommand create_arc_road = 40;
+    CreateClothoidRoadCommand create_clothoid_road = 41;
   }
 }
 

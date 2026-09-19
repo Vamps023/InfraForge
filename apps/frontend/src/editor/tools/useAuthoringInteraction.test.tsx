@@ -28,4 +28,38 @@ describe('useAuthoringInteraction', () => {
     expect(useToolStore.getState().activeToolId).toBe('road.authoring.bridge-owner')
     expect(cancel).not.toHaveBeenCalled()
   })
+
+  it('updates hover point on pointer-move and clears on pointer-leave', async () => {
+    const { result } = renderHook(() => useAuthoringInteraction({ getClient: () => null }))
+
+    act(() => {
+      useAuthoringDraftStore.getState().setTool('road.straight')
+    })
+
+    await act(async () => {
+      await result.current.handleViewportInteraction({
+        kind: 'pointer-move',
+        easting: 500000,
+        northing: 4000000,
+        height: 100,
+      })
+    })
+
+    expect(useAuthoringDraftStore.getState().hoverPoint).toEqual({
+      easting: 500000,
+      northing: 4000000,
+    })
+
+    await act(async () => {
+      await result.current.handleViewportInteraction({
+        kind: 'pointer-leave',
+        easting: 0,
+        northing: 0,
+        height: 0,
+      })
+    })
+
+    expect(useAuthoringDraftStore.getState().hoverPoint).toBeNull()
+    expect(useAuthoringDraftStore.getState().snappedHoverPoint).toBeNull()
+  })
 })

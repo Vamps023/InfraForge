@@ -253,7 +253,7 @@ int runViewportApplication(const ApplicationArguments& arguments) {
         },
         arguments.validationEnabled,
         [](const ViewportInteraction& interaction) {
-            std::cout << formatInteractionRecord(interaction.easting,
+            std::cout << formatInteractionRecord(interaction.kind, interaction.easting,
                 interaction.northing, interaction.height, interaction.roadId) << std::endl;
         });
     // Native mouse input (wheel zoom, drag pan) feeds the render thread's

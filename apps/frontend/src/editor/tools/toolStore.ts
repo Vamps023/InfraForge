@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import type { WorkspaceId } from '../workspaces/workspaceRegistry'
 
 export type ViewportInteraction = Readonly<{
-  kind: 'primary-click'
+  kind: 'primary-click' | 'pointer-move' | 'pointer-leave'
   easting: number
   northing: number
   height: number

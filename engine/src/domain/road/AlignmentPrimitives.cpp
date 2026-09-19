@@ -267,45 +267,52 @@ std::expected<CircularArcSegment, RoadDiagnostic> constructCircularArcThroughPoi
             "arc construction coordinates must be finite"});
     }
 
-    const double d01 = std::hypot(through.easting - start.easting, through.northing - start.northing);
-    const double d12 = std::hypot(end.easting - through.easting, end.northing - through.northing);
-    const double d02 = std::hypot(end.easting - start.easting, end.northing - start.northing);
+    // Work in a local coordinate frame relative to start (P0) to preserve floating-point
+    // precision when working in large GIS coordinate systems (e.g. UTM with Easting ~500k, Northing ~5000k).
+    const double p1x = through.easting - start.easting;
+    const double p1y = through.northing - start.northing;
+    const double p2x = end.easting - start.easting;
+    const double p2y = end.northing - start.northing;
+
+    const double d01 = std::hypot(p1x, p1y);
+    const double d12 = std::hypot(p2x - p1x, p2y - p1y);
+    const double d02 = std::hypot(p2x, p2y);
 
     if (d01 < 1e-4 || d12 < 1e-4 || d02 < 1e-4) {
         return std::unexpected(RoadDiagnostic{RoadErrorCode::DegenerateSegment,
             "arc construction points must not be coincident"});
     }
 
-    const double det = 2.0 * (
-        start.easting * (through.northing - end.northing) +
-        through.easting * (end.northing - start.northing) +
-        end.easting * (start.northing - through.northing));
+    // In local frame with P0 = (0,0), the 2x2 determinant for circumcenter is:
+    // det = 2 * (p1x * p2y - p1y * p2x)
+    const double crossProduct = p1x * p2y - p1y * p2x;
+    const double det = 2.0 * crossProduct;
 
-    if (std::abs(det) < collinearTolerance) {
+    // Scale-aware collinearity check: crossProduct is twice the triangle area.
+    // The altitude of P1 relative to baseline P0->P2 is h = |crossProduct| / d02.
+    const double altitude = std::abs(crossProduct) / d02;
+    if (std::abs(det) < collinearTolerance || altitude < collinearTolerance) {
         return std::unexpected(RoadDiagnostic{RoadErrorCode::DegenerateSegment,
             "arc construction points are collinear or degenerate; cannot construct circular arc"});
     }
 
-    const double s0 = start.easting * start.easting + start.northing * start.northing;
-    const double s1 = through.easting * through.easting + through.northing * through.northing;
-    const double s2 = end.easting * end.easting + end.northing * end.northing;
+    const double s1 = p1x * p1x + p1y * p1y;
+    const double s2 = p2x * p2x + p2y * p2y;
 
-    const double cx = (s0 * (through.northing - end.northing) +
-                       s1 * (end.northing - start.northing) +
-                       s2 * (start.northing - through.northing)) / det;
-    const double cy = (s0 * (end.easting - through.easting) +
-                       s1 * (start.easting - end.easting) +
-                       s2 * (through.easting - start.easting)) / det;
+    // Local center relative to start
+    const double localCx = (s1 * p2y - s2 * p1y) / det;
+    const double localCy = (s2 * p1x - s1 * p2x) / det;
 
-    const double radius = std::hypot(start.easting - cx, start.northing - cy);
+    const double radius = std::hypot(localCx, localCy);
     if (!std::isfinite(radius) || radius < minimumRadius || radius > maximumRadius) {
         return std::unexpected(RoadDiagnostic{RoadErrorCode::InvalidCurvature,
             "arc radius is out of valid bounds"});
     }
 
-    const double theta0 = std::atan2(start.northing - cy, start.easting - cx);
-    const double theta1 = std::atan2(through.northing - cy, through.easting - cx);
-    const double theta2 = std::atan2(end.northing - cy, end.easting - cx);
+    // Compute angles using local center relative to start
+    const double theta0 = std::atan2(-localCy, -localCx);
+    const double theta1 = std::atan2(p1y - localCy, p1x - localCx);
+    const double theta2 = std::atan2(p2y - localCy, p2x - localCx);
 
     auto normPos = [](const double a) noexcept {
         constexpr double twoPi = 2.0 * kPi;
@@ -388,6 +395,130 @@ std::expected<ClothoidSegment, RoadDiagnostic> constructClothoidSegment(
         .endCurvature = endCurvature,
         .length = length,
     };
+}
+
+std::expected<ClothoidSegment, RoadDiagnostic> constructClothoidReachingEndpoint(
+    const AlignmentPoint& start,
+    const AlignmentPoint& targetEnd,
+    const Curvature startCurvature,
+    const Curvature endCurvature,
+    const double tolerance) noexcept {
+    if (!isFinitePoint(start) || !isFinitePoint(targetEnd) ||
+        !std::isfinite(startCurvature) || !std::isfinite(endCurvature) || !std::isfinite(tolerance)) {
+        return std::unexpected(RoadDiagnostic{RoadErrorCode::NonFiniteParameter,
+            "clothoid parameters must be finite"});
+    }
+    const double dx = targetEnd.easting - start.easting;
+    const double dy = targetEnd.northing - start.northing;
+    const double chordLength = std::hypot(dx, dy);
+    if (chordLength < 1e-4) {
+        return std::unexpected(RoadDiagnostic{RoadErrorCode::DegenerateSegment,
+            "clothoid endpoint distance must be positive"});
+    }
+    const double chordHeading = std::atan2(dy, dx);
+
+    // If curvatures are both zero, this is a straight line.
+    if (std::abs(startCurvature) < 1e-9 && std::abs(endCurvature) < 1e-9) {
+        return ClothoidSegment{
+            .start = start,
+            .startHeading = chordHeading,
+            .startCurvature = 0.0,
+            .endCurvature = 0.0,
+            .length = chordLength,
+        };
+    }
+
+    auto evalLocalDisplacement = [&](double s, double& outX, double& outY) {
+        const double alpha = (endCurvature - startCurvature) / (2.0 * s);
+        integrateClothoid(0.0, startCurvature, alpha, s, outX, outY);
+    };
+
+    auto evalResidual = [&](double s) {
+        double lx = 0.0;
+        double ly = 0.0;
+        evalLocalDisplacement(s, lx, ly);
+        return std::hypot(lx, ly) - chordLength;
+    };
+
+    double sLow = chordLength;
+    double rLow = evalResidual(sLow);
+    if (std::abs(rLow) <= 1e-7) {
+        double lx = 0.0;
+        double ly = 0.0;
+        evalLocalDisplacement(sLow, lx, ly);
+        const double localHeading = std::atan2(ly, lx);
+        const double psi0 = chordHeading - localHeading;
+        return ClothoidSegment{
+            .start = start,
+            .startHeading = psi0,
+            .startCurvature = startCurvature,
+            .endCurvature = endCurvature,
+            .length = sLow,
+        };
+    }
+
+    if (rLow > 0.0) {
+        sLow = chordLength * 0.5;
+        rLow = evalResidual(sLow);
+    }
+
+    double sHigh = chordLength * 1.05;
+    double rHigh = evalResidual(sHigh);
+    int expandSteps = 0;
+    while (rHigh < 0.0 && expandSteps < 30) {
+        sHigh = sHigh * 1.25 + 1.0;
+        rHigh = evalResidual(sHigh);
+        ++expandSteps;
+    }
+
+    if (rLow * rHigh > 0.0) {
+        return std::unexpected(RoadDiagnostic{RoadErrorCode::InvalidArgument,
+            "failed to find length bracket reaching clothoid endpoint"});
+    }
+
+    double sMid = sLow;
+    for (int iter = 0; iter < 50; ++iter) {
+        sMid = 0.5 * (sLow + sHigh);
+        const double rMid = evalResidual(sMid);
+        if (std::abs(rMid) <= 1e-9 || (sHigh - sLow) <= 1e-9) {
+            break;
+        }
+        if (rLow * rMid <= 0.0) {
+            sHigh = sMid;
+            rHigh = rMid;
+        } else {
+            sLow = sMid;
+            rLow = rMid;
+        }
+    }
+
+    const double finalLength = sMid;
+    double finalLx = 0.0;
+    double finalLy = 0.0;
+    evalLocalDisplacement(finalLength, finalLx, finalLy);
+    const double localHeading = std::atan2(finalLy, finalLx);
+    const double psi0 = chordHeading - localHeading;
+
+    ClothoidSegment seg{
+        .start = start,
+        .startHeading = psi0,
+        .startCurvature = startCurvature,
+        .endCurvature = endCurvature,
+        .length = finalLength,
+    };
+
+    const auto reachedEnd = seg.evaluate(finalLength);
+    const double err = std::hypot(
+        reachedEnd.position.easting - targetEnd.easting,
+        reachedEnd.position.northing - targetEnd.northing);
+
+    const double allowedTol = std::max(tolerance, 1e-3);
+    if (err > allowedTol) {
+        return std::unexpected(RoadDiagnostic{RoadErrorCode::InvalidArgument,
+            "clothoid endpoint distance residual exceeds tolerance (" + std::to_string(err) + " m)"});
+    }
+
+    return seg;
 }
 
 } // namespace infraforge::domain::road

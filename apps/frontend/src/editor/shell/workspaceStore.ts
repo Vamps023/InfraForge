@@ -44,7 +44,7 @@ interface WorkspaceState {
 }
 
 export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
-  activeWorkspace: 'terrain',
+  activeWorkspace: 'roads',
   setWorkspace: (nextWorkspace) => {
     // Explicit cancellation invariant:
     // If switching workspaces invalidates an in-progress operation,

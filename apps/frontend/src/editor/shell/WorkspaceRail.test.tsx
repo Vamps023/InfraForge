@@ -7,11 +7,11 @@ import { useWorkspaceStore } from './workspaceStore'
 import { workspaceRegistry } from '../workspaces/workspaceRegistry'
 
 beforeEach(() => {
-  useWorkspaceStore.getState().setWorkspace('terrain')
+  useWorkspaceStore.getState().setWorkspace('roads')
 })
 
 afterEach(() => {
-  useWorkspaceStore.getState().setWorkspace('terrain')
+  useWorkspaceStore.getState().setWorkspace('roads')
 })
 
 describe('WorkspaceSwitcher (and WorkspaceRail alias)', () => {
@@ -35,8 +35,8 @@ describe('WorkspaceSwitcher (and WorkspaceRail alias)', () => {
 
   it('marks the active workspace with aria-current', () => {
     render(<WorkspaceSwitcher />)
-    const terrainBtn = screen.getByLabelText('Terrain')
-    expect(terrainBtn).toHaveAttribute('aria-current', 'page')
+    const roadsBtn = screen.getByLabelText('Roads')
+    expect(roadsBtn).toHaveAttribute('aria-current', 'page')
     const homeBtn = screen.getByLabelText('Home')
     expect(homeBtn).not.toHaveAttribute('aria-current')
   })
@@ -65,7 +65,7 @@ describe('WorkspaceSwitcher (and WorkspaceRail alias)', () => {
     expect(railBtn).toBeDisabled()
     expect(railBtn).toHaveAttribute('aria-disabled', 'true')
     await userEvent.click(railBtn)
-    expect(useWorkspaceStore.getState().activeWorkspace).toBe('terrain')
+    expect(useWorkspaceStore.getState().activeWorkspace).toBe('roads')
   })
 
   it('WorkspaceRail alias works identically', () => {

@@ -9,37 +9,37 @@
    ========================================================================= */
 
 :root {
-  /* ---- Surface backgrounds (layered charcoal/slate) ---- */
-  --if-bg-canvas: #0b0e12;
-  --if-bg-panel: #151a21;
-  --if-bg-elevated: #1d242d;
-  --if-bg-hover: #252e39;
-  --if-bg-active: #203653;
-  --if-bg-input: #10151b;
+  /* ---- Surface backgrounds (OpenGeoStudio deep palette) ---- */
+  --if-bg-canvas: #090d15;
+  --if-bg-panel: #0e131d;
+  --if-bg-elevated: #151c28;
+  --if-bg-hover: #1e293b;
+  --if-bg-active: #1f2937;
+  --if-bg-input: #090d15;
 
   /* ---- Borders ---- */
-  --if-border-subtle: #202832;
-  --if-border-default: #303a46;
-  --if-border-strong: #465463;
-  --if-border-focus: #67a5ff;
+  --if-border-subtle: rgba(255, 255, 255, 0.08);
+  --if-border-default: #1e293b;
+  --if-border-strong: #334155;
+  --if-border-focus: #4ade80;
 
   /* ---- Text ---- */
-  --if-text-primary: #e2e8f0;
-  --if-text-secondary: #b0bdcc;
-  --if-text-muted: #8997a8;
-  --if-text-disabled: #5f6c7b;
-  --if-text-on-accent: #e8f2ff;
+  --if-text-primary: #f8fafc;
+  --if-text-secondary: #cbd5e1;
+  --if-text-muted: #94a3b8;
+  --if-text-disabled: #64748b;
+  --if-text-on-accent: #052e16;
 
-  /* ---- Accent (cool blue) ---- */
-  --if-accent: #67a5ff;
-  --if-accent-hover: #82b5ff;
-  --if-accent-active: #4d8fe9;
-  --if-accent-subtle: #1d3656;
-  --if-accent-border: #3b689d;
+  /* ---- Accent (OpenGeoStudio emerald) ---- */
+  --if-accent: #4ade80;
+  --if-accent-hover: #22c55e;
+  --if-accent-active: #16a34a;
+  --if-accent-subtle: rgba(74, 222, 128, 0.12);
+  --if-accent-border: rgba(74, 222, 128, 0.35);
 
-  /* ---- Selection */
-  --if-selection: #2c66ad;
-  --if-selection-hover: #3778c4;
+  /* ---- Selection ---- */
+  --if-selection: rgba(74, 222, 128, 0.25);
+  --if-selection-hover: rgba(74, 222, 128, 0.35);
 
   /* ---- Status colors ---- */
   --if-success: #65b68a;

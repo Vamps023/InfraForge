@@ -70,7 +70,7 @@ declare global {
       setViewportVisible: (visible: boolean) => void
       onViewportStatus: (listener: (status: ViewportStatusPayload) => void) => () => void
       onViewportInteraction: (listener: (interaction: Readonly<{
-        kind: 'primary-click'; easting: number; northing: number; height: number; roadId?: string
+        kind: 'primary-click' | 'pointer-move' | 'pointer-leave'; easting: number; northing: number; height: number; roadId?: string
       }>) => void) => () => void
       onMapTileDiagnostic: (listener: (diagnostic: Readonly<{
         state: 'started' | 'completed' | 'failed'

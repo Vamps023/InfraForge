@@ -1,26 +1,30 @@
 import { useState } from 'react'
 import {
-  FolderPlus,
   FolderOpen,
-  Mountain,
-  MapPin,
-  Download,
-  FileText,
+  FolderPlus,
+  HardDrive,
   Layers,
   Map as MapIcon,
   Plus,
   Trash2,
+  Mountain,
   Building2,
   Signal,
   Eye,
   Play,
+  CheckCircle2,
 } from 'lucide-react'
-import type { CommandContext } from '../commands/useCommands'
-import { executeCommand } from '../commands/useCommands'
-import { useProjectStore } from '../../features/project/projectStore'
-import { useRecentProjectsStore, type RecentProject } from '../../features/project/recentProjectsStore'
-import { openProject, closeProject } from '../../features/project/projectApi'
-import { useWorkspaceStore } from './workspaceStore'
+import type { EngineClient } from '../../lib/engineSession'
+import { openProject, closeProject } from './projectApi'
+import { useProjectStore } from './projectStore'
+import { useRecentProjectsStore, type RecentProject } from './recentProjectsStore'
+
+export interface ProjectsPageProps {
+  client: EngineClient | null
+  onOpenDesign: (directory: string) => void
+  onOpenTerrain: (directory: string) => void
+  onNewProject: () => void
+}
 
 const WORKFLOW_STEPS = [
   { step: '1', label: 'Terrain', icon: Mountain, desc: 'Choose project area, georeference CRS, and elevation DEM.', active: true },
@@ -31,34 +35,52 @@ const WORKFLOW_STEPS = [
   { step: '6', label: 'Simulate', icon: Play, desc: 'Run live traffic & train simulation.', active: false },
 ]
 
-export function ProjectHomeScreen({ context }: { context: CommandContext }) {
-  const lastError = useProjectStore((state) => state.lastError)
-  const currentSummary = useProjectStore((state) => state.summary)
+export function ProjectsPage({
+  client,
+  onOpenDesign,
+  onOpenTerrain,
+  onNewProject,
+}: ProjectsPageProps) {
   const projects = useRecentProjectsStore((state) => state.projects)
   const removeRecent = useRecentProjectsStore((state) => state.remove)
-  const setWorkspace = useWorkspaceStore((state) => state.setWorkspace)
-
+  const currentSummary = useProjectStore((state) => state.summary)
   const [loadingDirectory, setLoadingDirectory] = useState<string | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<RecentProject | null>(null)
-  const [actionError, setActionError] = useState<string | null>(null)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
 
-  const handleOpenCard = async (directory: string, targetWorkspace: 'roads' | 'terrain') => {
-    const client = context.availability.engine === 'ready' ? (context as any).client ?? null : null
-    if (!client) {
-      void executeCommand('project.open', context)
+  const handleOpenViaPicker = async () => {
+    const desktop = window.infraforgeDesktop
+    if (!desktop?.pickDirectory) {
+      setErrorMessage('Desktop directory picker not available.')
       return
     }
+    const dir = await desktop.pickDirectory({
+      title: 'Select an InfraForge (.iforge) project directory',
+      buttonLabel: 'Open Project',
+    })
+    if (!dir) return
+    await handleOpenProject(dir, 'design')
+  }
 
+  const handleOpenProject = async (directory: string, target: 'design' | 'terrain') => {
+    if (!client) {
+      setErrorMessage('Engine is not connected.')
+      return
+    }
     setLoadingDirectory(directory)
-    setActionError(null)
+    setErrorMessage(null)
     try {
       if (currentSummary && currentSummary.directory !== directory) {
         await closeProject(client).catch(() => undefined)
       }
       await openProject(client, directory)
-      setWorkspace(targetWorkspace)
+      if (target === 'terrain') {
+        onOpenTerrain(directory)
+      } else {
+        onOpenDesign(directory)
+      }
     } catch (err: unknown) {
-      setActionError(err instanceof Error ? err.message : 'Failed to open project.')
+      setErrorMessage(err instanceof Error ? err.message : 'Failed to open project.')
     } finally {
       setLoadingDirectory(null)
     }
@@ -66,54 +88,64 @@ export function ProjectHomeScreen({ context }: { context: CommandContext }) {
 
   const confirmDelete = async () => {
     if (!deleteTarget) return
-    removeRecent(deleteTarget.directory)
+    const targetDir = deleteTarget.directory
+    if (currentSummary?.directory === targetDir && client) {
+      await closeProject(client).catch(() => undefined)
+    }
+    removeRecent(targetDir)
     setDeleteTarget(null)
   }
 
   return (
-    <div className="home-screen" role="region" aria-label="Start screen">
+    <main className="projects-page" role="main" aria-label="InfraForge Projects">
+      {/* Ambient background glow */}
       <div className="projects-ambient-glow" aria-hidden="true" />
 
-      <div className="home-screen-content">
-        <div className="home-logo">IF</div>
-        <h1 className="home-title">InfraForge</h1>
-        <p className="home-subtitle">
-          Native infrastructure authoring, geospatial editing, and simulation preparation.
-        </p>
+      <div className="projects-container">
+        {/* Header */}
+        <header className="projects-header">
+          <div className="projects-brand-group">
+            <div className="brand-mark">IF</div>
+            <div>
+              <p className="projects-brand-subtitle">INFRAFORGE</p>
+              <h1 className="projects-title">Projects</h1>
+            </div>
+          </div>
 
-        <div className="home-actions">
-          <div className="home-action-row">
-            <button
-              type="button"
-              className="button primary"
-              onClick={() => void executeCommand('project.new', context)}
-            >
-              <FolderPlus size={16} /> New Project
-            </button>
+          <div className="projects-header-actions">
             <button
               type="button"
               className="button"
-              onClick={() => void executeCommand('project.open', context)}
+              onClick={handleOpenViaPicker}
+              title="Open an existing project folder from disk"
             >
-              <FolderOpen size={16} /> Open Project
+              <FolderOpen size={16} />
+              <span>Open Project…</span>
+            </button>
+
+            <button
+              type="button"
+              className="button primary"
+              onClick={onNewProject}
+              title="Create a new infrastructure project"
+            >
+              <Plus size={16} />
+              <span>New Project</span>
             </button>
           </div>
-          {lastError ? (
-            <div className="form-error" role="alert">
-              <p>{lastError.message}</p>
-            </div>
-          ) : null}
-          {actionError ? (
-            <div className="form-error" role="alert">
-              <p>{actionError}</p>
-            </div>
-          ) : null}
-        </div>
+        </header>
+
+        {errorMessage && (
+          <div className="projects-error-banner" role="alert">
+            <span>{errorMessage}</span>
+            <button type="button" onClick={() => setErrorMessage(null)}>Dismiss</button>
+          </div>
+        )}
 
         {/* Project Workflow Guide */}
-        <div className="projects-workflow-section" aria-labelledby="home-workflow-heading">
+        <section className="projects-workflow-section" aria-labelledby="workflow-heading">
           <div className="projects-workflow-header">
-            <h2 id="home-workflow-heading" className="projects-section-heading">Project workflow</h2>
+            <h2 id="workflow-heading" className="projects-section-heading">Project workflow</h2>
             <p className="projects-section-subheading">
               Follow these steps in order. You can return to any workspace at any time.
             </p>
@@ -141,20 +173,41 @@ export function ProjectHomeScreen({ context }: { context: CommandContext }) {
               )
             })}
           </div>
-        </div>
+        </section>
 
-        {/* Recent Projects Cards */}
-        {projects.length > 0 && (
-          <div className="projects-grid-section" style={{ width: '100%', marginBottom: '24px' }}>
-            <h2 className="projects-section-heading" style={{ marginBottom: '12px' }}>Recent Projects</h2>
+        {/* Project Grid */}
+        <section className="projects-grid-section">
+          {projects.length === 0 ? (
+            <div className="projects-empty-state">
+              <div className="empty-state-icon-box">
+                <FolderOpen size={28} />
+              </div>
+              <h2 className="empty-state-title">No projects yet</h2>
+              <p className="empty-state-desc">
+                Create your first project to start drawing roads and working with terrain.
+              </p>
+              <button
+                type="button"
+                className="button primary"
+                onClick={onNewProject}
+              >
+                <Plus size={16} />
+                <span>Create a project</span>
+              </button>
+            </div>
+          ) : (
             <div className="projects-grid">
               {projects.map((proj) => {
                 const isLoading = loadingDirectory === proj.directory
-                const dateStr = proj.createdAt ? new Date(proj.createdAt).toLocaleDateString() : 'Recent'
+                const isCurrent = currentSummary?.directory === proj.directory
+                const dateStr = proj.createdAt
+                  ? new Date(proj.createdAt).toLocaleDateString()
+                  : 'Recent'
+
                 return (
                   <article
                     key={proj.directory}
-                    className="project-card"
+                    className={`project-card${isCurrent ? ' current-project' : ''}`}
                     aria-label={`Project: ${proj.name}`}
                   >
                     <div className="project-card-header">
@@ -165,7 +218,7 @@ export function ProjectHomeScreen({ context }: { context: CommandContext }) {
                         <button
                           type="button"
                           className="project-delete-btn"
-                          title="Remove from recent list"
+                          title="Delete / remove project from list"
                           aria-label={`Remove project ${proj.name}`}
                           onClick={() => setDeleteTarget(proj)}
                         >
@@ -198,13 +251,14 @@ export function ProjectHomeScreen({ context }: { context: CommandContext }) {
                     <div className="project-card-footer">
                       {isLoading ? (
                         <div className="project-loading-indicator">
+                          <span className="spinner" />
                           <span>Loading project…</span>
                         </div>
                       ) : (
                         <button
                           type="button"
                           className="button primary full-width"
-                          onClick={() => void handleOpenCard(proj.directory, 'roads')}
+                          onClick={() => void handleOpenProject(proj.directory, 'design')}
                           title="Step 3: Open the road and rail design workspace"
                         >
                           <Layers size={14} />
@@ -217,7 +271,7 @@ export function ProjectHomeScreen({ context }: { context: CommandContext }) {
                           type="button"
                           className="button outline compact"
                           disabled={isLoading}
-                          onClick={() => void handleOpenCard(proj.directory, 'terrain')}
+                          onClick={() => void handleOpenProject(proj.directory, 'terrain')}
                           title="Step 1: define terrain and working area"
                         >
                           <span className="step-num">1</span>
@@ -229,7 +283,7 @@ export function ProjectHomeScreen({ context }: { context: CommandContext }) {
                           type="button"
                           className="button outline compact"
                           disabled={isLoading}
-                          onClick={() => void handleOpenCard(proj.directory, 'roads')}
+                          onClick={() => void handleOpenProject(proj.directory, 'design')}
                           title="Step 3: road authoring and lane design"
                         >
                           <span className="step-num">3</span>
@@ -242,37 +296,8 @@ export function ProjectHomeScreen({ context }: { context: CommandContext }) {
                 )
               })}
             </div>
-          </div>
-        )}
-
-        {/* Getting Started section */}
-        <div className="home-section">
-          <div className="home-section-title">Getting Started</div>
-          <div className="home-getting-started">
-            <div className="home-getting-started-item">
-              <FolderPlus size={16} />
-              <span>Create a new project and set its coordinate reference system.</span>
-            </div>
-            <div className="home-getting-started-item">
-              <Mountain size={16} />
-              <span>Switch to the Terrain workspace to import or download elevation data.</span>
-            </div>
-            <div className="home-getting-started-item">
-              <Download size={16} />
-              <span>Use Download Area to fetch DEM tiles for any location on Earth.</span>
-            </div>
-            <div className="home-getting-started-item">
-              <MapPin size={16} />
-              <span>Configure georeferencing to establish the canonical project origin.</span>
-            </div>
-            <div className="home-getting-started-item">
-              <FileText size={16} />
-              <span>Press Ctrl+Shift+P to open the command palette for quick access to all actions.</span>
-            </div>
-          </div>
-        </div>
-
-        <div className="home-version">InfraForge v0.1.0 — Developer Preview</div>
+          )}
+        </section>
       </div>
 
       {/* Delete Confirmation Modal */}
@@ -290,6 +315,9 @@ export function ProjectHomeScreen({ context }: { context: CommandContext }) {
             <div className="dialog-body">
               <p>
                 Are you sure you want to remove <strong>{deleteTarget.name}</strong> from your recent projects?
+              </p>
+              <p className="dialog-help" style={{ marginTop: '8px' }}>
+                Path: <code style={{ fontSize: '11px' }}>{deleteTarget.directory}</code>
               </p>
             </div>
             <div className="dialog-actions">
@@ -311,6 +339,6 @@ export function ProjectHomeScreen({ context }: { context: CommandContext }) {
           </div>
         </div>
       )}
-    </div>
+    </main>
   )
 }

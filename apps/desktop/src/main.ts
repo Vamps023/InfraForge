@@ -352,7 +352,6 @@ app.whenReady().then(async () => {
         }
       })
       viewportSupervisor.setInteractionListener((interaction) => {
-        console.info('[viewport interaction]', JSON.stringify(interaction))
         if (!window.isDestroyed()) {
           window.webContents.send('viewport:interaction', interaction)
         }

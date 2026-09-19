@@ -65,7 +65,7 @@ void RoadService::onProjectOpened() {
     auto roads = store_.roads();
     for (const auto& road : roads) {
         const auto bounds = computeRoadBounds(road);
-        if (world_.isReady()) {
+        if (world_.isReady() && !world_.boundsOf(road.id).has_value()) {
             (void)world_.insert(
                 road.id,
                 bounds,
@@ -230,8 +230,6 @@ RoadSummary RoadService::createStraightRoad(
     ConditionedVertex v1; v1.position = input.end; v1.sourceStation = alignmentRes->totalLength(); polyline.push_back(v1);
 
     std::vector<ProtectedAnchor> anchors;
-    ProtectedAnchor a0; a0.position = input.start; a0.station = 0.0; a0.kind = AnchorKind::Endpoint; anchors.push_back(a0);
-    ProtectedAnchor a1; a1.position = input.end; a1.station = alignmentRes->totalLength(); a1.kind = AnchorKind::Endpoint; anchors.push_back(a1);
 
     std::vector<ProfileBreakpoint> conformedElevation;
     if (input.stickToTerrain) {
@@ -240,7 +238,8 @@ RoadSummary RoadService::createStraightRoad(
     }
 
     auto record = buildNewRoadRecord(input.name, *alignmentRes, polyline, anchors,
-        {}, SourceProvider::Authored, 1.0, std::nullopt, {}, conformedElevation);
+        {}, SourceProvider::Authored, 1.0, std::nullopt, {}, conformedElevation,
+        RoadConstructionKind::Straight);
     record = store_.insertRoad(record);
 
     const auto bounds = computeRoadBounds(record);
@@ -284,8 +283,6 @@ RoadSummary RoadService::createArcRoad(
     ConditionedVertex v2; v2.position = input.p2; v2.sourceStation = alignmentRes->totalLength(); polyline.push_back(v2);
 
     std::vector<ProtectedAnchor> anchors;
-    ProtectedAnchor a0; a0.position = input.p0; a0.station = 0.0; a0.kind = AnchorKind::Endpoint; anchors.push_back(a0);
-    ProtectedAnchor a2; a2.position = input.p2; a2.station = alignmentRes->totalLength(); a2.kind = AnchorKind::Endpoint; anchors.push_back(a2);
 
     std::vector<ProfileBreakpoint> conformedElevation;
     if (input.stickToTerrain) {
@@ -294,7 +291,8 @@ RoadSummary RoadService::createArcRoad(
     }
 
     auto record = buildNewRoadRecord(input.name, *alignmentRes, polyline, anchors,
-        {}, SourceProvider::Authored, 1.0, std::nullopt, {}, conformedElevation);
+        {}, SourceProvider::Authored, 1.0, std::nullopt, {}, conformedElevation,
+        RoadConstructionKind::ArcThreePoint);
     record = store_.insertRoad(record);
 
     const auto bounds = computeRoadBounds(record);
@@ -339,8 +337,6 @@ RoadSummary RoadService::createClothoidRoad(
     ConditionedVertex v1; v1.position = endSample.position; v1.sourceStation = alignmentRes->totalLength(); polyline.push_back(v1);
 
     std::vector<ProtectedAnchor> anchors;
-    ProtectedAnchor a0; a0.position = input.start; a0.station = 0.0; a0.kind = AnchorKind::Endpoint; anchors.push_back(a0);
-    ProtectedAnchor a1; a1.position = endSample.position; a1.station = alignmentRes->totalLength(); a1.kind = AnchorKind::Endpoint; anchors.push_back(a1);
 
     std::vector<ProfileBreakpoint> conformedElevation;
     if (input.stickToTerrain) {
@@ -349,7 +345,8 @@ RoadSummary RoadService::createClothoidRoad(
     }
 
     auto record = buildNewRoadRecord(input.name, *alignmentRes, polyline, anchors,
-        {}, SourceProvider::Authored, 1.0, std::nullopt, {}, conformedElevation);
+        {}, SourceProvider::Authored, 1.0, std::nullopt, {}, conformedElevation,
+        RoadConstructionKind::Clothoid);
     record = store_.insertRoad(record);
 
     const auto bounds = computeRoadBounds(record);
@@ -1719,6 +1716,7 @@ RoadSummary RoadService::toSummary(const RoadRecord& road) const {
     s.sourceId = road.sourceId;
     s.protectedAnchorCount = static_cast<std::uint32_t>(road.protectedAnchors.size());
     s.revision = store_.current().revision;
+    s.constructionKind = roadConstructionKindName(road.constructionKind);
 
     // Compute total length.
     double totalLength = 0.0;
@@ -1726,6 +1724,28 @@ RoadSummary RoadService::toSummary(const RoadRecord& road) const {
         totalLength += seg.length;
     }
     s.length = totalLength;
+
+    if (!road.segments.empty()) {
+        s.startEasting = road.segments.front().start.easting;
+        s.startNorthing = road.segments.front().start.northing;
+        try {
+            auto roadObj = rebuildRoad(road);
+            const auto endPos = roadObj.alignment().evaluate(roadObj.alignment().totalLength()).position;
+            s.endEasting = endPos.easting;
+            s.endNorthing = endPos.northing;
+        } catch (...) {
+            if (!road.controlVertices.empty()) {
+                s.endEasting = road.controlVertices.back().x;
+                s.endNorthing = road.controlVertices.back().y;
+            }
+        }
+    } else if (!road.controlVertices.empty()) {
+        s.startEasting = road.controlVertices.front().x;
+        s.startNorthing = road.controlVertices.front().y;
+        s.endEasting = road.controlVertices.back().x;
+        s.endNorthing = road.controlVertices.back().y;
+    }
+
     return s;
 }
 
@@ -1733,6 +1753,7 @@ RoadDetails RoadService::toDetails(const RoadRecord& road) const {
     RoadDetails d;
     d.roadId = uuidTextFromRoadId(road.id);
     d.name = road.displayName;
+    d.constructionKind = roadConstructionKindName(road.constructionKind);
     d.alignmentSegmentCount = static_cast<std::uint32_t>(road.segments.size());
     d.hasElevationProfile = !road.elevationBreakpoints.empty();
     d.elevationBreakpointCount = static_cast<std::uint32_t>(road.elevationBreakpoints.size());
@@ -1873,7 +1894,8 @@ RoadRecord RoadService::buildNewRoadRecord(
     double positionTolerance,
     std::optional<double> maxCurvature,
     const std::set<std::size_t>& anchorBoundarySegments,
-    const std::vector<ProfileBreakpoint>& initialElevationProfile) const {
+    const std::vector<ProfileBreakpoint>& initialElevationProfile,
+    RoadConstructionKind constructionKind) const {
 
     // Blocker 1: this is the ONLY place that mints a new RoadId.
     Road::BuildInput roadInput;
@@ -1968,6 +1990,7 @@ RoadRecord RoadService::buildNewRoadRecord(
     record.positionTolerance = positionTolerance;
     record.maxCurvature = maxCurvature;
     record.anchorBoundarySegments = anchorBoundarySegments;
+    record.constructionKind = constructionKind;
     return record;
 }
 
@@ -2065,23 +2088,100 @@ RoadRecord RoadService::refitRoad(
     // Blocker 1 + Blocker 2: refit preserves the existing RoadId, display
     // name, elevation/superelevation profiles, provenance (provider, source
     // ID, source CRS, source tags, import timestamp), and protected
-    // anchors. Only the canonical alignment is re-derived from the source
-    // vertices. The road is NOT rebuilt as a fresh Authored road.
+    // anchors.
 
     // Rebuild conditioned polyline from CONTROL vertices (the editable
-    // geometry the fitter uses). Source vertices remain immutable evidence
-    // and are preserved unchanged (Blocker 6).
+    // geometry the fitter/primitive constructor uses). Source vertices remain
+    // immutable evidence and are preserved unchanged (Blocker 6).
     const auto& fitVertices = existing.controlVertices.empty()
         ? existing.sourceVertices : existing.controlVertices;
-    std::vector<ConditionedVertex> polyline;
-    for (const auto& v : fitVertices) {
-        ConditionedVertex cv;
-        cv.position = AlignmentPoint{v.x, v.y};
-        polyline.push_back(cv);
+
+    std::optional<ReferenceAlignment> primitiveAlignment;
+    std::set<std::size_t> anchorBoundaries;
+    std::vector<ProtectedAnchor> anchors;
+
+    // Preserve canonical primitive type during editing for directly authored roads.
+    // If the road has an explicit construction kind (Straight, ArcThreePoint, Clothoid),
+    // it MUST reconstruct strictly as that primitive or fail with InvalidArgument.
+    // It must NEVER fall back to polyline fitting (Atomic Non-Fallback Guarantee).
+    if (existing.constructionKind == RoadConstructionKind::Straight) {
+        if (fitVertices.size() != 2) {
+            throw CommandFailure{CommandFailureCode::InvalidArgument,
+                "straight road requires exactly 2 control vertices"};
+        }
+        const AlignmentPoint p0{fitVertices[0].x, fitVertices[0].y};
+        const AlignmentPoint p1{fitVertices[1].x, fitVertices[1].y};
+        auto lineRes = constructStraightSegment(p0, p1);
+        if (!lineRes.has_value()) {
+            throw CommandFailure{CommandFailureCode::InvalidArgument,
+                "failed to reconstruct straight segment: " + lineRes.error().message};
+        }
+        std::vector<AlignmentSegment> segments;
+        segments.emplace_back(std::move(*lineRes));
+        auto alignRes = ReferenceAlignment::build(std::move(segments));
+        if (!alignRes.has_value()) {
+            std::string msg = "failed to build straight alignment: ";
+            for (const auto& d : alignRes.error()) {
+                msg += d.message + "; ";
+            }
+            throw CommandFailure{CommandFailureCode::InvalidArgument, msg};
+        }
+        primitiveAlignment = std::move(*alignRes);
+    } else if (existing.constructionKind == RoadConstructionKind::ArcThreePoint) {
+        if (fitVertices.size() != 3) {
+            throw CommandFailure{CommandFailureCode::InvalidArgument,
+                "arc road requires exactly 3 control vertices"};
+        }
+        const AlignmentPoint p0{fitVertices[0].x, fitVertices[0].y};
+        const AlignmentPoint p1{fitVertices[1].x, fitVertices[1].y};
+        const AlignmentPoint p2{fitVertices[2].x, fitVertices[2].y};
+        auto arcRes = constructCircularArcThroughPoints(p0, p1, p2);
+        if (!arcRes.has_value()) {
+            throw CommandFailure{CommandFailureCode::InvalidArgument,
+                "failed to reconstruct 3-point circular arc: " + arcRes.error().message};
+        }
+        std::vector<AlignmentSegment> segments;
+        segments.emplace_back(std::move(*arcRes));
+        auto alignRes = ReferenceAlignment::build(std::move(segments));
+        if (!alignRes.has_value()) {
+            std::string msg = "failed to build arc alignment: ";
+            for (const auto& d : alignRes.error()) {
+                msg += d.message + "; ";
+            }
+            throw CommandFailure{CommandFailureCode::InvalidArgument, msg};
+        }
+        primitiveAlignment = std::move(*alignRes);
+    } else if (existing.constructionKind == RoadConstructionKind::Clothoid) {
+        if (fitVertices.size() != 2) {
+            throw CommandFailure{CommandFailureCode::InvalidArgument,
+                "clothoid road requires exactly 2 control vertices"};
+        }
+        if (existing.segments.empty()) {
+            throw CommandFailure{CommandFailureCode::InvalidArgument,
+                "clothoid road has no canonical segment definition"};
+        }
+        const auto& seg = existing.segments[0];
+        const AlignmentPoint p0{fitVertices[0].x, fitVertices[0].y};
+        const AlignmentPoint p1{fitVertices[1].x, fitVertices[1].y};
+        auto clothoidRes = constructClothoidReachingEndpoint(
+            p0, p1, seg.startCurvature, seg.endCurvature);
+        if (!clothoidRes.has_value()) {
+            throw CommandFailure{CommandFailureCode::InvalidArgument,
+                "failed to reconstruct clothoid reaching endpoint: " + clothoidRes.error().message};
+        }
+        std::vector<AlignmentSegment> segments;
+        segments.emplace_back(std::move(*clothoidRes));
+        auto alignRes = ReferenceAlignment::build(std::move(segments));
+        if (!alignRes.has_value()) {
+            std::string msg = "failed to build clothoid alignment: ";
+            for (const auto& d : alignRes.error()) {
+                msg += d.message + "; ";
+            }
+            throw CommandFailure{CommandFailureCode::InvalidArgument, msg};
+        }
+        primitiveAlignment = std::move(*alignRes);
     }
 
-    // Rebuild protected anchors.
-    std::vector<ProtectedAnchor> anchors;
     for (const auto& a : existing.protectedAnchors) {
         ProtectedAnchor pa;
         pa.station = a.station;
@@ -2090,22 +2190,35 @@ RoadRecord RoadService::refitRoad(
         anchors.push_back(pa);
     }
 
-    // Fit the alignment (pure geometry, no new RoadId).
-    auto fitResult = fitAlignmentOnly(polyline, anchors,
-        positionTolerance, maxCurvature);
-    if (!fitResult.alignment.has_value()) {
-        std::string msg = "road refit failed: ";
-        for (const auto& d : fitResult.diagnostics) {
-            msg += std::string(roadErrorCodeName(d.code)) + ": " + d.message + "; ";
+    ReferenceAlignment alignmentToUse;
+    if (primitiveAlignment.has_value()) {
+        alignmentToUse = std::move(*primitiveAlignment);
+    } else {
+        std::vector<ConditionedVertex> polyline;
+        for (const auto& v : fitVertices) {
+            ConditionedVertex cv;
+            cv.position = AlignmentPoint{v.x, v.y};
+            polyline.push_back(cv);
         }
-        throw CommandFailure{CommandFailureCode::InvalidArgument, msg};
+
+        auto fitResult = fitAlignmentOnly(polyline, anchors,
+            positionTolerance, maxCurvature);
+        if (!fitResult.alignment.has_value()) {
+            std::string msg = "road refit failed: ";
+            for (const auto& d : fitResult.diagnostics) {
+                msg += std::string(roadErrorCodeName(d.code)) + ": " + d.message + "; ";
+            }
+            throw CommandFailure{CommandFailureCode::InvalidArgument, msg};
+        }
+        alignmentToUse = std::move(*fitResult.alignment);
+        anchorBoundaries = std::move(fitResult.anchorBoundarySegments);
     }
 
     // Rebuild the road preserving ALL existing state except the alignment.
     Road::BuildInput roadInput;
     roadInput.id = existing.id;  // Blocker 1: preserve existing RoadId
     roadInput.displayName = existing.displayName;  // Blocker 2: preserve name
-    roadInput.alignment = std::move(*fitResult.alignment);
+    roadInput.alignment = std::move(alignmentToUse);
 
     // Blocker 2: preserve source geometry and provenance.
     for (const auto& v : existing.sourceVertices) {
@@ -2161,7 +2274,8 @@ RoadRecord RoadService::refitRoad(
     // constant. Update with the parameters used for this refit.
     record.positionTolerance = positionTolerance;
     record.maxCurvature = maxCurvature;
-    record.anchorBoundarySegments = std::move(fitResult.anchorBoundarySegments);
+    record.anchorBoundarySegments = std::move(anchorBoundaries);
+    record.constructionKind = existing.constructionKind;
     return record;
 }
 

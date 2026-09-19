@@ -767,7 +767,7 @@ std::vector<domain::road::RoadRecord> SqliteProjectStore::roadsImpl() const {
     std::vector<domain::road::RoadRecord> roads;
     SqliteStatement roadRows{*connection_,
         "SELECT id, display_name, created_at, modified_at, position_tolerance, max_curvature, "
-        "anchor_boundary_segments "
+        "anchor_boundary_segments, construction_kind "
         "FROM roads ORDER BY created_at"};
     while (roadRows.step()) {
         domain::road::RoadRecord road;
@@ -785,6 +785,8 @@ std::vector<domain::road::RoadRecord> SqliteProjectStore::roadsImpl() const {
             fail(ports::StoreErrorCategory::PersistenceFailure,
                 "roads.anchor_boundary_segments must be a JSON array");
         }
+        const auto cKind = domain::road::roadConstructionKindFromName(roadRows.columnText(7));
+        road.constructionKind = cKind.value_or(domain::road::RoadConstructionKind::Fitted);
         for (const auto& value : boundaryJson) {
             if (!value.is_number_unsigned()) {
                 fail(ports::StoreErrorCategory::PersistenceFailure,
@@ -976,8 +978,8 @@ domain::road::RoadRecord SqliteProjectStore::insertRoadImpl(
 
         SqliteStatement insertRoad{*connection_,
             "INSERT INTO roads (id, display_name, created_at, modified_at, "
-            "position_tolerance, max_curvature, anchor_boundary_segments) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)"};
+            "position_tolerance, max_curvature, anchor_boundary_segments, construction_kind) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)"};
         insertRoad.bindText(1, roadIdText);
         insertRoad.bindText(2, road.displayName);
         insertRoad.bindText(3, road.createdAt.empty() ? modifiedAt : road.createdAt);
@@ -990,6 +992,7 @@ domain::road::RoadRecord SqliteProjectStore::insertRoadImpl(
             insertRoad.bindNull(6);
         }
         insertRoad.bindText(7, nlohmann::json(road.anchorBoundarySegments).dump());
+        insertRoad.bindText(8, domain::road::roadConstructionKindName(road.constructionKind));
         (void)insertRoad.step();
 
         // Segments.
@@ -1233,7 +1236,7 @@ domain::road::RoadRecord SqliteProjectStore::updateRoadImpl(
         SqliteStatement updateRoadRow{*connection_,
             "UPDATE roads SET display_name = ?, modified_at = ?, "
             "position_tolerance = ?, max_curvature = ?, "
-            "anchor_boundary_segments = ? WHERE id = ?"};
+            "anchor_boundary_segments = ?, construction_kind = ? WHERE id = ?"};
         updateRoadRow.bindText(1, road.displayName);
         updateRoadRow.bindText(2, modifiedAt);
         // Blocker 7: persist the fitting contract on update.
@@ -1244,7 +1247,8 @@ domain::road::RoadRecord SqliteProjectStore::updateRoadImpl(
             updateRoadRow.bindNull(4);
         }
         updateRoadRow.bindText(5, nlohmann::json(road.anchorBoundarySegments).dump());
-        updateRoadRow.bindText(6, roadIdText);
+        updateRoadRow.bindText(6, domain::road::roadConstructionKindName(road.constructionKind));
+        updateRoadRow.bindText(7, roadIdText);
         (void)updateRoadRow.step();
         if (connection_->lastChanges() != 1) {
             fail(ports::StoreErrorCategory::NotFound,

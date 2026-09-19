@@ -1653,6 +1653,11 @@ void fillRoadSummary(protocol::v1::RoadSummary* out, const RoadSummary& s) {
     out->set_source_id(s.sourceId);
     out->set_protected_anchor_count(s.protectedAnchorCount);
     out->set_revision(s.revision);
+    out->set_start_easting(s.startEasting);
+    out->set_start_northing(s.startNorthing);
+    out->set_end_easting(s.endEasting);
+    out->set_end_northing(s.endNorthing);
+    out->set_construction_kind(s.constructionKind);
 }
 
 void fillRoadDetails(protocol::v1::RoadDetails* out, const RoadDetails& d) {
@@ -1727,6 +1732,7 @@ void fillRoadDetails(protocol::v1::RoadDetails* out, const RoadDetails& d) {
         if (control.elevation.has_value()) projected->set_elevation(*control.elevation);
         projected->set_protected_anchor(control.protectedAnchor);
     }
+    out->set_construction_kind(d.constructionKind);
 }
 
 void fillJunctionInfo(protocol::v1::JunctionInfo* out, const domain::road::JunctionRecord& j) {

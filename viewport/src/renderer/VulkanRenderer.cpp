@@ -177,6 +177,12 @@ void VulkanRenderer::setRoadScene(const RoadScene& scene) {
 
 void VulkanRenderer::postCameraInput(const SurfaceInputEvent& event) {
     std::lock_guard lock{inputMutex_};
+    // Coalesce consecutive pointer-move events in the queue so unrendered
+    // pointer moves never queue up unbounded IPC messages.
+    if (event.pointerMove && !inputQueue_.empty() && inputQueue_.back().pointerMove) {
+        inputQueue_.back() = event;
+        return;
+    }
     // Bounded queue: input arrives at human rates; dropping stale deltas
     // beats unbounded growth if the render thread stalls.
     constexpr std::size_t kMaxQueuedInput = 64;
@@ -279,6 +285,7 @@ void VulkanRenderer::runLoop(std::atomic_bool& running) {
                 std::lock_guard lock{inputMutex_};
                 events.swap(inputQueue_);
             }
+            std::optional<SurfaceInputEvent> latestPointerMove;
             for (const SurfaceInputEvent& event : events) {
                 if (event.primaryClick) {
                     const auto& camera = cameraController_.camera();
@@ -286,13 +293,39 @@ void VulkanRenderer::runLoop(std::atomic_bool& running) {
                         event.screenX, event.screenY, camera.renderOrigin().z);
                     if (world.has_value() && interactionCallback_) {
                         interactionCallback_(ViewportInteraction{
+                            .kind = "primary-click",
                             .easting = world->x,
                             .northing = world->y,
                             .height = world->z,
                             .roadId = roadPass_.pickRoad(*world, camera.renderOrigin())});
                     }
+                } else if (event.pointerMove) {
+                    latestPointerMove = event;
+                } else if (event.pointerLeave) {
+                    latestPointerMove.reset();
+                    if (interactionCallback_) {
+                        interactionCallback_(ViewportInteraction{
+                            .kind = "pointer-leave",
+                            .easting = 0.0,
+                            .northing = 0.0,
+                            .height = 0.0,
+                            .roadId = ""});
+                    }
                 } else {
                     cameraController_.handleInput(event);
+                }
+            }
+            if (latestPointerMove.has_value()) {
+                const auto& camera = cameraController_.camera();
+                const auto world = camera.screenToHorizontalPlane(
+                    latestPointerMove->screenX, latestPointerMove->screenY, camera.renderOrigin().z);
+                if (world.has_value() && interactionCallback_) {
+                    interactionCallback_(ViewportInteraction{
+                        .kind = "pointer-move",
+                        .easting = world->x,
+                        .northing = world->y,
+                        .height = world->z,
+                        .roadId = ""});
                 }
             }
         }

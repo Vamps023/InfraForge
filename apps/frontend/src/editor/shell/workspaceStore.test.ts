@@ -10,12 +10,12 @@ import { useToolStore } from '../tools/toolStore'
 
 beforeEach(() => {
   useToolStore.getState().clearTool()
-  useWorkspaceStore.getState().setWorkspace('terrain')
+  useWorkspaceStore.getState().setWorkspace('roads')
 })
 
 describe('workspaceStore', () => {
-  it('starts on the terrain workspace', () => {
-    expect(useWorkspaceStore.getState().activeWorkspace).toBe('terrain')
+  it('starts on the roads workspace', () => {
+    expect(useWorkspaceStore.getState().activeWorkspace).toBe('roads')
   })
 
   it('switches to a functional workspace', () => {

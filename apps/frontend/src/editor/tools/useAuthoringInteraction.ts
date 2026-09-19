@@ -31,6 +31,8 @@ export function useAuthoringInteraction(deps: AuthoringInteractionDeps) {
   const clearDraft = useAuthoringDraftStore((state) => state.clearDraft)
   const setTool = useAuthoringDraftStore((state) => state.setTool)
 
+  const setHoverPoint = useAuthoringDraftStore((state) => state.setHoverPoint)
+
   const activeToolRef = useRef(activeTool)
   activeToolRef.current = activeTool
   const draftPointsRef = useRef(draftPoints)
@@ -45,7 +47,7 @@ export function useAuthoringInteraction(deps: AuthoringInteractionDeps) {
     const tool = activeTool
     const points = draftPoints
 
-    if (tool === 'select' || points.length === 0) {
+    if (tool === 'select' || (points.length === 0 && !hoverPoint)) {
       window.infraforgeDesktop?.setRoadPreview?.([])
       return
     }
@@ -121,11 +123,29 @@ export function useAuthoringInteraction(deps: AuthoringInteractionDeps) {
     }
   }, [clearDraft])
 
-  // Viewport interaction handler (primary-click)
+  // Viewport interaction handler
   const handleViewportInteraction = useCallback(async (interaction: ViewportInteraction) => {
+    const tool = activeToolRef.current
+    if (interaction.kind === 'pointer-leave') {
+      setHoverPoint(null)
+      return
+    }
+
+    if (interaction.kind === 'pointer-move') {
+      if (tool === 'select') {
+        setHoverPoint(null)
+        return
+      }
+      const rawPoint = { easting: interaction.easting, northing: interaction.northing }
+      const currentPoints = draftPointsRef.current
+      const roads = useRoadStore.getState().roads
+      const endpointCandidates = extractEndpointCandidates(roads, currentPoints)
+      setHoverPoint(rawPoint, endpointCandidates)
+      return
+    }
+
     if (interaction.kind !== 'primary-click') return
 
-    const tool = activeToolRef.current
     const client = deps.getClient()
     const rawPoint = { easting: interaction.easting, northing: interaction.northing }
 
@@ -142,8 +162,8 @@ export function useAuthoringInteraction(deps: AuthoringInteractionDeps) {
 
     const currentPoints = draftPointsRef.current
     const params = roadParamsRef.current
-    const details = useRoadStore.getState().details
-    const endpointCandidates = extractEndpointCandidates(details, currentPoints)
+    const roads = useRoadStore.getState().roads
+    const endpointCandidates = extractEndpointCandidates(roads, currentPoints)
     const snappingConfig = useAuthoringDraftStore.getState().snappingConfig
     const prevPoint = currentPoints.length > 0 ? currentPoints[currentPoints.length - 1] : null
 
@@ -252,7 +272,7 @@ export function useAuthoringInteraction(deps: AuthoringInteractionDeps) {
     } else if (tool === 'road.polyline') {
       addDraftPoint(resolvedPoint, endpointCandidates)
     }
-  }, [deps, addDraftPoint, clearDraft])
+  }, [deps, addDraftPoint, clearDraft, setHoverPoint])
 
   // Explicit commit for polyline (or Enter key)
   const commitCurrentDraft = useCallback(async () => {

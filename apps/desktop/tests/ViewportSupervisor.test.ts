@@ -191,4 +191,24 @@ describe('ViewportSupervisor lifecycle', () => {
     // Regression: the failed start must not leave `starting` stuck.
     await assertStartableAndStoppable(supervisor)
   })
+
+  it('parses and emits primary-click, pointer-move, and pointer-leave interactions', () => {
+    const supervisor = new ViewportSupervisor()
+    const interactions: unknown[] = []
+    supervisor.setInteractionListener((interaction) => interactions.push(interaction))
+
+    // Call private handleInteractionLine via reflection
+    const handleLine = (supervisor as unknown as { handleInteractionLine: (line: string) => void }).handleInteractionLine.bind(supervisor)
+
+    handleLine(JSON.stringify({ kind: 'primary-click', easting: 100, northing: 200, height: 10, roadId: 'road-1' }))
+    handleLine(JSON.stringify({ kind: 'pointer-move', easting: 105, northing: 205, height: 12 }))
+    handleLine(JSON.stringify({ kind: 'pointer-leave' }))
+    handleLine('not json')
+
+    expect(interactions).toEqual([
+      { kind: 'primary-click', easting: 100, northing: 200, height: 10, roadId: 'road-1' },
+      { kind: 'pointer-move', easting: 105, northing: 205, height: 12, roadId: undefined },
+      { kind: 'pointer-leave', easting: 0, northing: 0, height: 0 },
+    ])
+  })
 })

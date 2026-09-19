@@ -11,7 +11,7 @@
 namespace infraforge::persistence {
 namespace {
 
-constexpr std::array<MigrationDefinition, 11> kCanonicalMigrations{{
+constexpr std::array<MigrationDefinition, 13> kCanonicalMigrations{{
     {
         .id = 1,
         .name = "core project foundation",
@@ -243,6 +243,73 @@ CREATE TABLE road_width_breakpoints (
     right_width REAL NOT NULL CHECK (right_width >= 0),
     PRIMARY KEY (road_id, breakpoint_index),
     FOREIGN KEY (road_id) REFERENCES roads(id) ON DELETE CASCADE
+);
+)sql",
+    },
+    {
+        .id = 12,
+        .name = "road lane sections and lanes",
+        .sql = R"sql(
+CREATE TABLE road_lane_sections (
+    road_id TEXT NOT NULL,
+    section_index INTEGER NOT NULL CHECK (section_index >= 0),
+    start_station REAL NOT NULL CHECK (start_station >= 0),
+    end_station REAL NOT NULL CHECK (end_station >= start_station),
+    PRIMARY KEY (road_id, section_index),
+    FOREIGN KEY (road_id) REFERENCES roads(id) ON DELETE CASCADE
+);
+
+CREATE TABLE road_lanes (
+    road_id TEXT NOT NULL,
+    section_index INTEGER NOT NULL,
+    lane_id TEXT NOT NULL,
+    side TEXT NOT NULL CHECK (side IN ('left', 'right')),
+    lane_index INTEGER NOT NULL CHECK (lane_index >= 1),
+    type TEXT NOT NULL,
+    direction TEXT NOT NULL,
+    width REAL NOT NULL CHECK (width >= 0),
+    PRIMARY KEY (road_id, section_index, side, lane_index),
+    FOREIGN KEY (road_id) REFERENCES roads(id) ON DELETE CASCADE
+);
+)sql",
+    },
+    {
+        .id = 13,
+        .name = "junctions topology and connections",
+        .sql = R"sql(
+CREATE TABLE junctions (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    type TEXT NOT NULL,
+    pos_x REAL NOT NULL,
+    pos_y REAL NOT NULL,
+    elevation REAL NOT NULL DEFAULT 0.0,
+    revision INTEGER NOT NULL CHECK (revision >= 1)
+);
+
+CREATE TABLE junction_approaches (
+    junction_id TEXT NOT NULL,
+    approach_index INTEGER NOT NULL CHECK (approach_index >= 0),
+    road_id TEXT NOT NULL,
+    contact_point TEXT NOT NULL CHECK (contact_point IN ('start', 'end')),
+    entry_point_x REAL NOT NULL,
+    entry_point_y REAL NOT NULL,
+    heading REAL NOT NULL,
+    lane_ids TEXT NOT NULL DEFAULT '[]',
+    PRIMARY KEY (junction_id, approach_index),
+    FOREIGN KEY (junction_id) REFERENCES junctions(id) ON DELETE CASCADE
+);
+
+CREATE TABLE junction_connections (
+    id TEXT PRIMARY KEY,
+    junction_id TEXT NOT NULL,
+    from_road_id TEXT NOT NULL,
+    from_lane_id TEXT NOT NULL,
+    to_road_id TEXT NOT NULL,
+    to_lane_id TEXT NOT NULL,
+    movement_type TEXT NOT NULL,
+    allowed INTEGER NOT NULL CHECK (allowed IN (0, 1)),
+    FOREIGN KEY (junction_id) REFERENCES junctions(id) ON DELETE CASCADE
 );
 )sql",
     },

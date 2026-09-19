@@ -3,6 +3,7 @@ import { X } from 'lucide-react'
 import type { EngineClient } from '../../lib/engineSession'
 import { createRoad, listRoads } from './roadApi'
 import { useRoadToolStore } from './roadToolStore'
+import { useSelectionStore } from '../../editor/selection/selectionStore'
 
 interface CreateRoadDialogProps {
   client: EngineClient
@@ -73,8 +74,11 @@ export function CreateRoadDialog({ client, onClose }: CreateRoadDialogProps) {
 
     setCreating(true)
     try {
-      await createRoad(client, name.trim(), eastings, northings, tol)
+      const road = await createRoad(client, name.trim(), eastings, northings, tol)
       await listRoads(client)
+      if (road?.roadId) {
+        useSelectionStore.getState().select([`road:${road.roadId}`])
+      }
       onClose()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create road.')

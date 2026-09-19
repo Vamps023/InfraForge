@@ -1,6 +1,7 @@
 #pragma once
 
 #include "infraforge/domain/project/ProjectModel.hpp"
+#include "infraforge/domain/road/JunctionRecord.hpp"
 #include "infraforge/domain/road/RoadRecord.hpp"
 #include "infraforge/domain/terrain/TerrainDataset.hpp"
 
@@ -110,6 +111,20 @@ public:
     // Removes a road and all its segments/profiles/source data, advancing
     // the project revision.
     virtual void removeRoad(const std::string& roadId) = 0;
+
+    // Canonical junctions of the open project.
+    [[nodiscard]] virtual std::vector<domain::road::JunctionRecord> junctions() const = 0;
+
+    // Persists a new canonical junction and advances the project revision.
+    [[nodiscard]] virtual domain::road::JunctionRecord insertJunction(
+        const domain::road::JunctionRecord& junction) = 0;
+
+    // Replaces an existing junction record and advances the project revision.
+    [[nodiscard]] virtual domain::road::JunctionRecord updateJunction(
+        const domain::road::JunctionRecord& junction) = 0;
+
+    // Removes a junction, advancing the project revision.
+    virtual void removeJunction(const std::string& junctionId) = 0;
 
     // Flushes and closes the active project session.
     virtual void close() = 0;

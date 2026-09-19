@@ -323,4 +323,142 @@ TEST_CASE("source vertex with missing elevation round-trips as absent z") {
     (void)store.close();
 }
 
+TEST_CASE("lane sections and lanes round-trip through SQLite store") {
+    infraforge::testhelpers::ScratchDirectory scratch;
+    infraforge::persistence::SqliteProjectStore store;
+    (void)store.create(infraforge::testhelpers::sampleCreateSpec(scratch.path()));
+
+    LineSegment line{.start = {0.0, 0.0}, .heading = 0.0, .length = 200.0};
+    auto alignment = ReferenceAlignment::build({line});
+    REQUIRE(alignment.has_value());
+
+    Road::BuildInput input{
+        .id = makeRoadId("aaaaaaaa-1111-2222-3333-444444444444"),
+        .displayName = "Lane Test Road",
+        .alignment = *alignment,
+    };
+    auto road = Road::build(std::move(input));
+    REQUIRE(road.has_value());
+
+    auto record = toRecord(*road);
+    REQUIRE(record.laneSections.size() == 1);
+    REQUIRE(record.lanes.size() == 2);
+
+    record.laneSections = {
+        {0, 0.0, 100.0},
+        {1, 100.0, 200.0},
+    };
+    record.lanes = {
+        {"lane-l1", 0, "left", 1, "driving", "backward", 3.5},
+        {"lane-r1", 0, "right", 1, "driving", "forward", 3.5},
+        {"lane-l1-s2", 1, "left", 1, "driving", "backward", 3.75},
+        {"lane-l2-s2", 1, "left", 2, "biking", "backward", 1.5},
+        {"lane-r1-s2", 1, "right", 1, "driving", "forward", 3.75},
+        {"lane-r2-s2", 1, "right", 2, "biking", "forward", 1.5},
+    };
+
+    (void)store.insertRoad(record);
+    (void)store.save();
+    (void)store.close();
+
+    const auto projectDirectory = scratch.path() / "Test Project.iforge";
+    (void)store.open(projectDirectory);
+    auto roads = store.roads();
+    REQUIRE(roads.size() == 1);
+    const auto& restored = roads[0];
+    REQUIRE(restored.laneSections.size() == 2);
+    CHECK(restored.laneSections[0].startStation == 0.0);
+    CHECK(restored.laneSections[0].endStation == 100.0);
+    CHECK(restored.laneSections[1].startStation == 100.0);
+    CHECK(restored.laneSections[1].endStation == 200.0);
+
+    REQUIRE(restored.lanes.size() == 6);
+    CHECK(restored.lanes[0].laneId == "lane-l1");
+    CHECK(restored.lanes[0].side == "left");
+    CHECK(restored.lanes[1].laneId == "lane-r1");
+    CHECK(restored.lanes[1].side == "right");
+    CHECK(restored.lanes[3].laneId == "lane-l2-s2");
+    CHECK(restored.lanes[3].type == "biking");
+    CHECK(restored.lanes[3].width == doctest::Approx(1.5));
+    (void)store.close();
+}
+
+TEST_CASE("junctions round-trip through SQLite store") {
+    infraforge::testhelpers::ScratchDirectory scratch;
+    infraforge::persistence::SqliteProjectStore store;
+    (void)store.create(infraforge::testhelpers::sampleCreateSpec(scratch.path()));
+
+    infraforge::domain::road::JunctionRecord j;
+    j.id = infraforge::domain::road::junctionIdFromUuidText("99999999-8888-7777-6666-555555555555");
+    j.name = "Downtown Intersection";
+    j.type = "four_way";
+    j.posX = 150.0;
+    j.posY = 250.0;
+    j.elevation = 45.0;
+    j.revision = 1;
+
+    infraforge::domain::road::JunctionApproachRecord app1;
+    app1.roadId = "road-1";
+    app1.contactPoint = "end";
+    app1.entryPointX = 150.0;
+    app1.entryPointY = 240.0;
+    app1.heading = 1.57;
+    app1.laneIds = {"l1", "r1"};
+
+    infraforge::domain::road::JunctionApproachRecord app2;
+    app2.roadId = "road-2";
+    app2.contactPoint = "start";
+    app2.entryPointX = 150.0;
+    app2.entryPointY = 260.0;
+    app2.heading = 4.71;
+    app2.laneIds = {"l1", "r1"};
+
+    j.approaches = {app1, app2};
+
+    infraforge::domain::road::JunctionConnectionRecord conn1;
+    conn1.id = "conn-1";
+    conn1.fromRoadId = "road-1";
+    conn1.fromLaneId = "r1";
+    conn1.toRoadId = "road-2";
+    conn1.toLaneId = "r1";
+    conn1.movementType = "straight";
+    conn1.allowed = true;
+
+    j.connections = {conn1};
+
+    auto inserted = store.insertJunction(j);
+    CHECK(inserted.name == "Downtown Intersection");
+    auto junctions = store.junctions();
+    REQUIRE(junctions.size() == 1);
+    CHECK(junctions[0].approaches.size() == 2);
+    CHECK(junctions[0].approaches[0].laneIds.size() == 2);
+    CHECK(junctions[0].connections.size() == 1);
+    CHECK(junctions[0].connections[0].movementType == "straight");
+
+    // Update junction
+    j.name = "Updated Intersection";
+    j.elevation = 48.0;
+    auto updated = store.updateJunction(j);
+    CHECK(updated.name == "Updated Intersection");
+    CHECK(updated.elevation == doctest::Approx(48.0));
+
+    // Save and reopen
+    (void)store.save();
+    (void)store.close();
+
+    const auto projectDirectory = scratch.path() / "Test Project.iforge";
+    (void)store.open(projectDirectory);
+    auto reopenedJunctions = store.junctions();
+    REQUIRE(reopenedJunctions.size() == 1);
+    CHECK(reopenedJunctions[0].name == "Updated Intersection");
+    CHECK(reopenedJunctions[0].elevation == doctest::Approx(48.0));
+    CHECK(reopenedJunctions[0].approaches.size() == 2);
+    CHECK(reopenedJunctions[0].connections.size() == 1);
+
+    // Delete junction
+    store.removeJunction("99999999-8888-7777-6666-555555555555");
+    CHECK(store.junctions().empty());
+    (void)store.close();
+}
+
 } // TEST_SUITE

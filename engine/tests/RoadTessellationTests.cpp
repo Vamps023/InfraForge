@@ -290,4 +290,181 @@ TEST_CASE("tessellateRoad rejects negative halfWidth") {
     CHECK(tess.isEmpty());
 }
 
+TEST_CASE("tessellateRoad budget: mandatory station count below maximumCrossSections") {
+    // 2 mandatory stations: 0.0 and 100.0
+    auto alignment = makeStraightAlignment(100.0);
+    RoadTessellationParams params;
+    params.stationInterval = 50.0;
+    params.maximumCrossSections = 10;
+
+    auto tess = tessellateRoad(alignment, {}, {}, params);
+    CHECK_FALSE(tess.isEmpty());
+    CHECK(tess.crossSectionCount() == 3); // 0, 50, 100
+}
+
+TEST_CASE("tessellateRoad budget: mandatory station count exactly equal to maximumCrossSections") {
+    // 3 mandatory stations: 0.0, 50.0, 100.0
+    LineSegment first{.start = {0.0, 0.0}, .heading = 0.0, .length = 50.0};
+    LineSegment second{.start = {50.0, 0.0}, .heading = 0.0, .length = 50.0};
+    auto alignment = ReferenceAlignment::build({first, second});
+    REQUIRE(alignment.has_value());
+
+    RoadTessellationParams params;
+    params.stationInterval = 100.0; // No additional interior seeding
+    params.maximumCrossSections = 3;
+
+    auto tess = tessellateRoad(*alignment, {}, {}, params);
+    CHECK_FALSE(tess.isEmpty());
+    CHECK(tess.crossSectionCount() == 3);
+}
+
+TEST_CASE("tessellateRoad budget: mandatory station count maximumCrossSections plus one") {
+    // 3 mandatory stations: 0.0, 50.0, 100.0
+    LineSegment first{.start = {0.0, 0.0}, .heading = 0.0, .length = 50.0};
+    LineSegment second{.start = {50.0, 0.0}, .heading = 0.0, .length = 50.0};
+    auto alignment = ReferenceAlignment::build({first, second});
+    REQUIRE(alignment.has_value());
+
+    RoadTessellationParams params;
+    params.stationInterval = 100.0;
+    params.maximumCrossSections = 2; // Budget is 2, mandatory is 3 -> must fail safely
+
+    auto tess = tessellateRoad(*alignment, {}, {}, params);
+    CHECK(tess.isEmpty());
+}
+
+TEST_CASE("tessellateRoad budget: many alignment segment boundaries") {
+    std::vector<AlignmentSegment> segments;
+    for (int i = 0; i < 50; ++i) {
+        segments.push_back(LineSegment{
+            .start = {static_cast<double>(i * 10), 0.0},
+            .heading = 0.0,
+            .length = 10.0});
+    }
+    auto alignment = ReferenceAlignment::build(segments);
+    REQUIRE(alignment.has_value());
+
+    RoadTessellationParams params;
+    params.stationInterval = 20.0;
+    // 51 mandatory stations (0, 10, 20, ..., 500)
+    params.maximumCrossSections = 50; // Underflow guard: 50 < 51
+    CHECK(tessellateRoad(*alignment, {}, {}, params).isEmpty());
+
+    params.maximumCrossSections = 60; // 60 >= 51
+    auto tess = tessellateRoad(*alignment, {}, {}, params);
+    CHECK_FALSE(tess.isEmpty());
+    CHECK(tess.crossSectionCount() == 51);
+}
+
+TEST_CASE("tessellateRoad budget: many elevation breakpoints") {
+    auto alignment = makeStraightAlignment(100.0);
+    std::vector<ProfileBreakpoint> bps;
+    for (int i = 0; i <= 30; ++i) {
+        bps.push_back({static_cast<double>(i) * 3.0, static_cast<double>(i) * 0.5});
+    }
+    auto elevation = buildElevationProfile(bps);
+    REQUIRE(elevation.has_value());
+
+    RoadTessellationParams params;
+    params.stationInterval = 50.0;
+    params.maximumCrossSections = 20; // 32 mandatory stations > 20
+    CHECK(tessellateRoad(alignment, *elevation, {}, params).isEmpty());
+
+    params.maximumCrossSections = 100;
+    auto tess = tessellateRoad(alignment, *elevation, {}, params);
+    CHECK_FALSE(tess.isEmpty());
+}
+
+TEST_CASE("tessellateRoad budget: many superelevation breakpoints") {
+    auto alignment = makeStraightAlignment(100.0);
+    std::vector<ProfileBreakpoint> bps;
+    for (int i = 0; i <= 25; ++i) {
+        bps.push_back({static_cast<double>(i) * 3.5, 0.02 * (i % 2 == 0 ? 1.0 : -1.0)});
+    }
+    auto superelev = buildSuperelevationProfile(bps);
+    REQUIRE(superelev.has_value());
+
+    RoadTessellationParams params;
+    params.stationInterval = 50.0;
+    params.maximumCrossSections = 20;
+    CHECK(tessellateRoad(alignment, {}, *superelev, params).isEmpty());
+
+    params.maximumCrossSections = 50;
+    CHECK_FALSE(tessellateRoad(alignment, {}, *superelev, params).isEmpty());
+}
+
+TEST_CASE("tessellateRoad budget: many width breakpoints") {
+    auto alignment = makeStraightAlignment(100.0);
+    std::vector<RoadWidthBreakpoint> bps;
+    for (int i = 0; i <= 25; ++i) {
+        bps.push_back({static_cast<double>(i) * 3.5, 4.0 + (i % 3), 4.0 + (i % 2)});
+    }
+    auto width = buildRoadWidthProfile(bps);
+    REQUIRE(width.has_value());
+
+    RoadTessellationParams params;
+    params.stationInterval = 50.0;
+    params.maximumCrossSections = 20;
+    CHECK(tessellateRoad(alignment, {}, {}, *width, params).isEmpty());
+
+    params.maximumCrossSections = 50;
+    CHECK_FALSE(tessellateRoad(alignment, {}, {}, *width, params).isEmpty());
+}
+
+TEST_CASE("tessellateRoad budget: very small stationInterval fails safely when exceeding maximumCrossSections") {
+    auto alignment = makeStraightAlignment(1000.0);
+    RoadTessellationParams params;
+    params.stationInterval = 0.001; // 1,000,000 pieces
+    params.maximumCrossSections = 1000;
+
+    auto tess = tessellateRoad(alignment, {}, {}, params);
+    CHECK(tess.isEmpty());
+}
+
+TEST_CASE("tessellateRoad budget: very large road length fails safely if exceeding budget") {
+    auto alignment = makeStraightAlignment(1'000'000.0); // 1,000 km
+    RoadTessellationParams params;
+    params.stationInterval = 10.0; // 100,000 pieces
+    params.maximumCrossSections = 1000;
+
+    auto tess = tessellateRoad(alignment, {}, {}, params);
+    CHECK(tess.isEmpty());
+}
+
+TEST_CASE("tessellateRoad rejects non-finite tessellation parameters") {
+    auto alignment = makeStraightAlignment(100.0);
+    RoadTessellationParams params;
+
+    params.maximumSurfaceError = std::numeric_limits<double>::quiet_NaN();
+    CHECK(tessellateRoad(alignment, {}, {}, params).isEmpty());
+
+    params.maximumSurfaceError = 0.05;
+    params.halfWidth = std::numeric_limits<double>::infinity();
+    CHECK(tessellateRoad(alignment, {}, {}, params).isEmpty());
+
+    params.halfWidth = 5.0;
+    params.maximumCrossSections = 1; // less than 2
+    CHECK(tessellateRoad(alignment, {}, {}, params).isEmpty());
+}
+
+TEST_CASE("tessellateRoad produces deterministic repeated tessellation") {
+    auto alignment = makeArcAlignment(200.0, 300.0);
+    RoadTessellationParams params;
+    params.stationInterval = 10.0;
+    params.maximumSurfaceError = 0.02;
+
+    auto tess1 = tessellateRoad(alignment, {}, {}, params);
+    auto tess2 = tessellateRoad(alignment, {}, {}, params);
+
+    REQUIRE_FALSE(tess1.isEmpty());
+    REQUIRE(tess1.crossSectionCount() == tess2.crossSectionCount());
+    REQUIRE(tess1.triangleCount() == tess2.triangleCount());
+    for (std::size_t i = 0; i < tess1.crossSectionCount(); ++i) {
+        CHECK(tess1.crossSections[i].station == tess2.crossSections[i].station);
+        CHECK(tess1.crossSections[i].center.easting == tess2.crossSections[i].center.easting);
+        CHECK(tess1.crossSections[i].center.northing == tess2.crossSections[i].center.northing);
+        CHECK(tess1.crossSections[i].heading == tess2.crossSections[i].heading);
+    }
+}
+
 } // namespace infraforge::domain::road

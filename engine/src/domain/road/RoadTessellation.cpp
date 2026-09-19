@@ -122,16 +122,34 @@ RoadTessellation tessellateRoad(
     std::sort(stations.begin(), stations.end());
     stations.erase(std::unique(stations.begin(), stations.end()), stations.end());
 
+    // Blocker: If mandatory stations alone exceed the configured budget,
+    // fail deterministically without expensive additional subdivision.
+    if (stations.size() > params.maximumCrossSections) {
+        return tess;
+    }
+
     std::vector<Station> seededStations;
     seededStations.reserve(stations.size());
     seededStations.push_back(stations.front());
     for (std::size_t index = 0; index + 1 < stations.size(); ++index) {
         const double start = stations[index];
         const double span = stations[index + 1] - start;
+        if (span <= 0.0 || !std::isfinite(span)) {
+            return tess;
+        }
         const double piecesRequired = std::ceil(span / params.stationInterval);
+        if (!std::isfinite(piecesRequired) || piecesRequired < 1.0) {
+            return tess;
+        }
+        if (seededStations.size() >= params.maximumCrossSections) {
+            return tess;
+        }
         const std::size_t remaining = params.maximumCrossSections - seededStations.size();
-        if (!std::isfinite(piecesRequired) || piecesRequired < 1.0
-            || piecesRequired > static_cast<double>(remaining)) return tess;
+        const std::size_t remainingSegments = (stations.size() - 1) - (index + 1);
+        if (piecesRequired > static_cast<double>(remaining)
+            || static_cast<std::size_t>(piecesRequired) + remainingSegments > remaining) {
+            return tess;
+        }
         const std::size_t pieces = static_cast<std::size_t>(piecesRequired);
         for (std::size_t piece = 1; piece <= pieces; ++piece) {
             seededStations.push_back(start + span * static_cast<double>(piece) / static_cast<double>(pieces));
@@ -160,15 +178,18 @@ RoadTessellation tessellateRoad(
                 interval.start, midpoint, interval.end) > params.maximumSurfaceError;
             if (requiresRefinement && midpointStation > interval.start.station
                 && midpointStation < interval.end.station) {
-                if (tess.crossSections.size() + pending.size() + 2 > params.maximumCrossSections) {
+                const std::size_t remainingSegments = (stations.size() - 1) - (index + 1);
+                if (tess.crossSections.size() + pending.size() + 2 + remainingSegments > params.maximumCrossSections) {
                     return {};
                 }
                 // LIFO: push right first so output remains station ordered.
                 pending.push_back({midpoint, interval.end});
                 pending.push_back({interval.start, midpoint});
             } else {
+                if (tess.crossSections.size() >= params.maximumCrossSections) {
+                    return {};
+                }
                 tess.crossSections.push_back(interval.end);
-                if (tess.crossSections.size() > params.maximumCrossSections) return {};
             }
         }
     }

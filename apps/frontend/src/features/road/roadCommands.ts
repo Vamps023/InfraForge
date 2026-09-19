@@ -2,7 +2,7 @@ import { commandRegistry, type CommandDefinition } from '../../editor/commands/c
 import { useShellUiStore } from '../../editor/shell/shellUiStore'
 import { useSelectionStore } from '../../editor/selection/selectionStore'
 import type { EngineClient } from '../../lib/engineSession'
-import { deleteRoad, fitRoadSource, undoRoadEdit, redoRoadEdit } from './roadApi'
+import { deleteRoad, fitRoadSource, undoRoadEdit, redoRoadEdit, deleteJunction } from './roadApi'
 import { useRoadStore } from './roadStore'
 import { useRoadToolStore } from './roadToolStore'
 import { useAuthoringDraftStore } from '../../editor/tools/authoringDraftStore'
@@ -18,6 +18,29 @@ export interface RoadCommandDeps {
 }
 
 export function registerRoadCommands(deps: RoadCommandDeps): void {
+  const finishRoadDrawing = async () => {
+    const client = deps.getEngineClient()
+    if (!client) return
+    const draft = useRoadToolStore.getState()
+    if (draft.mode !== 'drawing' || draft.points.length < 2 || draft.positionTolerance === null) return
+    const road = await createRoad(
+      client,
+      draft.name,
+      draft.points.map((p) => p.easting),
+      draft.points.map((p) => p.northing),
+      draft.positionTolerance,
+      [],
+      [],
+      draft.maxCurvature ?? undefined,
+    )
+    draft.cancel()
+    if (road?.roadId) {
+      useSelectionStore.getState().select([`road:${road.roadId}`])
+    }
+  }
+
+  useRoadToolStore.getState().setFinishCallback(finishRoadDrawing)
+
   const defs: CommandDefinition[] = [
     {
       id: 'road.tool.select',
@@ -105,23 +128,25 @@ export function registerRoadCommands(deps: RoadCommandDeps): void {
     {
       id: 'road.finish-drawing',
       label: 'Finish Road',
-      category: 'Road', group: 'road', surfaces: ['toolbar', 'palette'],
-      requiresEngine: true, requiresProject: true,
-      enabled: () => useRoadToolStore.getState().mode === 'drawing' &&
+      description: 'Finish road alignment drawing and create the road.',
+      category: 'Road',
+      group: 'road',
+      surfaces: ['toolbar', 'palette', 'shortcut'],
+      shortcut: { key: 'Enter', display: 'Enter' },
+      requiresEngine: true,
+      requiresProject: true,
+      enabled: () =>
+        useRoadToolStore.getState().mode === 'drawing' &&
         useRoadToolStore.getState().points.length >= 2,
-      execute: async () => {
-        const client = deps.getEngineClient(); if (!client) return
-        const draft = useRoadToolStore.getState()
-        if (draft.mode !== 'drawing' || draft.points.length < 2 || draft.positionTolerance === null) return
-        await createRoad(client, draft.name, draft.points.map((p) => p.easting),
-          draft.points.map((p) => p.northing), draft.positionTolerance, [], [],
-          draft.maxCurvature ?? undefined)
-        draft.cancel()
-      },
+      execute: finishRoadDrawing,
     },
     {
-      id: 'road.cancel-drawing', label: 'Cancel Road Drawing', category: 'Road', group: 'road',
-      surfaces: ['toolbar', 'palette'], requiresProject: true,
+      id: 'road.cancel-drawing',
+      label: 'Cancel Road Drawing',
+      category: 'Road',
+      group: 'road',
+      surfaces: ['toolbar', 'palette'],
+      requiresProject: true,
       enabled: () => useRoadToolStore.getState().mode === 'drawing',
       execute: () => useRoadToolStore.getState().cancel(),
     },
@@ -226,6 +251,28 @@ export function registerRoadCommands(deps: RoadCommandDeps): void {
         await fitRoadSource(client, roadId)
       },
     },
+    {
+      id: 'junction.delete',
+      label: 'Delete Junction',
+      description: 'Delete the selected junction.',
+      category: 'Road',
+      group: 'road',
+      surfaces: ['menu', 'palette'],
+      requiresEngine: true,
+      requiresProject: true,
+      enabled: () => {
+        const id = useSelectionStore.getState().primaryId
+        return id !== null && id.startsWith('junction:')
+      },
+      execute: async () => {
+        const client = deps.getEngineClient()
+        if (!client) return
+        const id = useSelectionStore.getState().primaryId
+        if (!id || !id.startsWith('junction:')) return
+        const junctionId = id.slice('junction:'.length)
+        await deleteJunction(client, junctionId)
+      },
+    },
   ]
 
   for (const def of defs) {
@@ -234,6 +281,7 @@ export function registerRoadCommands(deps: RoadCommandDeps): void {
 }
 
 export function unregisterRoadCommands(): void {
+  useRoadToolStore.getState().setFinishCallback(null)
   commandRegistry.unregister('road.create')
   commandRegistry.unregister('road.delete')
   commandRegistry.unregister('road.rename')
@@ -242,4 +290,5 @@ export function unregisterRoadCommands(): void {
   commandRegistry.unregister('road.fit-source')
   commandRegistry.unregister('road.finish-drawing')
   commandRegistry.unregister('road.cancel-drawing')
+  commandRegistry.unregister('junction.delete')
 }

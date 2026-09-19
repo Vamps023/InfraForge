@@ -47,6 +47,36 @@ std::expected<Road, std::vector<RoadDiagnostic>> Road::build(BuildInput input) {
         validateProfileStationRange("elevation", input.elevation.breakpoints(), totalLength, diagnostics);
         validateProfileStationRange("superelevation", input.superelevation.breakpoints(), totalLength, diagnostics);
         validateProfileStationRange("width", input.width.breakpoints(), totalLength, diagnostics);
+
+        if (input.laneSections.empty()) {
+            RoadLane leftLane{
+                .id = "lane-l1",
+                .side = LaneSide::Left,
+                .laneIndex = 1,
+                .type = LaneType::Driving,
+                .direction = LaneDirection::Backward,
+                .width = input.width.evaluate(0.0).left,
+            };
+            RoadLane rightLane{
+                .id = "lane-r1",
+                .side = LaneSide::Right,
+                .laneIndex = 1,
+                .type = LaneType::Driving,
+                .direction = LaneDirection::Forward,
+                .width = input.width.evaluate(0.0).right,
+            };
+            input.laneSections.push_back(RoadLaneSection{
+                .startStation = 0.0,
+                .endStation = totalLength,
+                .leftLanes = {std::move(leftLane)},
+                .rightLanes = {std::move(rightLane)},
+            });
+        }
+
+        auto laneDiagnostics = validateLaneSections(totalLength, input.laneSections);
+        for (auto& d : laneDiagnostics) {
+            diagnostics.push_back(std::move(d));
+        }
     }
     if (input.id.isNull()) {
         diagnostics.push_back({RoadErrorCode::InvalidArgument, "road id must not be null"});

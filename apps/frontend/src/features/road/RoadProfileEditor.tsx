@@ -5,14 +5,15 @@ import { useSelectionStore } from '../../editor/selection/selectionStore'
 import { conformRoadToTerrain, getRoad, updateRoadElevation, updateRoadSuperelevation, updateRoadWidth } from './roadApi'
 import { contextEditorRegistry } from '../../editor/contextEditor/contextEditorRegistry'
 import type { EngineClient } from '../../lib/engineSession'
+import { RoadLaneEditor } from './RoadLaneEditor'
 
 export interface RoadProfileEditorProps { getEngineClient: () => EngineClient | null }
-type ProfileKind = 'elevation' | 'superelevation' | 'width'
+type ProfileKind = 'elevation' | 'superelevation' | 'width' | 'lanes'
 interface DraftBreakpoint { station: string; value: string; rightValue?: string }
 
 export function registerRoadProfileContextEditor(deps: RoadProfileEditorProps): void {
   contextEditorRegistry.register({
-    id: 'road-profile', label: 'Road Vertical Profile',
+    id: 'road-profile', label: 'Road Profiles & Cross-Sections',
     applies: (ctx) => ctx.activeWorkspace === 'roads' && ctx.selectedIds.some((id) => id.startsWith('road:')),
     render: () => <RoadProfileEditor getEngineClient={deps.getEngineClient} />,
   })
@@ -21,6 +22,7 @@ export function registerRoadProfileContextEditor(deps: RoadProfileEditorProps): 
 export function unregisterRoadProfileContextEditor(): void { contextEditorRegistry.unregister('road-profile') }
 
 function projectedRows(kind: ProfileKind, details: NonNullable<ReturnType<typeof useRoadStore.getState>['details']>): DraftBreakpoint[] {
+  if (kind === 'lanes') return []
   if (kind === 'width') {
     return details.widthBreakpoints.map((breakpoint) => ({
       station: String(breakpoint.station),
@@ -186,6 +188,7 @@ export function RoadProfileEditor({ getEngineClient }: RoadProfileEditorProps) {
   }
 
   const save = async () => {
+    if (kind === 'lanes') return
     const client = getEngineClient()
     if (!client || !matchingDetails) return
     const stations = rows.map((row) => Number(row.station))
@@ -256,46 +259,63 @@ export function RoadProfileEditor({ getEngineClient }: RoadProfileEditorProps) {
       <button type="button" role="tab" aria-selected={kind === 'elevation'} onClick={() => setKind('elevation')}>Elevation</button>
       <button type="button" role="tab" aria-selected={kind === 'superelevation'} onClick={() => setKind('superelevation')}>Superelevation</button>
       <button type="button" role="tab" aria-selected={kind === 'width'} onClick={() => setKind('width')}>Width</button>
-      <button type="button" className="button secondary" onClick={addRow} disabled={submitting || !matchingDetails}>Add breakpoint</button>
-      <button type="button" className="button primary" onClick={() => void save()} disabled={submitting || !matchingDetails}>{submitting ? 'Saving…' : !matchingDetails ? 'Loading details…' : 'Save profile'}</button>
-      {datasets.length > 0 ? (
-        <label>
-          Terrain dataset{' '}
-          <select
-            aria-label="Terrain dataset"
-            value={datasetChoice}
-            onChange={(event) => setDatasetChoice(event.target.value)}
-          >
-            <option value={INHERIT_DATASET_SELECTION}>
-              {selectedDatasetUuid
-                ? `Active selection (${datasets.find((d) => d.datasetUuid === selectedDatasetUuid)?.displayName || selectedDatasetUuid.slice(0, 8)})`
-                : 'Active selection (none)'}
-            </option>
-            <option value={AUTOMATIC_DEFAULT_DATASET}>Automatic / Default dataset</option>
-            {datasets.map((dataset) => (
-              <option key={dataset.datasetUuid} value={dataset.datasetUuid}>
-                {dataset.displayName || dataset.datasetUuid.slice(0, 8)}
-              </option>
-            ))}
-          </select>
-        </label>
+      <button type="button" role="tab" aria-selected={kind === 'lanes'} onClick={() => setKind('lanes')}>Lanes & Cross-Section</button>
+      {kind !== 'lanes' ? (
+        <>
+          <button type="button" className="button secondary" onClick={addRow} disabled={submitting || !matchingDetails}>Add breakpoint</button>
+          <button type="button" className="button primary" onClick={() => void save()} disabled={submitting || !matchingDetails}>{submitting ? 'Saving…' : !matchingDetails ? 'Loading details…' : 'Save profile'}</button>
+          {datasets.length > 0 ? (
+            <label>
+              Terrain dataset{' '}
+              <select
+                aria-label="Terrain dataset"
+                value={datasetChoice}
+                onChange={(event) => setDatasetChoice(event.target.value)}
+              >
+                <option value={INHERIT_DATASET_SELECTION}>
+                  {selectedDatasetUuid
+                    ? `Active selection (${datasets.find((d) => d.datasetUuid === selectedDatasetUuid)?.displayName || selectedDatasetUuid.slice(0, 8)})`
+                    : 'Active selection (none)'}
+                </option>
+                <option value={AUTOMATIC_DEFAULT_DATASET}>Automatic / Default dataset</option>
+                {datasets.map((dataset) => (
+                  <option key={dataset.datasetUuid} value={dataset.datasetUuid}>
+                    {dataset.displayName || dataset.datasetUuid.slice(0, 8)}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
+          <label>Terrain interval <input aria-label="Terrain conformance interval" type="number" min="0.01" step="1" value={terrainInterval} onChange={(event) => setTerrainInterval(event.target.value)} /></label>
+          <label>Surface offset <input aria-label="Terrain conformance offset" type="number" step="0.1" value={terrainOffset} onChange={(event) => setTerrainOffset(event.target.value)} /></label>
+          <button type="button" className="button secondary" onClick={() => void applyTerrainConformance()} disabled={submitting || !matchingDetails}>Conform to terrain</button>
+        </>
       ) : null}
-      <label>Terrain interval <input aria-label="Terrain conformance interval" type="number" min="0.01" step="1" value={terrainInterval} onChange={(event) => setTerrainInterval(event.target.value)} /></label>
-      <label>Surface offset <input aria-label="Terrain conformance offset" type="number" step="0.1" value={terrainOffset} onChange={(event) => setTerrainOffset(event.target.value)} /></label>
-      <button type="button" className="button secondary" onClick={() => void applyTerrainConformance()} disabled={submitting || !matchingDetails}>Conform to terrain</button>
       {feedback ? <span className="profile-feedback" role="status">{feedback}</span> : null}
     </div>
-    {matchingDetails ? <div className="profile-breakpoint-table-wrap"><table className="profile-breakpoint-table">
-      <thead><tr><th>Station (project units)</th><th>{kind === 'elevation' ? 'Elevation (project units)' : kind === 'superelevation' ? 'Superelevation (radians)' : 'Left width'}</th>{kind === 'width' ? <th>Right width</th> : null}<th>Action</th></tr></thead>
-      <tbody>
-        {rows.map((row, index) => <tr key={index}>
-          <td><input aria-label={`Breakpoint ${index + 1} station`} type="number" min="0" max={road.length} step="0.1" value={row.station} onChange={(event) => updateRow(index, 'station', event.target.value)} /></td>
-          <td><input aria-label={`Breakpoint ${index + 1} value`} type="number" min={kind === 'width' ? 0 : undefined} step={kind === 'superelevation' ? '0.001' : '0.1'} value={row.value} onChange={(event) => updateRow(index, 'value', event.target.value)} /></td>
-          {kind === 'width' ? <td><input aria-label={`Breakpoint ${index + 1} right width`} type="number" min="0" step="0.1" value={row.rightValue ?? ''} onChange={(event) => updateRow(index, 'rightValue', event.target.value)} /></td> : null}
-          <td><button type="button" onClick={() => setRows((current) => current.filter((_, rowIndex) => rowIndex !== index))}>Remove</button></td>
-        </tr>)}
-        {rows.length === 0 ? <tr><td colSpan={kind === 'width' ? 4 : 3}>{kind === 'width' ? 'No authored breakpoints. The canonical surface uses the default five-unit width on each side.' : 'No authored breakpoints. The canonical profile evaluates to zero.'}</td></tr> : null}
-      </tbody>
-    </table></div> : <div className="context-editor-empty">Loading canonical road profile…</div>}
+    {kind === 'lanes' ? (
+      matchingDetails ? (
+        <RoadLaneEditor road={road} details={matchingDetails} getEngineClient={getEngineClient} />
+      ) : (
+        <div className="context-editor-empty">Loading road lanes…</div>
+      )
+    ) : matchingDetails ? (
+      <div className="profile-breakpoint-table-wrap">
+        <table className="profile-breakpoint-table">
+          <thead><tr><th>Station (project units)</th><th>{kind === 'elevation' ? 'Elevation (project units)' : kind === 'superelevation' ? 'Superelevation (radians)' : 'Left width'}</th>{kind === 'width' ? <th>Right width</th> : null}<th>Action</th></tr></thead>
+          <tbody>
+            {rows.map((row, index) => <tr key={index}>
+              <td><input aria-label={`Breakpoint ${index + 1} station`} type="number" min="0" max={road.length} step="0.1" value={row.station} onChange={(event) => updateRow(index, 'station', event.target.value)} /></td>
+              <td><input aria-label={`Breakpoint ${index + 1} value`} type="number" min={kind === 'width' ? 0 : undefined} step={kind === 'superelevation' ? '0.001' : '0.1'} value={row.value} onChange={(event) => updateRow(index, 'value', event.target.value)} /></td>
+              {kind === 'width' ? <td><input aria-label={`Breakpoint ${index + 1} right width`} type="number" min="0" step="0.1" value={row.rightValue ?? ''} onChange={(event) => updateRow(index, 'rightValue', event.target.value)} /></td> : null}
+              <td><button type="button" onClick={() => setRows((current) => current.filter((_, rowIndex) => rowIndex !== index))}>Remove</button></td>
+            </tr>)}
+            {rows.length === 0 ? <tr><td colSpan={kind === 'width' ? 4 : 3}>{kind === 'width' ? 'No authored breakpoints. The canonical surface uses the default five-unit width on each side.' : 'No authored breakpoints. The canonical profile evaluates to zero.'}</td></tr> : null}
+          </tbody>
+        </table>
+      </div>
+    ) : (
+      <div className="context-editor-empty">Loading canonical road profile…</div>
+    )}
   </div>
 }

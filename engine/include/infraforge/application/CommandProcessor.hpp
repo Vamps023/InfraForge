@@ -150,6 +150,11 @@ private:
     void handleGetRoad(const std::string& connectionId, const protocol::v1::Frame& frame);
     void handleGetRoadScene(const std::string& connectionId, const protocol::v1::Frame& frame);
     [[nodiscard]] application::TerrainHeightSampler makeTerrainHeightSampler(const std::string& datasetId);
+    void handleUpdateRoadLanes(const std::string& connectionId, const protocol::v1::Frame& frame);
+    void handleCreateJunction(const std::string& connectionId, const protocol::v1::Frame& frame);
+    void handleUpdateJunction(const std::string& connectionId, const protocol::v1::Frame& frame);
+    void handleDeleteJunction(const std::string& connectionId, const protocol::v1::Frame& frame);
+    void handleListJunctions(const std::string& connectionId, const protocol::v1::Frame& frame);
 
     // Executes one service use case, then emits the correlated result frame
     // (state or closed) and the derived event frames. Argument-validation

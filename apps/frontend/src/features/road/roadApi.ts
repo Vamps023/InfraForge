@@ -19,10 +19,19 @@ import {
   GetRoadSceneCommandSchema,
   UndoRoadCommandSchema,
   RedoRoadCommandSchema,
+  UpdateRoadLanesCommandSchema,
+  CreateJunctionCommandSchema,
+  UpdateJunctionCommandSchema,
+  DeleteJunctionCommandSchema,
+  ListJunctionsCommandSchema,
   type CommandEnvelope,
   type RoadSummary,
   type RoadDetails,
   type RoadSceneResult,
+  type RoadLaneSectionInfo,
+  type JunctionInfo,
+  type JunctionApproachInfo,
+  type JunctionConnectionInfo,
 } from '@infraforge/protocol'
 import { CommandErrorCode } from '@infraforge/protocol'
 import { EngineCommandError, type EngineClient } from '../../lib/engineSession'
@@ -481,6 +490,107 @@ export async function redoRoadEdit(
       useRoadStore.getState().removeRoad(outcome.value.roadId)
     }
     return null
+  })
+}
+
+export async function updateRoadLanes(
+  client: EngineClient,
+  roadId: string,
+  laneSections: RoadLaneSectionInfo[],
+): Promise<RoadSummary> {
+  return withRoadError(async () => {
+    const command = create(UpdateRoadLanesCommandSchema, { roadId, laneSections })
+    const outcome = await sendRoadCommand(client, { case: 'updateRoadLanes', value: command })
+    if (outcome.case !== 'updateRoadLanesResult' || !outcome.value.road) {
+      throw expectFailure(outcome)
+    }
+    useRoadStore.getState().upsertRoad(outcome.value.road)
+    return outcome.value.road
+  })
+}
+
+export async function listJunctions(client: EngineClient): Promise<JunctionInfo[]> {
+  return withRoadError(async () => {
+    const command = create(ListJunctionsCommandSchema, {})
+    const outcome = await sendRoadCommand(client, { case: 'listJunctions', value: command })
+    if (outcome.case !== 'listJunctionsResult') {
+      throw expectFailure(outcome)
+    }
+    useRoadStore.getState().setJunctions(outcome.value.junctions)
+    return outcome.value.junctions
+  })
+}
+
+export async function createJunction(
+  client: EngineClient,
+  name: string,
+  posX: number,
+  posY: number,
+  elevation = 0,
+  type = 'priority',
+  approaches: JunctionApproachInfo[] = [],
+  connections: JunctionConnectionInfo[] = [],
+): Promise<JunctionInfo> {
+  return withRoadError(async () => {
+    const command = create(CreateJunctionCommandSchema, {
+      name,
+      posX,
+      posY,
+      elevation,
+      type,
+      approaches,
+      connections,
+    })
+    const outcome = await sendRoadCommand(client, { case: 'createJunction', value: command })
+    if (outcome.case !== 'createJunctionResult' || !outcome.value.junction) {
+      throw expectFailure(outcome)
+    }
+    useRoadStore.getState().upsertJunction(outcome.value.junction)
+    return outcome.value.junction
+  })
+}
+
+export async function updateJunction(
+  client: EngineClient,
+  junctionId: string,
+  updates: {
+    name?: string
+    posX?: number
+    posY?: number
+    elevation?: number
+    type?: string
+    approaches?: JunctionApproachInfo[]
+    connections?: JunctionConnectionInfo[]
+  },
+): Promise<JunctionInfo> {
+  return withRoadError(async () => {
+    const command = create(UpdateJunctionCommandSchema, {
+      junctionId,
+      name: updates.name ?? '',
+      posX: updates.posX ?? 0,
+      posY: updates.posY ?? 0,
+      elevation: updates.elevation ?? 0,
+      type: updates.type ?? '',
+      approaches: updates.approaches ?? [],
+      connections: updates.connections ?? [],
+    })
+    const outcome = await sendRoadCommand(client, { case: 'updateJunction', value: command })
+    if (outcome.case !== 'updateJunctionResult' || !outcome.value.junction) {
+      throw expectFailure(outcome)
+    }
+    useRoadStore.getState().upsertJunction(outcome.value.junction)
+    return outcome.value.junction
+  })
+}
+
+export async function deleteJunction(client: EngineClient, junctionId: string): Promise<void> {
+  return withRoadError(async () => {
+    const command = create(DeleteJunctionCommandSchema, { junctionId })
+    const outcome = await sendRoadCommand(client, { case: 'deleteJunction', value: command })
+    if (outcome.case !== 'deleteJunctionResult') {
+      throw expectFailure(outcome)
+    }
+    useRoadStore.getState().removeJunction(junctionId)
   })
 }
 

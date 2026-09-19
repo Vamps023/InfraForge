@@ -23,12 +23,31 @@ namespace infraforge::application {
 // Events produced by road use cases, marshalled onto the application
 // executor and translated into protocol events by the transport layer.
 struct RoadServiceEvent {
-    enum class Kind { Created, Updated, Removed, GeometryChanged };
+    enum class Kind {
+        Created,
+        Updated,
+        Removed,
+        GeometryChanged,
+        JunctionCreated,
+        JunctionUpdated,
+        JunctionRemoved,
+    };
+
+    RoadServiceEvent() = default;
+    RoadServiceEvent(Kind k, std::string rId, std::uint64_t rev,
+                     std::vector<domain::world::ChunkCoord> chunks = {},
+                     std::string jId = {}, std::string jName = {})
+        : kind(k), roadId(std::move(rId)), revision(rev),
+          affectedChunks(std::move(chunks)), junctionId(std::move(jId)),
+          junctionName(std::move(jName)) {}
+
     Kind kind{Kind::Created};
     std::string roadId;
     std::uint64_t revision{0};
     // Affected world chunks for geometry changes.
     std::vector<domain::world::ChunkCoord> affectedChunks;
+    std::string junctionId;
+    std::string junctionName;
 };
 
 // Lightweight road summary projection for the outliner and road list.
@@ -86,6 +105,8 @@ struct RoadDetails {
     std::vector<ProfileBreakpoint> elevationBreakpoints;
     std::vector<ProfileBreakpoint> superelevationBreakpoints;
     std::vector<domain::road::RoadWidthBreakpoint> widthBreakpoints;
+    std::vector<domain::road::RoadLaneSectionRecord> laneSections;
+    std::vector<domain::road::RoadLaneRecord> lanes;
 };
 
 // One vertex of a road scene mesh, in render-local float coordinates.
@@ -222,6 +243,12 @@ struct UpdateWidthInput {
     std::vector<double> rightWidths{};
 };
 
+struct UpdateLanesInput {
+    std::string roadId{};
+    std::vector<domain::road::RoadLaneSectionRecord> laneSections{};
+    std::vector<domain::road::RoadLaneRecord> lanes{};
+};
+
 struct ConformRoadToTerrainInput {
     std::string roadId{};
     double stationInterval{10.0};
@@ -266,9 +293,19 @@ public:
     [[nodiscard]] RoadSummary updateElevation(const UpdateElevationInput& input);
     [[nodiscard]] RoadSummary updateSuperelevation(const UpdateSuperelevationInput& input);
     [[nodiscard]] RoadSummary updateWidth(const UpdateWidthInput& input);
+    [[nodiscard]] RoadSummary updateLanes(const UpdateLanesInput& input);
     [[nodiscard]] RoadSummary conformToTerrain(
         const ConformRoadToTerrainInput& input, const TerrainHeightSampler& sampleHeight);
 
+    // ---- Junctions ----
+
+    [[nodiscard]] std::vector<domain::road::JunctionRecord> listJunctions() const;
+    [[nodiscard]] std::optional<domain::road::JunctionRecord> getJunction(const std::string& junctionId) const;
+    [[nodiscard]] domain::road::JunctionRecord createJunction(const domain::road::JunctionRecord& junction);
+    [[nodiscard]] domain::road::JunctionRecord updateJunction(const domain::road::JunctionRecord& junction);
+    void deleteJunction(const std::string& junctionId);
+
+    // ---- Undo/Redo ----
     [[nodiscard]] RoadHistoryResult undo(const std::string& roadId);
     [[nodiscard]] RoadHistoryResult redo(const std::string& roadId);
     [[nodiscard]] bool canUndo(const std::string& roadId) const;
@@ -292,6 +329,15 @@ public:
     // in render-local float coordinates relative to the scene origin.
     // The origin is the project georeference origin.
     [[nodiscard]] RoadSceneProjection roadSceneProjection() const;
+
+    // Evaluates and adjusts canonical profile breakpoints when an alignment
+    // is shortened or lengthened, preserving interior breakpoints and extending
+    // or interpolating endpoints without duplicates within station tolerance.
+    [[nodiscard]] static std::vector<domain::road::ProfileBreakpoint> clampProfileBreakpoints(
+        const std::vector<domain::road::ProfileBreakpoint>& breakpoints, double newLength);
+
+    [[nodiscard]] static std::vector<domain::road::RoadWidthBreakpoint> clampWidthBreakpoints(
+        const std::vector<domain::road::RoadWidthBreakpoint>& breakpoints, double newLength);
 
 private:
     // Undo/redo history entry: stores the full road record before/after.

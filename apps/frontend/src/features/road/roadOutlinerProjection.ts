@@ -14,6 +14,7 @@ export function registerRoadOutlinerProjection(): void {
 
   const unsubscribeStore = useRoadStore.subscribe((state) => {
     void state.roads
+    void state.junctions
     for (const listener of listeners) {
       listener()
     }
@@ -21,9 +22,10 @@ export function registerRoadOutlinerProjection(): void {
 
   const projection = {
     id: ROAD_SOURCE,
-    label: 'Roads',
+    label: 'Roads & Junctions',
     getNodes: () => {
       const roads = useRoadStore.getState().roads
+      const junctions = useRoadStore.getState().junctions
       const nodes: OutlinerNode[] = []
 
       nodes.push({
@@ -44,6 +46,29 @@ export function registerRoadOutlinerProjection(): void {
           depth: 1,
           hasChildren: false,
         })
+      }
+
+      if (junctions.length > 0) {
+        const JUNCTION_GROUP_ID = 'junction-group'
+        nodes.push({
+          id: JUNCTION_GROUP_ID,
+          parentId: null,
+          label: 'Junctions',
+          type: 'junction-group',
+          depth: 0,
+          hasChildren: true,
+        })
+
+        for (const junction of junctions) {
+          nodes.push({
+            id: `junction:${junction.junctionId}`,
+            parentId: JUNCTION_GROUP_ID,
+            label: junction.name || `Junction ${junction.junctionId.slice(0, 8)}`,
+            type: 'junction',
+            depth: 1,
+            hasChildren: false,
+          })
+        }
       }
 
       return nodes

@@ -308,6 +308,9 @@ message CommandEnvelope {
     UpdateJunctionCommand update_junction = 41;
     DeleteJunctionCommand delete_junction = 42;
     ListJunctionsCommand list_junctions = 43;
+    CreateStraightRoadCommand create_straight_road = 44;
+    CreateArcRoadCommand create_arc_road = 45;
+    CreateClothoidRoadCommand create_clothoid_road = 46;
   }
 }
 

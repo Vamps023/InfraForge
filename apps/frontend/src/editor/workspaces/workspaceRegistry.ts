@@ -185,6 +185,37 @@ export const BUILTIN_WORKSPACES: readonly WorkspaceDefinition[] = [
     selectableTypes: ['road'],
     toolGroups: [
       {
+        id: 'road-tools',
+        label: 'Authoring tools',
+        tools: [
+          {
+            commandId: 'road.tool.select',
+            label: 'Select',
+            tooltip: 'Select alignment or control points (V)',
+          },
+          {
+            commandId: 'road.tool.straight',
+            label: 'Straight',
+            tooltip: 'Insert straight line segment between 2 points (S)',
+          },
+          {
+            commandId: 'road.tool.arc',
+            label: 'Arc',
+            tooltip: 'Insert circular arc passing through 3 points (A)',
+          },
+          {
+            commandId: 'road.tool.clothoid',
+            label: 'Clothoid',
+            tooltip: 'Insert transition spiral with continuous curvature (C)',
+          },
+          {
+            commandId: 'road.tool.polyline',
+            label: 'Polyline',
+            tooltip: 'Draw multi-point alignment polyline fitted by native engine (P)',
+          },
+        ],
+      },
+      {
         id: 'road-drawing',
         label: 'Road drawing mode',
         className: 'context-toolbar-group--drawing',

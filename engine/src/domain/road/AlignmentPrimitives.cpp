@@ -254,4 +254,141 @@ std::optional<RoadDiagnostic> validateSegment(const AlignmentSegment& segment) n
     return std::visit([](const auto& s) { return validateOne(s); }, segment);
 }
 
+std::expected<CircularArcSegment, RoadDiagnostic> constructCircularArcThroughPoints(
+    const AlignmentPoint& start,
+    const AlignmentPoint& through,
+    const AlignmentPoint& end,
+    const double collinearTolerance,
+    const double minimumRadius,
+    const double maximumRadius) noexcept {
+
+    if (!isFinitePoint(start) || !isFinitePoint(through) || !isFinitePoint(end)) {
+        return std::unexpected(RoadDiagnostic{RoadErrorCode::NonFiniteParameter,
+            "arc construction coordinates must be finite"});
+    }
+
+    const double d01 = std::hypot(through.easting - start.easting, through.northing - start.northing);
+    const double d12 = std::hypot(end.easting - through.easting, end.northing - through.northing);
+    const double d02 = std::hypot(end.easting - start.easting, end.northing - start.northing);
+
+    if (d01 < 1e-4 || d12 < 1e-4 || d02 < 1e-4) {
+        return std::unexpected(RoadDiagnostic{RoadErrorCode::DegenerateSegment,
+            "arc construction points must not be coincident"});
+    }
+
+    const double det = 2.0 * (
+        start.easting * (through.northing - end.northing) +
+        through.easting * (end.northing - start.northing) +
+        end.easting * (start.northing - through.northing));
+
+    if (std::abs(det) < collinearTolerance) {
+        return std::unexpected(RoadDiagnostic{RoadErrorCode::DegenerateSegment,
+            "arc construction points are collinear or degenerate; cannot construct circular arc"});
+    }
+
+    const double s0 = start.easting * start.easting + start.northing * start.northing;
+    const double s1 = through.easting * through.easting + through.northing * through.northing;
+    const double s2 = end.easting * end.easting + end.northing * end.northing;
+
+    const double cx = (s0 * (through.northing - end.northing) +
+                       s1 * (end.northing - start.northing) +
+                       s2 * (start.northing - through.northing)) / det;
+    const double cy = (s0 * (end.easting - through.easting) +
+                       s1 * (start.easting - end.easting) +
+                       s2 * (through.easting - start.easting)) / det;
+
+    const double radius = std::hypot(start.easting - cx, start.northing - cy);
+    if (!std::isfinite(radius) || radius < minimumRadius || radius > maximumRadius) {
+        return std::unexpected(RoadDiagnostic{RoadErrorCode::InvalidCurvature,
+            "arc radius is out of valid bounds"});
+    }
+
+    const double theta0 = std::atan2(start.northing - cy, start.easting - cx);
+    const double theta1 = std::atan2(through.northing - cy, through.easting - cx);
+    const double theta2 = std::atan2(end.northing - cy, end.easting - cx);
+
+    auto normPos = [](const double a) noexcept {
+        constexpr double twoPi = 2.0 * kPi;
+        const double rem = std::fmod(a, twoPi);
+        return rem < 0.0 ? rem + twoPi : rem;
+    };
+
+    const double ccwThrough = normPos(theta1 - theta0);
+    const double ccwEnd = normPos(theta2 - theta0);
+
+    const double direction = (ccwThrough <= ccwEnd) ? 1.0 : -1.0;
+    const double sweep = (direction > 0.0) ? ccwEnd : normPos(theta0 - theta2);
+
+    if (sweep < 1e-6) {
+        return std::unexpected(RoadDiagnostic{RoadErrorCode::DegenerateSegment,
+            "arc sweep angle is near zero"});
+    }
+
+    double startHeading = theta0 + direction * (kPi / 2.0);
+    while (startHeading > kPi) startHeading -= 2.0 * kPi;
+    while (startHeading < -kPi) startHeading += 2.0 * kPi;
+
+    const double curvature = direction / radius;
+    const double length = radius * sweep;
+
+    if (length < 1e-4) {
+        return std::unexpected(RoadDiagnostic{RoadErrorCode::DegenerateSegment,
+            "arc length must be positive"});
+    }
+
+    return CircularArcSegment{
+        .start = start,
+        .startHeading = startHeading,
+        .curvature = curvature,
+        .length = length,
+    };
+}
+
+std::expected<LineSegment, RoadDiagnostic> constructStraightSegment(
+    const AlignmentPoint& start,
+    const AlignmentPoint& end) noexcept {
+    if (!isFinitePoint(start) || !isFinitePoint(end)) {
+        return std::unexpected(RoadDiagnostic{RoadErrorCode::NonFiniteParameter,
+            "straight segment coordinates must be finite"});
+    }
+    const double dx = end.easting - start.easting;
+    const double dy = end.northing - start.northing;
+    const double length = std::hypot(dx, dy);
+    if (length < 1e-4) {
+        return std::unexpected(RoadDiagnostic{RoadErrorCode::DegenerateSegment,
+            "straight segment length must be positive"});
+    }
+    const double heading = std::atan2(dy, dx);
+    return LineSegment{
+        .start = start,
+        .heading = heading,
+        .length = length,
+    };
+}
+
+std::expected<ClothoidSegment, RoadDiagnostic> constructClothoidSegment(
+    const AlignmentPoint& start,
+    const Heading startHeading,
+    const Curvature startCurvature,
+    const Curvature endCurvature,
+    const double length) noexcept {
+    if (!isFinitePoint(start) || !std::isfinite(startHeading) ||
+        !std::isfinite(startCurvature) || !std::isfinite(endCurvature) || !std::isfinite(length)) {
+        return std::unexpected(RoadDiagnostic{RoadErrorCode::NonFiniteParameter,
+            "clothoid parameters must be finite"});
+    }
+    if (length < 1e-4) {
+        return std::unexpected(RoadDiagnostic{RoadErrorCode::DegenerateSegment,
+            "clothoid length must be positive"});
+    }
+    return ClothoidSegment{
+        .start = start,
+        .startHeading = startHeading,
+        .startCurvature = startCurvature,
+        .endCurvature = endCurvature,
+        .length = length,
+    };
+}
+
 } // namespace infraforge::domain::road
+

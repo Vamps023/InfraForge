@@ -7,6 +7,7 @@ import './styles/panels.css'
 import './styles/viewport.css'
 import './styles/dialogs.css'
 import './styles/command-palette.css'
+import './styles/authoring.css'
 
 const rootElement = document.getElementById('root')
 

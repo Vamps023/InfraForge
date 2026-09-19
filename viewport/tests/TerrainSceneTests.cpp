@@ -127,6 +127,17 @@ TEST_CASE("road-only and combined deltas preserve domain presence") {
     CHECK(both.roads.has_value());
 }
 
+TEST_CASE("road GPU vertices use the terrain and camera northing handedness") {
+    const infraforge::viewport::RoadSceneVertex wireVertex{
+        .x = 12.0f, .y = 34.0f, .z = 5.0f,
+        .nx = 0.25f, .ny = -0.5f, .nz = 0.75f};
+    const auto renderVertex = infraforge::viewport::roadVertexBufferData(wireVertex);
+
+    CHECK(renderVertex == std::array<float, 6>{12.0f, -34.0f, 5.0f, 0.25f, 0.5f, 0.75f});
+    CHECK(wireVertex.y == 34.0f);
+    CHECK(wireVertex.ny == -0.5f);
+}
+
 TEST_CASE("malformed road delta is rejected without requiring terrain") {
     CHECK_THROWS_AS(static_cast<void>(infraforge::viewport::parseControlCommand(
         R"({"type":"scene","roads":{"roadRevision":"x","roads":[]}})")),

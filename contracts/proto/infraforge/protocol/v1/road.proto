@@ -158,6 +158,49 @@ message CreateRoadCommand {
   repeated uint32 protected_anchor_indices = 7;
 }
 
+// Create a straight road segment directly between two endpoints.
+message CreateStraightRoadCommand {
+  string name = 1;
+  double start_easting = 2;
+  double start_northing = 3;
+  double end_easting = 4;
+  double end_northing = 5;
+  bool stick_to_terrain = 6;
+  string dataset_id = 7;
+  double station_interval = 8;
+  double vertical_offset = 9;
+}
+
+// Create a circular arc road segment directly passing through 3 points.
+message CreateArcRoadCommand {
+  string name = 1;
+  double p0_easting = 2;
+  double p0_northing = 3;
+  double p1_easting = 4;
+  double p1_northing = 5;
+  double p2_easting = 6;
+  double p2_northing = 7;
+  bool stick_to_terrain = 8;
+  string dataset_id = 9;
+  double station_interval = 10;
+  double vertical_offset = 11;
+}
+
+// Create a clothoid (transition spiral) road segment from canonical parameters.
+message CreateClothoidRoadCommand {
+  string name = 1;
+  double start_easting = 2;
+  double start_northing = 3;
+  double start_heading = 4;
+  double start_curvature = 5;
+  double end_curvature = 6;
+  double length = 7;
+  bool stick_to_terrain = 8;
+  string dataset_id = 9;
+  double station_interval = 10;
+  double vertical_offset = 11;
+}
+
 // Delete a road by ID.
 message DeleteRoadCommand {
   string road_id = 1;

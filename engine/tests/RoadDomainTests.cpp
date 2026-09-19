@@ -1391,4 +1391,120 @@ TEST_CASE("Road::build enforces canonical station bounds [0, totalLength] for al
     }
 }
 
+TEST_CASE("constructCircularArcThroughPoints builds canonical mathematical arcs") {
+    using infraforge::domain::road::constructCircularArcThroughPoints;
+    using infraforge::domain::road::constructStraightSegment;
+    using infraforge::domain::road::constructClothoidSegment;
+    using infraforge::domain::road::RoadErrorCode;
+
+    // 1. Semicircle left turn (CCW): P0=(10, 0), P1=(0, 10), P2=(-10, 0)
+    {
+        const auto arcRes = constructCircularArcThroughPoints(
+            AlignmentPoint{10.0, 0.0}, AlignmentPoint{0.0, 10.0}, AlignmentPoint{-10.0, 0.0});
+        REQUIRE(arcRes.has_value());
+        const auto& arc = *arcRes;
+        CHECK(arc.start.easting == doctest::Approx(10.0));
+        CHECK(arc.start.northing == doctest::Approx(0.0));
+        CHECK(arc.curvature == doctest::Approx(0.1)); // 1/R = 1/10
+        CHECK(arc.length == doctest::Approx(10.0 * kPi));
+        CHECK(arc.startHeading == doctest::Approx(kPi / 2.0));
+
+        // Evaluate start and end
+        const auto startSample = arc.evaluate(0.0);
+        CHECK(startSample.position.easting == doctest::Approx(10.0));
+        CHECK(startSample.position.northing == doctest::Approx(0.0));
+        const auto endSample = arc.endSample();
+        CHECK(endSample.position.easting == doctest::Approx(-10.0));
+        CHECK(std::abs(endSample.position.northing) < 1e-6);
+    }
+
+    // 2. Semicircle right turn (CW): P0=(10, 0), P1=(0, -10), P2=(-10, 0)
+    {
+        const auto arcRes = constructCircularArcThroughPoints(
+            AlignmentPoint{10.0, 0.0}, AlignmentPoint{0.0, -10.0}, AlignmentPoint{-10.0, 0.0});
+        REQUIRE(arcRes.has_value());
+        const auto& arc = *arcRes;
+        CHECK(arc.curvature == doctest::Approx(-0.1)); // negative = CW turn
+        CHECK(arc.length == doctest::Approx(10.0 * kPi));
+        CHECK(arc.startHeading == doctest::Approx(-kPi / 2.0));
+
+        const auto endSample = arc.endSample();
+        CHECK(endSample.position.easting == doctest::Approx(-10.0));
+        CHECK(std::abs(endSample.position.northing) < 1e-6);
+    }
+
+    // 3. Shallow arc: small deflection
+    {
+        const auto arcRes = constructCircularArcThroughPoints(
+            AlignmentPoint{0.0, 0.0}, AlignmentPoint{50.0, 1.0}, AlignmentPoint{100.0, 0.0});
+        REQUIRE(arcRes.has_value());
+        const auto& arc = *arcRes;
+        CHECK(arc.curvature < 0.0); // right turn
+        CHECK(arc.length > 100.0);
+        const auto endSample = arc.endSample();
+        CHECK(endSample.position.easting == doctest::Approx(100.0).epsilon(1e-4));
+        CHECK(std::abs(endSample.position.northing) < 1e-4);
+    }
+
+    // 4. Nearly collinear points rejected
+    {
+        const auto arcRes = constructCircularArcThroughPoints(
+            AlignmentPoint{0.0, 0.0}, AlignmentPoint{50.0, 0.0}, AlignmentPoint{100.0, 0.0});
+        REQUIRE_FALSE(arcRes.has_value());
+        CHECK(arcRes.error().code == RoadErrorCode::DegenerateSegment);
+    }
+
+    // 5. Duplicate / coincident points rejected
+    {
+        const auto arcRes = constructCircularArcThroughPoints(
+            AlignmentPoint{0.0, 0.0}, AlignmentPoint{0.0, 0.0}, AlignmentPoint{100.0, 50.0});
+        REQUIRE_FALSE(arcRes.has_value());
+        CHECK(arcRes.error().code == RoadErrorCode::DegenerateSegment);
+    }
+
+    // 6. Non-finite coordinates rejected
+    {
+        const auto arcRes = constructCircularArcThroughPoints(
+            AlignmentPoint{std::numeric_limits<double>::quiet_NaN(), 0.0},
+            AlignmentPoint{50.0, 20.0}, AlignmentPoint{100.0, 0.0});
+        REQUIRE_FALSE(arcRes.has_value());
+        CHECK(arcRes.error().code == RoadErrorCode::NonFiniteParameter);
+    }
+
+    // 7. Very large radius exceeding maximum bound rejected
+    {
+        const auto arcRes = constructCircularArcThroughPoints(
+            AlignmentPoint{0.0, 0.0}, AlignmentPoint{50.0, 1e-8}, AlignmentPoint{100.0, 0.0},
+            1e-12, 0.1, 1000.0); // maxRadius = 1000m
+        REQUIRE_FALSE(arcRes.has_value());
+        CHECK(arcRes.error().code == RoadErrorCode::InvalidCurvature);
+    }
+
+    // 8. Straight segment construction
+    {
+        const auto lineRes = constructStraightSegment(AlignmentPoint{10.0, 20.0}, AlignmentPoint{40.0, 60.0});
+        REQUIRE(lineRes.has_value());
+        const auto& line = *lineRes;
+        CHECK(line.start.easting == doctest::Approx(10.0));
+        CHECK(line.start.northing == doctest::Approx(20.0));
+        CHECK(line.length == doctest::Approx(50.0));
+        CHECK(line.heading == doctest::Approx(std::atan2(40.0, 30.0)));
+        const auto endSample = line.endSample();
+        CHECK(endSample.position.easting == doctest::Approx(40.0));
+        CHECK(endSample.position.northing == doctest::Approx(60.0));
+    }
+
+    // 9. Clothoid segment construction
+    {
+        const auto clothoidRes = constructClothoidSegment(
+            AlignmentPoint{0.0, 0.0}, 0.0, 0.0, 0.02, 100.0);
+        REQUIRE(clothoidRes.has_value());
+        const auto& clothoid = *clothoidRes;
+        CHECK(clothoid.startCurvature == doctest::Approx(0.0));
+        CHECK(clothoid.endCurvature == doctest::Approx(0.02));
+        CHECK(clothoid.length == doctest::Approx(100.0));
+    }
+}
+
 } // TEST_SUITE
+

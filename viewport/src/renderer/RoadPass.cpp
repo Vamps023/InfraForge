@@ -300,12 +300,8 @@ RoadPass::MeshEntry RoadPass::uploadMesh(const RoadSceneMesh& mesh) {
     std::vector<float> vertexData;
     vertexData.reserve(mesh.vertices.size() * kVertexFloats);
     for (const auto& v : mesh.vertices) {
-        vertexData.push_back(v.x);
-        vertexData.push_back(v.y);
-        vertexData.push_back(v.z);
-        vertexData.push_back(v.nx);
-        vertexData.push_back(v.ny);
-        vertexData.push_back(v.nz);
+        const auto renderVertex = roadVertexBufferData(v);
+        vertexData.insert(vertexData.end(), renderVertex.begin(), renderVertex.end());
     }
 
     const VkDeviceSize vertexSize = vertexData.size() * sizeof(float);

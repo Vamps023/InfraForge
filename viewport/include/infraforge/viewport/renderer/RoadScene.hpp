@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -7,9 +8,10 @@
 
 namespace infraforge::viewport {
 
-// One vertex of a road mesh: position (render-local float) + normal.
-// The vertex is already converted to render-local coordinates by the
-// engine before transport; the viewport does not touch canonical space.
+// One vertex of a road mesh: canonical-axis, origin-relative float position
+// plus normal. The engine performs the precision-sensitive origin subtraction;
+// the viewport only converts north-positive project axes to Vulkan's
+// north-negative render-local handedness when building the GPU buffer.
 struct RoadSceneVertex {
     float x{0.0f};
     float y{0.0f};
@@ -32,6 +34,14 @@ struct RoadSceneMesh {
         return roadId + ":" + std::to_string(chunkX) + ":" + std::to_string(chunkY);
     }
 };
+
+// Converts the canonical-axis wire vertex to the same render-local handedness
+// used by TerrainPass and EditorCamera. Keeping the wire vertex unchanged is
+// important: CPU picking compares it with canonical project coordinates.
+[[nodiscard]] constexpr std::array<float, 6> roadVertexBufferData(
+    const RoadSceneVertex& vertex) noexcept {
+    return {vertex.x, -vertex.y, vertex.z, vertex.nx, -vertex.ny, vertex.nz};
+}
 
 // Road portion of the scene control command. The viewport uploads and
 // renders all meshes; replacing the scene drops all existing road meshes.

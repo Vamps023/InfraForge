@@ -5,6 +5,7 @@ import type { EngineClient } from '../../lib/engineSession'
 import { deleteRoad, fitRoadSource, undoRoadEdit, redoRoadEdit, deleteJunction } from './roadApi'
 import { useRoadStore } from './roadStore'
 import { useRoadToolStore } from './roadToolStore'
+import { useAuthoringDraftStore } from '../../editor/tools/authoringDraftStore'
 import { createRoad } from './roadApi'
 
 // Road commands registered through the Issue #5 command registry. Each
@@ -41,6 +42,75 @@ export function registerRoadCommands(deps: RoadCommandDeps): void {
   useRoadToolStore.getState().setFinishCallback(finishRoadDrawing)
 
   const defs: CommandDefinition[] = [
+    {
+      id: 'road.tool.select',
+      label: 'Select',
+      description: 'Select alignment or control points in the viewport.',
+      category: 'Road',
+      group: 'road-tools',
+      surfaces: ['palette', 'toolbar'],
+      requiresProject: true,
+      execute: () => {
+        useAuthoringDraftStore.getState().clearDraft()
+        useAuthoringDraftStore.getState().setTool('select')
+      },
+    },
+    {
+      id: 'road.tool.straight',
+      label: 'Straight',
+      description: 'Insert direct straight segment between 2 points.',
+      category: 'Road',
+      group: 'road-tools',
+      surfaces: ['palette', 'toolbar'],
+      requiresEngine: true,
+      requiresProject: true,
+      execute: () => {
+        useAuthoringDraftStore.getState().clearDraft()
+        useAuthoringDraftStore.getState().setTool('road.straight')
+      },
+    },
+    {
+      id: 'road.tool.arc',
+      label: 'Circle Arc',
+      description: 'Insert circular arc passing through 3 points.',
+      category: 'Road',
+      group: 'road-tools',
+      surfaces: ['palette', 'toolbar'],
+      requiresEngine: true,
+      requiresProject: true,
+      execute: () => {
+        useAuthoringDraftStore.getState().clearDraft()
+        useAuthoringDraftStore.getState().setTool('road.arc')
+      },
+    },
+    {
+      id: 'road.tool.clothoid',
+      label: 'Clothoid Arc',
+      description: 'Insert transition spiral with continuous curvature.',
+      category: 'Road',
+      group: 'road-tools',
+      surfaces: ['palette', 'toolbar'],
+      requiresEngine: true,
+      requiresProject: true,
+      execute: () => {
+        useAuthoringDraftStore.getState().clearDraft()
+        useAuthoringDraftStore.getState().setTool('road.clothoid')
+      },
+    },
+    {
+      id: 'road.tool.polyline',
+      label: 'Polyline',
+      description: 'Draw multi-point alignment polyline fitted by native engine.',
+      category: 'Road',
+      group: 'road-tools',
+      surfaces: ['palette', 'toolbar'],
+      requiresEngine: true,
+      requiresProject: true,
+      execute: () => {
+        useAuthoringDraftStore.getState().clearDraft()
+        useAuthoringDraftStore.getState().setTool('road.polyline')
+      },
+    },
     {
       id: 'road.create',
       label: 'Create Road…',

@@ -147,6 +147,43 @@ struct CreateRoadInput {
     std::vector<std::uint32_t> protectedAnchorIndices{};
 };
 
+// Input for creating a straight road segment (donor: Insert Segment).
+struct CreateStraightRoadInput {
+    std::string name{};
+    domain::road::AlignmentPoint start{};
+    domain::road::AlignmentPoint end{};
+    bool stickToTerrain{false};
+    std::string terrainDatasetId{};
+    double stationInterval{10.0};
+    double verticalOffset{0.1};
+};
+
+// Input for creating a 3-point circular arc road (donor: Insert Circle Arc).
+struct CreateArcRoadInput {
+    std::string name{};
+    domain::road::AlignmentPoint p0{};
+    domain::road::AlignmentPoint p1{};
+    domain::road::AlignmentPoint p2{};
+    bool stickToTerrain{false};
+    std::string terrainDatasetId{};
+    double stationInterval{10.0};
+    double verticalOffset{0.1};
+};
+
+// Input for creating a clothoid spiral road (donor: Insert Clothoid Arc).
+struct CreateClothoidRoadInput {
+    std::string name{};
+    domain::road::AlignmentPoint start{};
+    domain::road::Heading startHeading{0.0};
+    domain::road::Curvature startCurvature{0.0};
+    domain::road::Curvature endCurvature{0.0};
+    double length{0.0};
+    bool stickToTerrain{false};
+    std::string terrainDatasetId{};
+    double stationInterval{10.0};
+    double verticalOffset{0.1};
+};
+
 // Input for inserting a control point.
 struct InsertControlInput {
     std::string roadId{};
@@ -241,6 +278,12 @@ public:
     // ---- Commands ----
 
     [[nodiscard]] RoadSummary createRoad(const CreateRoadInput& input);
+    [[nodiscard]] RoadSummary createStraightRoad(
+        const CreateStraightRoadInput& input, const TerrainHeightSampler& sampleHeight = nullptr);
+    [[nodiscard]] RoadSummary createArcRoad(
+        const CreateArcRoadInput& input, const TerrainHeightSampler& sampleHeight = nullptr);
+    [[nodiscard]] RoadSummary createClothoidRoad(
+        const CreateClothoidRoadInput& input, const TerrainHeightSampler& sampleHeight = nullptr);
     [[nodiscard]] RoadSummary deleteRoad(const std::string& roadId);
     [[nodiscard]] RoadSummary renameRoad(const std::string& roadId, const std::string& name);
     [[nodiscard]] RoadSummary insertControl(const InsertControlInput& input);
@@ -263,7 +306,6 @@ public:
     void deleteJunction(const std::string& junctionId);
 
     // ---- Undo/Redo ----
-
     [[nodiscard]] RoadHistoryResult undo(const std::string& roadId);
     [[nodiscard]] RoadHistoryResult redo(const std::string& roadId);
     [[nodiscard]] bool canUndo(const std::string& roadId) const;
@@ -370,7 +412,16 @@ private:
         domain::road::SourceProvider provider,
         double positionTolerance,
         std::optional<double> maxCurvature,
-        const std::set<std::size_t>& anchorBoundarySegments) const;
+        const std::set<std::size_t>& anchorBoundarySegments,
+        const std::vector<domain::road::ProfileBreakpoint>& initialElevationProfile = {}) const;
+
+    // Conforms an alignment to terrain by evaluating stations and sampling heights.
+    // Throws CommandFailure if sampling fails, station count exceeds limits, or sampler is missing.
+    [[nodiscard]] std::vector<domain::road::ProfileBreakpoint> sampleElevationAlongAlignment(
+        const domain::road::ReferenceAlignment& alignment,
+        double stationInterval,
+        double verticalOffset,
+        const TerrainHeightSampler& sampleHeight) const;
 
     // Refits an existing road from its source vertices with new parameters.
     // Preserves the existing RoadId, display name, elevation/superelevation

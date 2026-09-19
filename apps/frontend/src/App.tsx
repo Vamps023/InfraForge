@@ -52,6 +52,11 @@ import { useToolStore } from './editor/tools/toolStore'
 import { useSelectionStore } from './editor/selection/selectionStore'
 import { useRoadStore } from './features/road/roadStore'
 import { getRoad } from './features/road/roadApi'
+import { useAuthoringDraftStore } from './editor/tools/authoringDraftStore'
+import { useAuthoringInteraction } from './editor/tools/useAuthoringInteraction'
+import { useAuthoringShortcuts } from './editor/commands/useAuthoringShortcuts'
+import { ToolRail } from './editor/shell/ToolRail'
+import { ToolOptionsPanel } from './editor/shell/ToolOptionsPanel'
 
 export function App() {
   const engineStatus = useUiStore((state) => state.engineStatus)
@@ -145,6 +150,44 @@ export function App() {
       }
     })
   }, [])
+
+  const { handleViewportInteraction, commitCurrentDraft } = useAuthoringInteraction({
+    getClient: () => engineSessionRef.current?.client ?? null,
+  })
+  useAuthoringShortcuts(commitCurrentDraft)
+
+  // The shared tool store is the sole owner of viewport input. The authoring
+  // draft store keeps only transient construction state and mirrors its
+  // selected authoring mode into that central owner.
+  useEffect(() => {
+    const synchronizeAuthoringTool = (activeTool: ReturnType<typeof useAuthoringDraftStore.getState>['activeTool']) => {
+      const toolStore = useToolStore.getState()
+      if (activeTool === 'select') {
+        if (toolStore.activeToolId?.startsWith('road.authoring.')) {
+          toolStore.clearTool()
+        }
+        return
+      }
+
+      useRoadToolStore.getState().cancel()
+      toolStore.activateTool({
+        id: `road.authoring.${activeTool.slice('road.'.length)}`,
+        workspaceId: 'roads',
+        statusHint: 'Click in the viewport to place canonical project-coordinate construction points.',
+        cancel: () => useAuthoringDraftStore.getState().setTool('select'),
+        onViewportInteraction: (interaction) => {
+          void handleViewportInteraction(interaction)
+        },
+      })
+    }
+
+    synchronizeAuthoringTool(useAuthoringDraftStore.getState().activeTool)
+    return useAuthoringDraftStore.subscribe((state, previous) => {
+      if (state.activeTool !== previous.activeTool) {
+        synchronizeAuthoringTool(state.activeTool)
+      }
+    })
+  }, [handleViewportInteraction])
 
   useEffect(() => window.infraforgeDesktop?.onViewportInteraction?.((interaction) => {
     const activeTool = useToolStore.getState()
@@ -308,7 +351,14 @@ export function App() {
           {projectOpen && activeWorkspace !== 'home' ? (
             <ContextToolShelf context={commandContext} />
           ) : null}
-          <EditorLayout
+          {projectOpen && activeWorkspace === 'roads' ? (
+            <ToolOptionsPanel onCommitPolyline={commitCurrentDraft} />
+          ) : null}
+          <div className="authoring-container">
+            {projectOpen && activeWorkspace === 'roads' ? (
+              <ToolRail />
+            ) : null}
+            <EditorLayout
             viewportHostRef={viewportHostRef}
             viewport={
               <ViewportArea
@@ -322,6 +372,7 @@ export function App() {
             rightPanel={<Inspector />}
             bottomPanel={<BottomPanel />}
           />
+          </div>
         </div>
       </div>
       <StatusBar engineStatus={engineStatus} />

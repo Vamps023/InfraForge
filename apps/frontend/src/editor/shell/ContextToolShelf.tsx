@@ -11,6 +11,11 @@ import {
   Check,
   X,
   Upload,
+  MousePointer2,
+  Slash,
+  Circle,
+  TrendingUp,
+  PenLine,
 } from 'lucide-react'
 import { useWorkspaceStore } from './workspaceStore'
 import {
@@ -38,6 +43,11 @@ const ICON_MAP: Record<string, LucideIcon> = {
   'road.redo': Redo2,
   'road.finish-drawing': Check,
   'road.cancel-drawing': X,
+  'road.tool.select': MousePointer2,
+  'road.tool.straight': Slash,
+  'road.tool.arc': Circle,
+  'road.tool.clothoid': TrendingUp,
+  'road.tool.polyline': PenLine,
 }
 
 export interface ContextToolShelfProps {

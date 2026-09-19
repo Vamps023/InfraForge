@@ -131,6 +131,9 @@ private:
 
     // Road command handlers.
     void handleCreateRoad(const std::string& connectionId, const protocol::v1::Frame& frame);
+    void handleCreateStraightRoad(const std::string& connectionId, const protocol::v1::Frame& frame);
+    void handleCreateArcRoad(const std::string& connectionId, const protocol::v1::Frame& frame);
+    void handleCreateClothoidRoad(const std::string& connectionId, const protocol::v1::Frame& frame);
     void handleDeleteRoad(const std::string& connectionId, const protocol::v1::Frame& frame);
     void handleRenameRoad(const std::string& connectionId, const protocol::v1::Frame& frame);
     void handleInsertRoadControl(const std::string& connectionId, const protocol::v1::Frame& frame);
@@ -146,6 +149,7 @@ private:
     void handleListRoads(const std::string& connectionId, const protocol::v1::Frame& frame);
     void handleGetRoad(const std::string& connectionId, const protocol::v1::Frame& frame);
     void handleGetRoadScene(const std::string& connectionId, const protocol::v1::Frame& frame);
+    [[nodiscard]] application::TerrainHeightSampler makeTerrainHeightSampler(const std::string& datasetId);
     void handleUpdateRoadLanes(const std::string& connectionId, const protocol::v1::Frame& frame);
     void handleCreateJunction(const std::string& connectionId, const protocol::v1::Frame& frame);
     void handleUpdateJunction(const std::string& connectionId, const protocol::v1::Frame& frame);

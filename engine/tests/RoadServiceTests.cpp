@@ -1047,6 +1047,196 @@ TEST_CASE_FIXTURE(RoadServiceTestFixture, "undo and redo restore exact unclamped
     CHECK(redoneDetails->widthBreakpoints.back().station == doctest::Approx(70.0));
 }
 
+TEST_CASE_FIXTURE(RoadServiceTestFixture, "createStraightRoad creates canonical line segment and persists") {
+    CreateStraightRoadInput input;
+    input.name = "Direct Straight 1";
+    input.start = AlignmentPoint{0.0, 0.0};
+    input.end = AlignmentPoint{120.0, 50.0};
+
+    const auto summary = roadService->createStraightRoad(input);
+    CHECK(summary.name == "Direct Straight 1");
+    CHECK(summary.length == doctest::Approx(130.0));
+    CHECK(events.size() == 1);
+    CHECK(events[0].kind == RoadServiceEvent::Kind::Created);
+
+    auto details = roadService->getRoad(summary.roadId);
+    REQUIRE(details.has_value());
+    CHECK(details->name == "Direct Straight 1");
+    CHECK(details->length == doctest::Approx(130.0));
+
+    // Reopen store to verify persistence
+    roadService.reset();
+    store.close();
+    (void)store.open(projectDirectory);
+    auto project = transforms.resolveProjectGeoreference(store.current().georeference);
+    world.resetForProject(project);
+    roadService.emplace(store, world, [](const RoadServiceEvent&) {});
+    roadService->onProjectOpened();
+
+    auto reopened = roadService->getRoad(summary.roadId);
+    REQUIRE(reopened.has_value());
+    CHECK(reopened->length == doctest::Approx(130.0));
+}
+
+TEST_CASE_FIXTURE(RoadServiceTestFixture, "createArcRoad creates canonical circular arc and supports undo/redo") {
+    CreateArcRoadInput input;
+    input.name = "Direct Arc 1";
+    input.p0 = AlignmentPoint{100.0, 0.0};
+    input.p1 = AlignmentPoint{0.0, 100.0};
+    input.p2 = AlignmentPoint{-100.0, 0.0};
+
+    const auto summary = roadService->createArcRoad(input);
+    CHECK(summary.name == "Direct Arc 1");
+    const double expectedLen = 100.0 * 3.14159265358979323846;
+    CHECK(summary.length == doctest::Approx(expectedLen));
+
+    // Reject collinear points
+    CreateArcRoadInput collinearInput;
+    collinearInput.name = "Collinear Arc";
+    collinearInput.p0 = AlignmentPoint{0.0, 0.0};
+    collinearInput.p1 = AlignmentPoint{50.0, 50.0};
+    collinearInput.p2 = AlignmentPoint{100.0, 100.0};
+    CHECK_THROWS_AS((void)roadService->createArcRoad(collinearInput), CommandFailure);
+
+    // Verify undo / redo
+    REQUIRE(roadService->undo(summary.roadId));
+    auto undone = roadService->getRoad(summary.roadId);
+    CHECK(!undone.has_value());
+
+    REQUIRE(roadService->redo(summary.roadId));
+    auto redone = roadService->getRoad(summary.roadId);
+    REQUIRE(redone.has_value());
+    CHECK(redone->length == doctest::Approx(expectedLen));
+}
+
+TEST_CASE_FIXTURE(RoadServiceTestFixture, "createClothoidRoad creates canonical spiral and persists") {
+    CreateClothoidRoadInput input;
+    input.name = "Direct Clothoid 1";
+    input.start = AlignmentPoint{50.0, 50.0};
+    input.startHeading = 0.5;
+    input.startCurvature = 0.0;
+    input.endCurvature = 0.02;
+    input.length = 80.0;
+
+    const auto summary = roadService->createClothoidRoad(input);
+    CHECK(summary.name == "Direct Clothoid 1");
+    CHECK(summary.length == doctest::Approx(80.0));
+
+    auto details = roadService->getRoad(summary.roadId);
+    REQUIRE(details.has_value());
+    CHECK(details->length == doctest::Approx(80.0));
+}
+
+TEST_CASE_FIXTURE(RoadServiceTestFixture, "createStraightRoad with stickToTerrain populates elevation profile atomically and persists") {
+    CreateStraightRoadInput input;
+    input.name = "Conformed Straight";
+    input.start = AlignmentPoint{0.0, 0.0};
+    input.end = AlignmentPoint{100.0, 0.0};
+    input.stickToTerrain = true;
+    input.stationInterval = 25.0;
+    input.verticalOffset = 0.5;
+
+    // Deterministic synthetic height sampler: height = 10.0 + easting * 0.1
+    TerrainHeightSampler sampler = [](const AlignmentPoint& p) -> std::expected<double, std::string> {
+        return 10.0 + p.easting * 0.1;
+    };
+
+    const auto summary = roadService->createStraightRoad(input, sampler);
+    CHECK(summary.name == "Conformed Straight");
+    CHECK(summary.length == doctest::Approx(100.0));
+    CHECK(events.size() == 1);
+    CHECK(events[0].kind == RoadServiceEvent::Kind::Created);
+
+    auto details = roadService->getRoad(summary.roadId);
+    REQUIRE(details.has_value());
+    CHECK(details->hasElevationProfile);
+    REQUIRE(details->elevationBreakpoints.size() >= 5);
+    // At s=0, easting=0 -> height = 10.0 + 0.5 = 10.5
+    CHECK(details->elevationBreakpoints.front().station == doctest::Approx(0.0));
+    CHECK(details->elevationBreakpoints.front().value == doctest::Approx(10.5));
+    // At s=100, easting=100 -> height = 20.0 + 0.5 = 20.5
+    CHECK(details->elevationBreakpoints.back().station == doctest::Approx(100.0));
+    CHECK(details->elevationBreakpoints.back().value == doctest::Approx(20.5));
+
+    // Single undo removes the road cleanly
+    REQUIRE(roadService->undo(summary.roadId));
+    CHECK(roadService->listRoads().empty());
+}
+
+TEST_CASE_FIXTURE(RoadServiceTestFixture, "createStraightRoad with stickToTerrain fails atomically when sampler is null") {
+    CreateStraightRoadInput input;
+    input.name = "Null Sampler Road";
+    input.start = AlignmentPoint{0.0, 0.0};
+    input.end = AlignmentPoint{100.0, 0.0};
+    input.stickToTerrain = true;
+
+    CHECK_THROWS_AS((void)roadService->createStraightRoad(input, nullptr), CommandFailure);
+    CHECK(roadService->listRoads().empty());
+    CHECK(store.roads().empty());
+    CHECK(events.empty());
+}
+
+TEST_CASE_FIXTURE(RoadServiceTestFixture, "createStraightRoad with stickToTerrain fails atomically when sample is outside coverage") {
+    CreateStraightRoadInput input;
+    input.name = "Outside Coverage Road";
+    input.start = AlignmentPoint{0.0, 0.0};
+    input.end = AlignmentPoint{100.0, 0.0};
+    input.stickToTerrain = true;
+
+    TerrainHeightSampler sampler = [](const AlignmentPoint&) -> std::expected<double, std::string> {
+        return std::unexpected("road lies outside terrain coverage");
+    };
+
+    CHECK_THROWS_AS((void)roadService->createStraightRoad(input, sampler), CommandFailure);
+    CHECK(roadService->listRoads().empty());
+    CHECK(store.roads().empty());
+    CHECK(events.empty());
+}
+
+TEST_CASE_FIXTURE(RoadServiceTestFixture, "createStraightRoad with stickToTerrain fails atomically when sample is NoData") {
+    CreateStraightRoadInput input;
+    input.name = "NoData Road";
+    input.start = AlignmentPoint{0.0, 0.0};
+    input.end = AlignmentPoint{100.0, 0.0};
+    input.stickToTerrain = true;
+
+    TerrainHeightSampler sampler = [](const AlignmentPoint&) -> std::expected<double, std::string> {
+        return std::unexpected("terrain sample is NoData");
+    };
+
+    CHECK_THROWS_AS((void)roadService->createStraightRoad(input, sampler), CommandFailure);
+    CHECK(roadService->listRoads().empty());
+    CHECK(store.roads().empty());
+    CHECK(events.empty());
+}
+
+TEST_CASE_FIXTURE(RoadServiceTestFixture, "createArcRoad with stickToTerrain populates elevation profile and supports undo") {
+    CreateArcRoadInput input;
+    input.name = "Conformed Arc";
+    input.p0 = AlignmentPoint{100.0, 0.0};
+    input.p1 = AlignmentPoint{0.0, 100.0};
+    input.p2 = AlignmentPoint{-100.0, 0.0};
+    input.stickToTerrain = true;
+    input.stationInterval = 20.0;
+    input.verticalOffset = 1.0;
+
+    TerrainHeightSampler sampler = [](const AlignmentPoint&) -> std::expected<double, std::string> {
+        return 50.0;
+    };
+
+    const auto summary = roadService->createArcRoad(input, sampler);
+    CHECK(summary.name == "Conformed Arc");
+    CHECK(events.size() == 1);
+
+    auto details = roadService->getRoad(summary.roadId);
+    REQUIRE(details.has_value());
+    CHECK(details->hasElevationProfile);
+    CHECK(details->elevationBreakpoints.front().value == doctest::Approx(51.0));
+
+    REQUIRE(roadService->undo(summary.roadId));
+    CHECK(roadService->listRoads().empty());
+}
+
 TEST_CASE("clampProfileBreakpoints: shorter alignment evaluates previous profile at endpoint") {
     std::vector<ProfileBreakpoint> bps{{0.0, 10.0}, {50.0, 15.0}, {100.0, 20.0}};
     auto result = RoadService::clampProfileBreakpoints(bps, 60.0);

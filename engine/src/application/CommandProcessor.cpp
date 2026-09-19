@@ -181,6 +181,12 @@ std::string_view commandName(const ProtocolFrame& frame) {
         return "job.list";
     case protocol::v1::CommandEnvelope::kCreateRoad:
         return "road.create";
+    case protocol::v1::CommandEnvelope::kCreateStraightRoad:
+        return "road.create_straight";
+    case protocol::v1::CommandEnvelope::kCreateArcRoad:
+        return "road.create_arc";
+    case protocol::v1::CommandEnvelope::kCreateClothoidRoad:
+        return "road.create_clothoid";
     case protocol::v1::CommandEnvelope::kDeleteRoad:
         return "road.delete";
     case protocol::v1::CommandEnvelope::kRenameRoad:
@@ -633,6 +639,15 @@ void CommandProcessor::processCommand(
         // Road commands.
         case protocol::v1::CommandEnvelope::kCreateRoad:
             handleCreateRoad(connectionId, frame);
+            break;
+        case protocol::v1::CommandEnvelope::kCreateStraightRoad:
+            handleCreateStraightRoad(connectionId, frame);
+            break;
+        case protocol::v1::CommandEnvelope::kCreateArcRoad:
+            handleCreateArcRoad(connectionId, frame);
+            break;
+        case protocol::v1::CommandEnvelope::kCreateClothoidRoad:
+            handleCreateClothoidRoad(connectionId, frame);
             break;
         case protocol::v1::CommandEnvelope::kDeleteRoad:
             handleDeleteRoad(connectionId, frame);
@@ -1790,6 +1805,82 @@ void CommandProcessor::handleCreateRoad(const std::string& connectionId, const P
     sink_.sendToConnection(connectionId, response);
 }
 
+void CommandProcessor::handleCreateStraightRoad(const std::string& connectionId, const ProtocolFrame& frame) {
+    const auto& command = frame.command().create_straight_road();
+    CreateStraightRoadInput input;
+    input.name = command.name();
+    input.start = domain::road::AlignmentPoint{command.start_easting(), command.start_northing()};
+    input.end = domain::road::AlignmentPoint{command.end_easting(), command.end_northing()};
+    input.stickToTerrain = command.stick_to_terrain();
+    input.terrainDatasetId = command.dataset_id();
+    input.stationInterval = command.station_interval() > 0.0 ? command.station_interval() : 10.0;
+    input.verticalOffset = command.vertical_offset();
+
+    TerrainHeightSampler sampler = nullptr;
+    if (command.stick_to_terrain()) {
+        sampler = makeTerrainHeightSampler(command.dataset_id());
+    }
+
+    auto summary = roadService_->createStraightRoad(input, sampler);
+
+    ProtocolFrame response;
+    response.set_request_id(frame.request_id());
+    fillRoadSummary(response.mutable_result()->mutable_create_road_result()->mutable_road(), summary);
+    sink_.sendToConnection(connectionId, response);
+}
+
+void CommandProcessor::handleCreateArcRoad(const std::string& connectionId, const ProtocolFrame& frame) {
+    const auto& command = frame.command().create_arc_road();
+    CreateArcRoadInput input;
+    input.name = command.name();
+    input.p0 = domain::road::AlignmentPoint{command.p0_easting(), command.p0_northing()};
+    input.p1 = domain::road::AlignmentPoint{command.p1_easting(), command.p1_northing()};
+    input.p2 = domain::road::AlignmentPoint{command.p2_easting(), command.p2_northing()};
+    input.stickToTerrain = command.stick_to_terrain();
+    input.terrainDatasetId = command.dataset_id();
+    input.stationInterval = command.station_interval() > 0.0 ? command.station_interval() : 10.0;
+    input.verticalOffset = command.vertical_offset();
+
+    TerrainHeightSampler sampler = nullptr;
+    if (command.stick_to_terrain()) {
+        sampler = makeTerrainHeightSampler(command.dataset_id());
+    }
+
+    auto summary = roadService_->createArcRoad(input, sampler);
+
+    ProtocolFrame response;
+    response.set_request_id(frame.request_id());
+    fillRoadSummary(response.mutable_result()->mutable_create_road_result()->mutable_road(), summary);
+    sink_.sendToConnection(connectionId, response);
+}
+
+void CommandProcessor::handleCreateClothoidRoad(const std::string& connectionId, const ProtocolFrame& frame) {
+    const auto& command = frame.command().create_clothoid_road();
+    CreateClothoidRoadInput input;
+    input.name = command.name();
+    input.start = domain::road::AlignmentPoint{command.start_easting(), command.start_northing()};
+    input.startHeading = command.start_heading();
+    input.startCurvature = command.start_curvature();
+    input.endCurvature = command.end_curvature();
+    input.length = command.length();
+    input.stickToTerrain = command.stick_to_terrain();
+    input.terrainDatasetId = command.dataset_id();
+    input.stationInterval = command.station_interval() > 0.0 ? command.station_interval() : 10.0;
+    input.verticalOffset = command.vertical_offset();
+
+    TerrainHeightSampler sampler = nullptr;
+    if (command.stick_to_terrain()) {
+        sampler = makeTerrainHeightSampler(command.dataset_id());
+    }
+
+    auto summary = roadService_->createClothoidRoad(input, sampler);
+
+    ProtocolFrame response;
+    response.set_request_id(frame.request_id());
+    fillRoadSummary(response.mutable_result()->mutable_create_road_result()->mutable_road(), summary);
+    sink_.sendToConnection(connectionId, response);
+}
+
 void CommandProcessor::handleDeleteRoad(const std::string& connectionId, const ProtocolFrame& frame) {
     const auto& command = frame.command().delete_road();
     auto summary = roadService_->deleteRoad(command.road_id());
@@ -1950,6 +2041,25 @@ void CommandProcessor::handleUpdateRoadWidth(const std::string& connectionId, co
     sink_.sendToConnection(connectionId, response);
 }
 
+    application::TerrainHeightSampler CommandProcessor::makeTerrainHeightSampler(const std::string& datasetId) {
+    if (!terrainService_) {
+        return nullptr;
+    }
+    return [this, datasetId](const domain::road::AlignmentPoint& point)
+        -> std::expected<double, std::string> {
+        const auto sampled = terrainService_->sample(datasetId, point.easting, point.northing);
+        switch (sampled.sample.status) {
+        case domain::terrain::TerrainSampleStatus::Height:
+            return sampled.sample.height;
+        case domain::terrain::TerrainSampleStatus::NoData:
+            return std::unexpected("terrain sample is NoData");
+        case domain::terrain::TerrainSampleStatus::OutsideCoverage:
+            return std::unexpected("road lies outside terrain coverage");
+        }
+        return std::unexpected("terrain sample status is unsupported");
+    };
+}
+
 void CommandProcessor::handleConformRoadToTerrain(
     const std::string& connectionId, const ProtocolFrame& frame) {
     const auto& command = frame.command().conform_road_to_terrain();
@@ -1958,21 +2068,8 @@ void CommandProcessor::handleConformRoadToTerrain(
     input.stationInterval = command.station_interval();
     input.verticalOffset = command.vertical_offset();
 
-    const auto summary = roadService_->conformToTerrain(input,
-        [this, &command](const domain::road::AlignmentPoint& point)
-            -> std::expected<double, std::string> {
-            const auto sampled = terrainService_->sample(
-                command.dataset_id(), point.easting, point.northing);
-            switch (sampled.sample.status) {
-            case domain::terrain::TerrainSampleStatus::Height:
-                return sampled.sample.height;
-            case domain::terrain::TerrainSampleStatus::NoData:
-                return std::unexpected("terrain sample is NoData");
-            case domain::terrain::TerrainSampleStatus::OutsideCoverage:
-                return std::unexpected("road lies outside terrain coverage");
-            }
-            return std::unexpected("terrain sample status is unsupported");
-        });
+    const auto summary = roadService_->conformToTerrain(
+        input, makeTerrainHeightSampler(command.dataset_id()));
 
     ProtocolFrame response;
     response.set_request_id(frame.request_id());

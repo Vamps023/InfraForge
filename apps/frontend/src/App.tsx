@@ -259,7 +259,14 @@ export function App() {
   // before the renderer's `setViewportVisible(false)` IPC round-trip
   // lands, which would briefly show the native surface over the home
   // screen.
-  const blockingOverlayActive = computeBlockedByOverlay(openDialog, showHomeScreen, menuOpen)
+  //
+  // The terrain workspace in map mode uses a Leaflet 2D map instead of the
+  // 3D viewport, so the native HWND must also be hidden to prevent it from
+  // covering the React UI. `terrainMapMode` is derived from the state
+  // hoisted above the hooks block so it's available here.
+  const [terrainViewMode, setTerrainViewMode] = useState<'map' | '3d'>('map')
+  const terrainMapBlocking = projectOpen && activeWorkspace === 'terrain' && terrainViewMode === 'map'
+  const blockingOverlayActive = computeBlockedByOverlay(openDialog, showHomeScreen, menuOpen) || terrainMapBlocking
   useViewportHost(viewportHostRef, { blockedByOverlay: blockingOverlayActive })
 
   useEffect(() => {
@@ -350,7 +357,6 @@ export function App() {
       : activeWorkspace === 'terrain'
         ? 'terrain'
         : 'design'
-  const [terrainViewMode, setTerrainViewMode] = useState<'map' | '3d'>('map')
 
   return (
     <div className="app-shell">

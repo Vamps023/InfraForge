@@ -410,7 +410,7 @@ class WorkspaceRegistry {
       }
     }
     // Safe fallback:
-    return projectOpen ? 'terrain' : 'home'
+    return projectOpen ? 'roads' : 'home'
   }
 
   subscribe = (listener: () => void): () => void => {

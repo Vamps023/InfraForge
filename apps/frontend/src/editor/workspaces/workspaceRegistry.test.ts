@@ -45,8 +45,8 @@ describe('workspaceRegistry', () => {
 
   it('resolves valid workspace fallback', () => {
     expect(workspaceRegistry.resolveValidWorkspace('roads', true)).toBe('roads')
-    expect(workspaceRegistry.resolveValidWorkspace('nonexistent', true)).toBe('terrain')
-    expect(workspaceRegistry.resolveValidWorkspace('rail', true)).toBe('terrain')
+    expect(workspaceRegistry.resolveValidWorkspace('nonexistent', true)).toBe('roads')
+    expect(workspaceRegistry.resolveValidWorkspace('rail', true)).toBe('roads')
     expect(workspaceRegistry.resolveValidWorkspace(null, false)).toBe('home')
   })
 })

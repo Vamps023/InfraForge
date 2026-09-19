@@ -143,6 +143,8 @@ std::expected<Road, std::vector<RoadDiagnostic>> fromRecord(const RoadRecord& re
         RoadLaneSection sec{
             .startStation = secRecord.startStation,
             .endStation = secRecord.endStation,
+            .leftLanes = {},
+            .rightLanes = {},
         };
         for (const auto& laneRecord : record.lanes) {
             if (laneRecord.sectionIndex != secRecord.sectionIndex) continue;

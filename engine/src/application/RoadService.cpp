@@ -985,12 +985,12 @@ domain::road::JunctionRecord RoadService::createJunction(const domain::road::Jun
 
     auto saved = store_.insertJunction(record);
     const std::string junctionIdText = domain::road::uuidTextFromJunctionId(saved.id);
-    eventSink_(RoadServiceEvent{
-        .kind = RoadServiceEvent::Kind::JunctionCreated,
-        .revision = store_.current().revision,
-        .junctionId = junctionIdText,
-        .junctionName = saved.name,
-    });
+    RoadServiceEvent createdEvent;
+    createdEvent.kind = RoadServiceEvent::Kind::JunctionCreated;
+    createdEvent.revision = store_.current().revision;
+    createdEvent.junctionId = junctionIdText;
+    createdEvent.junctionName = saved.name;
+    eventSink_(std::move(createdEvent));
     return saved;
 }
 
@@ -1014,12 +1014,12 @@ domain::road::JunctionRecord RoadService::updateJunction(const domain::road::Jun
     record.revision = existing->revision + 1;
 
     auto saved = store_.updateJunction(record);
-    eventSink_(RoadServiceEvent{
-        .kind = RoadServiceEvent::Kind::JunctionUpdated,
-        .revision = store_.current().revision,
-        .junctionId = junctionIdText,
-        .junctionName = saved.name,
-    });
+    RoadServiceEvent updatedEvent;
+    updatedEvent.kind = RoadServiceEvent::Kind::JunctionUpdated;
+    updatedEvent.revision = store_.current().revision;
+    updatedEvent.junctionId = junctionIdText;
+    updatedEvent.junctionName = saved.name;
+    eventSink_(std::move(updatedEvent));
     return saved;
 }
 
@@ -1035,12 +1035,12 @@ void RoadService::deleteJunction(const std::string& junctionId) {
     }
 
     store_.removeJunction(junctionId);
-    eventSink_(RoadServiceEvent{
-        .kind = RoadServiceEvent::Kind::JunctionRemoved,
-        .revision = store_.current().revision,
-        .junctionId = junctionId,
-        .junctionName = existing->name,
-    });
+    RoadServiceEvent removedEvent;
+    removedEvent.kind = RoadServiceEvent::Kind::JunctionRemoved;
+    removedEvent.revision = store_.current().revision;
+    removedEvent.junctionId = junctionId;
+    removedEvent.junctionName = existing->name;
+    eventSink_(std::move(removedEvent));
 }
 
 RoadHistoryResult RoadService::undo(const std::string& roadId) {

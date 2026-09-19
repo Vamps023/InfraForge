@@ -32,6 +32,15 @@ struct RoadServiceEvent {
         JunctionUpdated,
         JunctionRemoved,
     };
+
+    RoadServiceEvent() = default;
+    RoadServiceEvent(Kind k, std::string rId, std::uint64_t rev,
+                     std::vector<domain::world::ChunkCoord> chunks = {},
+                     std::string jId = {}, std::string jName = {})
+        : kind(k), roadId(std::move(rId)), revision(rev),
+          affectedChunks(std::move(chunks)), junctionId(std::move(jId)),
+          junctionName(std::move(jName)) {}
+
     Kind kind{Kind::Created};
     std::string roadId;
     std::uint64_t revision{0};

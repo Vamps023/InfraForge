@@ -211,6 +211,16 @@ std::string_view commandName(const ProtocolFrame& frame) {
         return "road.get";
     case protocol::v1::CommandEnvelope::kGetRoadScene:
         return "road.get_scene";
+    case protocol::v1::CommandEnvelope::kUpdateRoadLanes:
+        return "road.update_lanes";
+    case protocol::v1::CommandEnvelope::kCreateJunction:
+        return "junction.create";
+    case protocol::v1::CommandEnvelope::kUpdateJunction:
+        return "junction.update";
+    case protocol::v1::CommandEnvelope::kDeleteJunction:
+        return "junction.delete";
+    case protocol::v1::CommandEnvelope::kListJunctions:
+        return "junction.list";
     case protocol::v1::CommandEnvelope::COMMAND_NOT_SET:
         break;
     }

@@ -669,6 +669,21 @@ void CommandProcessor::processCommand(
         case protocol::v1::CommandEnvelope::kGetRoadScene:
             handleGetRoadScene(connectionId, frame);
             break;
+        case protocol::v1::CommandEnvelope::kUpdateRoadLanes:
+            handleUpdateRoadLanes(connectionId, frame);
+            break;
+        case protocol::v1::CommandEnvelope::kCreateJunction:
+            handleCreateJunction(connectionId, frame);
+            break;
+        case protocol::v1::CommandEnvelope::kUpdateJunction:
+            handleUpdateJunction(connectionId, frame);
+            break;
+        case protocol::v1::CommandEnvelope::kDeleteJunction:
+            handleDeleteJunction(connectionId, frame);
+            break;
+        case protocol::v1::CommandEnvelope::kListJunctions:
+            handleListJunctions(connectionId, frame);
+            break;
         case protocol::v1::CommandEnvelope::COMMAND_NOT_SET:
             throw CommandFailure{CommandFailureCode::InvalidArgument, "command envelope is empty"};
         }
@@ -1662,12 +1677,61 @@ void fillRoadDetails(protocol::v1::RoadDetails* out, const RoadDetails& d) {
         projected->set_left_width(breakpoint.leftWidth);
         projected->set_right_width(breakpoint.rightWidth);
     }
+    for (const auto& sec : d.laneSections) {
+        auto* secOut = out->add_lane_sections();
+        secOut->set_section_index(sec.sectionIndex);
+        secOut->set_start_station(sec.startStation);
+        secOut->set_end_station(sec.endStation);
+        for (const auto& lane : d.lanes) {
+            if (lane.sectionIndex == sec.sectionIndex) {
+                auto* laneOut = secOut->add_lanes();
+                laneOut->set_lane_id(lane.laneId);
+                laneOut->set_section_index(lane.sectionIndex);
+                laneOut->set_side(lane.side);
+                laneOut->set_lane_index(lane.laneIndex);
+                laneOut->set_type(lane.type);
+                laneOut->set_direction(lane.direction);
+                laneOut->set_width(lane.width);
+            }
+        }
+    }
     for (const auto& control : d.controlPoints) {
         auto* projected = out->add_control_points();
         projected->set_easting(control.easting);
         projected->set_northing(control.northing);
         if (control.elevation.has_value()) projected->set_elevation(*control.elevation);
         projected->set_protected_anchor(control.protectedAnchor);
+    }
+}
+
+void fillJunctionInfo(protocol::v1::JunctionInfo* out, const domain::road::JunctionRecord& j) {
+    out->set_junction_id(domain::road::uuidTextFromJunctionId(j.id));
+    out->set_name(j.name);
+    out->set_type(j.type);
+    out->set_pos_x(j.posX);
+    out->set_pos_y(j.posY);
+    out->set_elevation(j.elevation);
+    out->set_revision(j.revision);
+    for (const auto& app : j.approaches) {
+        auto* appOut = out->add_approaches();
+        appOut->set_road_id(app.roadId);
+        appOut->set_contact_point(app.contactPoint);
+        appOut->set_entry_point_x(app.entryPointX);
+        appOut->set_entry_point_y(app.entryPointY);
+        appOut->set_heading(app.heading);
+        for (const auto& laneId : app.laneIds) {
+            appOut->add_lane_ids(laneId);
+        }
+    }
+    for (const auto& conn : j.connections) {
+        auto* connOut = out->add_connections();
+        connOut->set_id(conn.id);
+        connOut->set_from_road_id(conn.fromRoadId);
+        connOut->set_from_lane_id(conn.fromLaneId);
+        connOut->set_to_road_id(conn.toRoadId);
+        connOut->set_to_lane_id(conn.toLaneId);
+        connOut->set_movement_type(conn.movementType);
+        connOut->set_allowed(conn.allowed);
     }
 }
 
@@ -2008,6 +2072,145 @@ void CommandProcessor::handleGetRoadScene(const std::string& connectionId, const
     sink_.sendToConnection(connectionId, response);
 }
 
+void CommandProcessor::handleUpdateRoadLanes(const std::string& connectionId, const ProtocolFrame& frame) {
+    const auto& command = frame.command().update_road_lanes();
+    UpdateLanesInput input;
+    input.roadId = command.road_id();
+    for (int i = 0; i < command.lane_sections_size(); ++i) {
+        const auto& secProto = command.lane_sections(i);
+        domain::road::RoadLaneSectionRecord sec;
+        sec.sectionIndex = secProto.section_index();
+        sec.startStation = secProto.start_station();
+        sec.endStation = secProto.end_station();
+        input.laneSections.push_back(sec);
+        for (int j = 0; j < secProto.lanes_size(); ++j) {
+            const auto& laneProto = secProto.lanes(j);
+            domain::road::RoadLaneRecord lane;
+            lane.laneId = laneProto.lane_id();
+            lane.sectionIndex = laneProto.section_index();
+            lane.side = laneProto.side();
+            lane.laneIndex = laneProto.lane_index();
+            lane.type = laneProto.type();
+            lane.direction = laneProto.direction();
+            lane.width = laneProto.width();
+            input.lanes.push_back(lane);
+        }
+    }
+
+    auto summary = roadService_->updateLanes(input);
+    ProtocolFrame response;
+    response.set_request_id(frame.request_id());
+    fillRoadSummary(response.mutable_result()->mutable_update_road_lanes_result()->mutable_road(), summary);
+    sink_.sendToConnection(connectionId, response);
+}
+
+void CommandProcessor::handleCreateJunction(const std::string& connectionId, const ProtocolFrame& frame) {
+    const auto& command = frame.command().create_junction();
+    domain::road::JunctionRecord input;
+    input.name = command.name();
+    input.type = command.type().empty() ? "custom" : command.type();
+    input.posX = command.pos_x();
+    input.posY = command.pos_y();
+    input.elevation = command.elevation();
+
+    for (int i = 0; i < command.approaches_size(); ++i) {
+        const auto& appProto = command.approaches(i);
+        domain::road::JunctionApproachRecord app;
+        app.roadId = appProto.road_id();
+        app.contactPoint = appProto.contact_point();
+        app.entryPointX = appProto.entry_point_x();
+        app.entryPointY = appProto.entry_point_y();
+        app.heading = appProto.heading();
+        for (int j = 0; j < appProto.lane_ids_size(); ++j) {
+            app.laneIds.push_back(appProto.lane_ids(j));
+        }
+        input.approaches.push_back(app);
+    }
+
+    for (int i = 0; i < command.connections_size(); ++i) {
+        const auto& connProto = command.connections(i);
+        domain::road::JunctionConnectionRecord conn;
+        conn.id = connProto.id().empty() ? runtime::generateUuidV4() : connProto.id();
+        conn.fromRoadId = connProto.from_road_id();
+        conn.fromLaneId = connProto.from_lane_id();
+        conn.toRoadId = connProto.to_road_id();
+        conn.toLaneId = connProto.to_lane_id();
+        conn.movementType = connProto.movement_type();
+        conn.allowed = connProto.allowed();
+        input.connections.push_back(conn);
+    }
+
+    auto saved = roadService_->createJunction(input);
+    ProtocolFrame response;
+    response.set_request_id(frame.request_id());
+    fillJunctionInfo(response.mutable_result()->mutable_create_junction_result()->mutable_junction(), saved);
+    sink_.sendToConnection(connectionId, response);
+}
+
+void CommandProcessor::handleUpdateJunction(const std::string& connectionId, const ProtocolFrame& frame) {
+    const auto& command = frame.command().update_junction();
+    domain::road::JunctionRecord input;
+    input.id = domain::road::junctionIdFromUuidText(command.junction_id());
+    input.name = command.name();
+    input.type = command.type().empty() ? "custom" : command.type();
+    input.posX = command.pos_x();
+    input.posY = command.pos_y();
+    input.elevation = command.elevation();
+
+    for (int i = 0; i < command.approaches_size(); ++i) {
+        const auto& appProto = command.approaches(i);
+        domain::road::JunctionApproachRecord app;
+        app.roadId = appProto.road_id();
+        app.contactPoint = appProto.contact_point();
+        app.entryPointX = appProto.entry_point_x();
+        app.entryPointY = appProto.entry_point_y();
+        app.heading = appProto.heading();
+        for (int j = 0; j < appProto.lane_ids_size(); ++j) {
+            app.laneIds.push_back(appProto.lane_ids(j));
+        }
+        input.approaches.push_back(app);
+    }
+
+    for (int i = 0; i < command.connections_size(); ++i) {
+        const auto& connProto = command.connections(i);
+        domain::road::JunctionConnectionRecord conn;
+        conn.id = connProto.id().empty() ? runtime::generateUuidV4() : connProto.id();
+        conn.fromRoadId = connProto.from_road_id();
+        conn.fromLaneId = connProto.from_lane_id();
+        conn.toRoadId = connProto.to_road_id();
+        conn.toLaneId = connProto.to_lane_id();
+        conn.movementType = connProto.movement_type();
+        conn.allowed = connProto.allowed();
+        input.connections.push_back(conn);
+    }
+
+    auto saved = roadService_->updateJunction(input);
+    ProtocolFrame response;
+    response.set_request_id(frame.request_id());
+    fillJunctionInfo(response.mutable_result()->mutable_update_junction_result()->mutable_junction(), saved);
+    sink_.sendToConnection(connectionId, response);
+}
+
+void CommandProcessor::handleDeleteJunction(const std::string& connectionId, const ProtocolFrame& frame) {
+    const auto& command = frame.command().delete_junction();
+    roadService_->deleteJunction(command.junction_id());
+    ProtocolFrame response;
+    response.set_request_id(frame.request_id());
+    response.mutable_result()->mutable_delete_junction_result();
+    sink_.sendToConnection(connectionId, response);
+}
+
+void CommandProcessor::handleListJunctions(const std::string& connectionId, const ProtocolFrame& frame) {
+    auto junctions = roadService_->listJunctions();
+    ProtocolFrame response;
+    response.set_request_id(frame.request_id());
+    auto* result = response.mutable_result()->mutable_list_junctions_result();
+    for (const auto& j : junctions) {
+        fillJunctionInfo(result->add_junctions(), j);
+    }
+    sink_.sendToConnection(connectionId, response);
+}
+
 void CommandProcessor::publishRoadEvent(const RoadServiceEvent& event) {
     ProtocolFrame eventFrame;
     auto* envelope = eventFrame.mutable_event();
@@ -2040,6 +2243,25 @@ void CommandProcessor::publishRoadEvent(const RoadServiceEvent& event) {
             changed->add_chunk_x(chunk.x);
             changed->add_chunk_y(chunk.y);
         }
+        break;
+    }
+    case RoadServiceEvent::Kind::JunctionCreated: {
+        auto* created = envelope->mutable_junction_created();
+        created->set_junction_id(event.junctionId);
+        created->set_name(event.junctionName);
+        created->set_revision(event.revision);
+        break;
+    }
+    case RoadServiceEvent::Kind::JunctionUpdated: {
+        auto* updated = envelope->mutable_junction_updated();
+        updated->set_junction_id(event.junctionId);
+        updated->set_revision(event.revision);
+        break;
+    }
+    case RoadServiceEvent::Kind::JunctionRemoved: {
+        auto* removed = envelope->mutable_junction_removed();
+        removed->set_junction_id(event.junctionId);
+        removed->set_revision(event.revision);
         break;
     }
     }

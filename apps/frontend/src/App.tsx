@@ -41,6 +41,7 @@ import { fetchTerrainScene } from './features/terrain/terrainApi'
 import { registerRoadCommands, unregisterRoadCommands } from './features/road/roadCommands'
 import { registerRoadOutlinerProjection, unregisterRoadOutlinerProjection } from './features/road/roadOutlinerProjection'
 import { registerRoadInspectorSection, unregisterRoadInspectorSection } from './features/road/roadInspectorSection'
+import { registerJunctionInspectorSection, unregisterJunctionInspectorSection } from './features/road/JunctionInspectorSection'
 import { registerRoadProfileContextEditor, unregisterRoadProfileContextEditor } from './features/road/RoadProfileEditor'
 import { subscribeRoadEvents, setRoadScenePublisher } from './features/road/roadEvents'
 import { listRoads, fetchRoadScene, moveRoadControl, insertRoadControl } from './features/road/roadApi'
@@ -85,6 +86,7 @@ export function App() {
     registerRoadCommands({ getEngineClient: () => engineSessionRef.current?.client ?? null })
     registerRoadOutlinerProjection()
     registerRoadInspectorSection({ getEngineClient: () => engineSessionRef.current?.client ?? null })
+    registerJunctionInspectorSection({ getEngineClient: () => engineSessionRef.current?.client ?? null })
     registerRoadProfileContextEditor({ getEngineClient: () => engineSessionRef.current?.client ?? null })
     return () => {
       unregisterBuiltinCommands()
@@ -97,6 +99,7 @@ export function App() {
       unregisterRoadCommands()
       unregisterRoadOutlinerProjection()
       unregisterRoadInspectorSection()
+      unregisterJunctionInspectorSection()
       unregisterRoadProfileContextEditor()
     }
   }, [])
@@ -126,12 +129,19 @@ export function App() {
       if (primaryId && primaryId.startsWith('road:')) {
         const roadId = primaryId.slice('road:'.length)
         useRoadStore.getState().selectRoad(roadId)
+        useRoadStore.getState().selectJunction(null)
         if (client) {
           void getRoad(client, roadId).catch(() => undefined)
         }
+      } else if (primaryId && primaryId.startsWith('junction:')) {
+        const junctionId = primaryId.slice('junction:'.length)
+        useRoadStore.getState().selectJunction(junctionId)
+        useRoadStore.getState().selectRoad(null)
+        useRoadStore.getState().setDetails(null)
       } else {
         useRoadStore.getState().selectRoad(null)
         useRoadStore.getState().setDetails(null)
+        useRoadStore.getState().selectJunction(null)
       }
     })
   }, [])

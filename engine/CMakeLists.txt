@@ -56,6 +56,9 @@ add_library(infraforge_core STATIC
     src/domain/terrain/TerrariumTerrainProvider.cpp
     src/domain/road/AlignmentFitter.cpp
     src/domain/road/AlignmentPrimitives.cpp
+    src/domain/road/JunctionRecord.cpp
+    src/domain/road/JunctionTypes.cpp
+    src/domain/road/LaneTypes.cpp
     src/domain/road/ReferenceAlignment.cpp
     src/domain/road/Road.cpp
     src/domain/road/RoadRecord.cpp

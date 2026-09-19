@@ -47,6 +47,12 @@ public:
     [[nodiscard]] domain::road::RoadRecord updateRoad(
         const domain::road::RoadRecord& road) override;
     void removeRoad(const std::string& roadId) override;
+    [[nodiscard]] std::vector<domain::road::JunctionRecord> junctions() const override;
+    [[nodiscard]] domain::road::JunctionRecord insertJunction(
+        const domain::road::JunctionRecord& junction) override;
+    [[nodiscard]] domain::road::JunctionRecord updateJunction(
+        const domain::road::JunctionRecord& junction) override;
+    void removeJunction(const std::string& junctionId) override;
     void close() override;
 
 private:
@@ -75,6 +81,12 @@ private:
     [[nodiscard]] domain::road::RoadRecord updateRoadImpl(
         const domain::road::RoadRecord& road);
     void removeRoadImpl(const std::string& roadId);
+    [[nodiscard]] std::vector<domain::road::JunctionRecord> junctionsImpl() const;
+    [[nodiscard]] domain::road::JunctionRecord insertJunctionImpl(
+        const domain::road::JunctionRecord& junction);
+    [[nodiscard]] domain::road::JunctionRecord updateJunctionImpl(
+        const domain::road::JunctionRecord& junction);
+    void removeJunctionImpl(const std::string& junctionId);
     void closeImpl();
 
     [[nodiscard]] domain::project::ProjectRecord readRecord(const SqliteConnection& connection) const;

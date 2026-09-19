@@ -1,6 +1,6 @@
 import type { EventEnvelope } from '@infraforge/protocol'
 import type { EngineClient } from '../../lib/engineSession'
-import { listRoads, getRoad } from './roadApi'
+import { listRoads, getRoad, listJunctions } from './roadApi'
 import { useRoadStore } from './roadStore'
 
 // Applies engine-originated road events to the UI projection and
@@ -55,10 +55,22 @@ async function refreshRoadList(client: EngineClient): Promise<void> {
   await refreshScene()
 }
 
+async function refreshJunctionList(client: EngineClient): Promise<void> {
+  const sessionToken = useRoadStore.getState().sessionToken
+  try {
+    await listJunctions(client)
+  } catch {
+    // Junction list refresh is non-fatal to event propagation.
+  }
+  if (useRoadStore.getState().sessionToken !== sessionToken) {
+    return
+  }
+  await refreshScene()
+}
+
 export function applyRoadEvent(client: EngineClient, event: EventEnvelope) {
   switch (event.event.case) {
     case 'roadCreated': {
-      const created = event.event.value
       // New road appeared — refresh the full list to get the summary.
       void refreshRoadList(client)
       break
@@ -89,6 +101,20 @@ export function applyRoadEvent(client: EngineClient, event: EventEnvelope) {
       } else {
         void refreshRoadList(client)
       }
+      break
+    }
+    case 'junctionCreated': {
+      void refreshJunctionList(client)
+      break
+    }
+    case 'junctionUpdated': {
+      void refreshJunctionList(client)
+      break
+    }
+    case 'junctionRemoved': {
+      const removed = event.event.value
+      useRoadStore.getState().removeJunction(removed.junctionId)
+      void refreshScene()
       break
     }
     default:

@@ -301,6 +301,13 @@ message CommandEnvelope {
     GetRoadSceneCommand get_road_scene = 35;
     // Protocol 1.6 terrain export.
     TerrainExportCommand terrain_export = 36;
+    UpdateRoadWidthCommand update_road_width = 37;
+    ConformRoadToTerrainCommand conform_road_to_terrain = 38;
+    UpdateRoadLanesCommand update_road_lanes = 39;
+    CreateJunctionCommand create_junction = 40;
+    UpdateJunctionCommand update_junction = 41;
+    DeleteJunctionCommand delete_junction = 42;
+    ListJunctionsCommand list_junctions = 43;
   }
 }
 
@@ -340,6 +347,13 @@ message ResultEnvelope {
     RoadSceneResult road_scene_result = 29;
     // Protocol 1.6 terrain export.
     TerrainExportResult terrain_export_result = 30;
+    UpdateRoadWidthResult update_road_width_result = 31;
+    ConformRoadToTerrainResult conform_road_to_terrain_result = 32;
+    UpdateRoadLanesResult update_road_lanes_result = 33;
+    CreateJunctionResult create_junction_result = 34;
+    UpdateJunctionResult update_junction_result = 35;
+    DeleteJunctionResult delete_junction_result = 36;
+    ListJunctionsResult list_junctions_result = 37;
   }
 }
 
@@ -367,5 +381,8 @@ message EventEnvelope {
     RoadUpdatedEvent road_updated = 18;
     RoadRemovedEvent road_removed = 19;
     RoadGeometryChangedEvent road_geometry_changed = 20;
+    JunctionCreatedEvent junction_created = 21;
+    JunctionUpdatedEvent junction_updated = 22;
+    JunctionRemovedEvent junction_removed = 23;
   }
 }

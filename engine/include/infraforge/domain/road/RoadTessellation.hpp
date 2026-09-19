@@ -3,6 +3,7 @@
 #include "infraforge/domain/road/RoadTypes.hpp"
 #include "infraforge/domain/road/ReferenceAlignment.hpp"
 #include "infraforge/domain/road/VerticalProfiles.hpp"
+#include "infraforge/domain/road/RoadWidthProfile.hpp"
 
 #include <cstdint>
 #include <vector>
@@ -13,8 +14,8 @@ namespace infraforge::domain::road {
 // ReferenceAlignment and vertical profiles. This is derived data — the
 // renderer consumes it, but road truth remains in the alignment/profiles.
 //
-// The tessellation is a simple centerline + cross-section ribbon:
-//   - Cross-sections are sampled at regular station intervals.
+// The tessellation is a centerline + cross-section ribbon:
+//   - Cross-sections are sampled adaptively from a world-space error bound.
 //   - Each cross-section has left/right edge offsets from the centerline.
 //   - The mesh is a triangle strip between adjacent cross-sections.
 //
@@ -30,6 +31,8 @@ struct RoadCrossSection {
     Curvature curvature{0.0};
     double height{0.0};
     double crossSlope{0.0};
+    double leftWidth{5.0};
+    double rightWidth{5.0};
     // Left/right edge points (offset perpendicular to heading).
     AlignmentPoint leftEdge{};
     AlignmentPoint rightEdge{};
@@ -39,8 +42,14 @@ struct RoadCrossSection {
 
 // Tessellation parameters. All values in canonical project units.
 struct RoadTessellationParams {
-    // Station sampling interval along the alignment.
+    // Maximum station spacing along the alignment. Straight, flat portions
+    // use this spacing; curved/banked/tapered portions refine further.
     double stationInterval{10.0};
+    // Maximum permitted midpoint deviation between the evaluated road surface
+    // and its tessellated chord, measured in canonical project units.
+    double maximumSurfaceError{0.05};
+    // Hard safety bound for pathological inputs.
+    std::size_t maximumCrossSections{1'000'000};
     // Half-width of the road surface (distance from centerline to each edge).
     double halfWidth{5.0};
 };
@@ -58,17 +67,30 @@ struct RoadTessellation {
 };
 
 // Generates a road tessellation from a reference alignment and vertical
-// profiles. The alignment is sampled at regular station intervals; each
-// sample produces a cross-section with left/right edges offset perpendicular
-// to the tangent heading. Heights come from the elevation profile; cross-
-// slopes from the superelevation profile.
+// profiles. Sampling includes every alignment segment and authored profile
+// breakpoint, then recursively refines until the center and both surface
+// edges satisfy maximumSurfaceError.
 //
-// The stationInterval must be positive; halfWidth must be non-negative.
+// stationInterval and maximumSurfaceError must be positive; halfWidth must be
+// non-negative and maximumCrossSections must be at least two.
 // Returns an empty tessellation for an empty alignment.
 [[nodiscard]] RoadTessellation tessellateRoad(
     const ReferenceAlignment& alignment,
     const ElevationProfile& elevation,
     const SuperelevationProfile& superelevation,
+    const RoadWidthProfile& width,
     const RoadTessellationParams& params = {});
+
+// Compatibility overload for callers that intentionally use the canonical
+// default 5 m side widths.
+[[nodiscard]] inline RoadTessellation tessellateRoad(
+    const ReferenceAlignment& alignment,
+    const ElevationProfile& elevation,
+    const SuperelevationProfile& superelevation,
+    const RoadTessellationParams& params = {}) {
+    return tessellateRoad(alignment, elevation, superelevation,
+        RoadWidthProfile{{RoadWidthBreakpoint{.station = 0.0,
+            .leftWidth = params.halfWidth, .rightWidth = params.halfWidth}}}, params);
+}
 
 } // namespace infraforge::domain::road

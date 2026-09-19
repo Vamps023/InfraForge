@@ -495,6 +495,8 @@
   flex: 1 1 auto;
   min-height: 0;
   position: relative;
+  overflow: hidden;
+  isolation: isolate;
 }
 
 .editor-panel-context {
@@ -591,6 +593,34 @@
 .profile-feedback {
   font-size: var(--if-font-metadata);
   color: var(--if-accent);
+}
+
+.profile-breakpoint-table-wrap {
+  overflow: auto;
+}
+
+.profile-breakpoint-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--if-font-body);
+}
+
+.profile-breakpoint-table th,
+.profile-breakpoint-table td {
+  padding: var(--if-space-2);
+  border-bottom: 1px solid var(--if-border-subtle);
+  text-align: left;
+}
+
+.profile-breakpoint-table input {
+  width: min(180px, 100%);
+  height: var(--if-control-sm);
+  box-sizing: border-box;
+  background: var(--if-bg-input);
+  border: 1px solid var(--if-border-default);
+  color: var(--if-text-primary);
+  border-radius: var(--if-radius-sm);
+  padding: 0 var(--if-space-2);
 }
 
 .profile-notice {

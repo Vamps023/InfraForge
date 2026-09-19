@@ -1,5 +1,6 @@
 #include "infraforge/persistence/SqliteProjectStore.hpp"
 
+#include "infraforge/domain/road/JunctionRecord.hpp"
 #include "infraforge/domain/terrain/TerrainDataset.hpp"
 #include "infraforge/domain/terrain/TerrainTypes.hpp"
 #include "infraforge/persistence/ProjectManifest.hpp"
@@ -508,6 +509,22 @@ void SqliteProjectStore::removeRoad(const std::string& roadId) {
     withinStoreBoundary([&] { removeRoadImpl(roadId); });
 }
 
+std::vector<domain::road::JunctionRecord> SqliteProjectStore::junctions() const {
+    return withinStoreBoundary([&] { return junctionsImpl(); });
+}
+
+domain::road::JunctionRecord SqliteProjectStore::insertJunction(const domain::road::JunctionRecord& junction) {
+    return withinStoreBoundary([&] { return insertJunctionImpl(junction); });
+}
+
+domain::road::JunctionRecord SqliteProjectStore::updateJunction(const domain::road::JunctionRecord& junction) {
+    return withinStoreBoundary([&] { return updateJunctionImpl(junction); });
+}
+
+void SqliteProjectStore::removeJunction(const std::string& junctionId) {
+    withinStoreBoundary([&] { removeJunctionImpl(junctionId); });
+}
+
 void SqliteProjectStore::removeTerrainDatasetImpl(const std::string& datasetId) {
     if (!connection_.has_value()) {
         throw std::logic_error("cannot remove a terrain dataset without an open project session");
@@ -821,6 +838,44 @@ std::vector<domain::road::RoadRecord> SqliteProjectStore::roadsImpl() const {
                 {supRows.columnDouble(0), supRows.columnDouble(1)});
         }
 
+        SqliteStatement widthRows{*connection_,
+            "SELECT station, left_width, right_width FROM road_width_breakpoints "
+            "WHERE road_id = ? ORDER BY breakpoint_index"};
+        widthRows.bindText(1, roadRows.columnText(0));
+        while (widthRows.step()) {
+            road.widthBreakpoints.push_back({widthRows.columnDouble(0),
+                widthRows.columnDouble(1), widthRows.columnDouble(2)});
+        }
+
+        // Lane sections and lanes.
+        SqliteStatement sectionRows{*connection_,
+            "SELECT section_index, start_station, end_station FROM road_lane_sections "
+            "WHERE road_id = ? ORDER BY section_index"};
+        sectionRows.bindText(1, roadRows.columnText(0));
+        while (sectionRows.step()) {
+            road.laneSections.push_back({
+                static_cast<std::uint32_t>(sectionRows.columnInt64(0)),
+                sectionRows.columnDouble(1),
+                sectionRows.columnDouble(2),
+            });
+        }
+
+        SqliteStatement laneRows{*connection_,
+            "SELECT lane_id, section_index, side, lane_index, type, direction, width "
+            "FROM road_lanes WHERE road_id = ? ORDER BY section_index, side, lane_index"};
+        laneRows.bindText(1, roadRows.columnText(0));
+        while (laneRows.step()) {
+            road.lanes.push_back({
+                std::string{laneRows.columnText(0)},
+                static_cast<std::uint32_t>(laneRows.columnInt64(1)),
+                std::string{laneRows.columnText(2)},
+                static_cast<std::uint32_t>(laneRows.columnInt64(3)),
+                std::string{laneRows.columnText(4)},
+                std::string{laneRows.columnText(5)},
+                laneRows.columnDouble(6),
+            });
+        }
+
         // Source.
         SqliteStatement srcRows{*connection_,
             "SELECT provider, source_id, source_crs, imported_at, tags "
@@ -983,6 +1038,49 @@ domain::road::RoadRecord SqliteProjectStore::insertRoadImpl(
             (void)insertBp.step();
         }
 
+        for (std::size_t i = 0; i < road.widthBreakpoints.size(); ++i) {
+            const auto& breakpoint = road.widthBreakpoints[i];
+            SqliteStatement insertWidth{*connection_,
+                "INSERT INTO road_width_breakpoints "
+                "(road_id, breakpoint_index, station, left_width, right_width) "
+                "VALUES (?, ?, ?, ?, ?)"};
+            insertWidth.bindText(1, roadIdText);
+            insertWidth.bindInt64(2, static_cast<std::int64_t>(i));
+            insertWidth.bindDouble(3, breakpoint.station);
+            insertWidth.bindDouble(4, breakpoint.leftWidth);
+            insertWidth.bindDouble(5, breakpoint.rightWidth);
+            (void)insertWidth.step();
+        }
+
+        // Lane sections and lanes.
+        for (const auto& sec : road.laneSections) {
+            SqliteStatement insertSec{*connection_,
+                "INSERT INTO road_lane_sections "
+                "(road_id, section_index, start_station, end_station) "
+                "VALUES (?, ?, ?, ?)"};
+            insertSec.bindText(1, roadIdText);
+            insertSec.bindInt64(2, static_cast<std::int64_t>(sec.sectionIndex));
+            insertSec.bindDouble(3, sec.startStation);
+            insertSec.bindDouble(4, sec.endStation);
+            (void)insertSec.step();
+        }
+
+        for (const auto& lane : road.lanes) {
+            SqliteStatement insertLane{*connection_,
+                "INSERT INTO road_lanes "
+                "(road_id, section_index, lane_id, side, lane_index, type, direction, width) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)"};
+            insertLane.bindText(1, roadIdText);
+            insertLane.bindInt64(2, static_cast<std::int64_t>(lane.sectionIndex));
+            insertLane.bindText(3, lane.laneId);
+            insertLane.bindText(4, lane.side);
+            insertLane.bindInt64(5, static_cast<std::int64_t>(lane.laneIndex));
+            insertLane.bindText(6, lane.type);
+            insertLane.bindText(7, lane.direction);
+            insertLane.bindDouble(8, lane.width);
+            (void)insertLane.step();
+        }
+
         // Source.
         if (road.hasSource) {
             nlohmann::json tagsJson = nlohmann::json::array();
@@ -1106,6 +1204,21 @@ domain::road::RoadRecord SqliteProjectStore::updateRoadImpl(
         delSup.bindText(1, roadIdText);
         (void)delSup.step();
 
+        SqliteStatement delWidth{*connection_,
+            "DELETE FROM road_width_breakpoints WHERE road_id = ?"};
+        delWidth.bindText(1, roadIdText);
+        (void)delWidth.step();
+
+        SqliteStatement delLanes{*connection_,
+            "DELETE FROM road_lanes WHERE road_id = ?"};
+        delLanes.bindText(1, roadIdText);
+        (void)delLanes.step();
+
+        SqliteStatement delSections{*connection_,
+            "DELETE FROM road_lane_sections WHERE road_id = ?"};
+        delSections.bindText(1, roadIdText);
+        (void)delSections.step();
+
         SqliteStatement delElev{*connection_,
             "DELETE FROM road_elevation_breakpoints WHERE road_id = ?"};
         delElev.bindText(1, roadIdText);
@@ -1182,6 +1295,49 @@ domain::road::RoadRecord SqliteProjectStore::updateRoadImpl(
             insertBp.bindDouble(3, bp.station);
             insertBp.bindDouble(4, bp.value);
             (void)insertBp.step();
+        }
+
+        for (std::size_t i = 0; i < road.widthBreakpoints.size(); ++i) {
+            const auto& breakpoint = road.widthBreakpoints[i];
+            SqliteStatement insertWidth{*connection_,
+                "INSERT INTO road_width_breakpoints "
+                "(road_id, breakpoint_index, station, left_width, right_width) "
+                "VALUES (?, ?, ?, ?, ?)"};
+            insertWidth.bindText(1, roadIdText);
+            insertWidth.bindInt64(2, static_cast<std::int64_t>(i));
+            insertWidth.bindDouble(3, breakpoint.station);
+            insertWidth.bindDouble(4, breakpoint.leftWidth);
+            insertWidth.bindDouble(5, breakpoint.rightWidth);
+            (void)insertWidth.step();
+        }
+
+        // Re-insert lane sections and lanes.
+        for (const auto& sec : road.laneSections) {
+            SqliteStatement insertSec{*connection_,
+                "INSERT INTO road_lane_sections "
+                "(road_id, section_index, start_station, end_station) "
+                "VALUES (?, ?, ?, ?)"};
+            insertSec.bindText(1, roadIdText);
+            insertSec.bindInt64(2, static_cast<std::int64_t>(sec.sectionIndex));
+            insertSec.bindDouble(3, sec.startStation);
+            insertSec.bindDouble(4, sec.endStation);
+            (void)insertSec.step();
+        }
+
+        for (const auto& lane : road.lanes) {
+            SqliteStatement insertLane{*connection_,
+                "INSERT INTO road_lanes "
+                "(road_id, section_index, lane_id, side, lane_index, type, direction, width) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)"};
+            insertLane.bindText(1, roadIdText);
+            insertLane.bindInt64(2, static_cast<std::int64_t>(lane.sectionIndex));
+            insertLane.bindText(3, lane.laneId);
+            insertLane.bindText(4, lane.side);
+            insertLane.bindInt64(5, static_cast<std::int64_t>(lane.laneIndex));
+            insertLane.bindText(6, lane.type);
+            insertLane.bindText(7, lane.direction);
+            insertLane.bindDouble(8, lane.width);
+            (void)insertLane.step();
         }
 
         // Re-insert source.
@@ -1291,6 +1447,271 @@ void SqliteProjectStore::removeRoadImpl(const std::string& roadId) {
         if (connection_->lastChanges() != 1) {
             fail(ports::StoreErrorCategory::PersistenceFailure,
                 "project_state row went missing during road remove (corrupt project database)");
+        }
+        transaction.commit();
+    }
+    record_.revision += 1;
+    record_.modifiedAt = modifiedAt;
+}
+
+std::vector<domain::road::JunctionRecord> SqliteProjectStore::junctionsImpl() const {
+    if (!connection_.has_value()) {
+        throw std::logic_error("cannot read junctions without an open project session");
+    }
+
+    std::vector<domain::road::JunctionRecord> result;
+    SqliteStatement junctionRows{*connection_,
+        "SELECT id, name, type, pos_x, pos_y, elevation, revision "
+        "FROM junctions ORDER BY id"};
+
+    while (junctionRows.step()) {
+        domain::road::JunctionRecord junction;
+        const std::string junctionIdText = std::string{junctionRows.columnText(0)};
+        junction.id = domain::road::junctionIdFromUuidText(junctionIdText);
+        junction.name = std::string{junctionRows.columnText(1)};
+        junction.type = std::string{junctionRows.columnText(2)};
+        junction.posX = junctionRows.columnDouble(3);
+        junction.posY = junctionRows.columnDouble(4);
+        junction.elevation = junctionRows.columnDouble(5);
+        junction.revision = static_cast<std::uint64_t>(junctionRows.columnInt64(6));
+
+        // Approaches
+        SqliteStatement appRows{*connection_,
+            "SELECT road_id, contact_point, entry_point_x, entry_point_y, heading, lane_ids "
+            "FROM junction_approaches WHERE junction_id = ? ORDER BY approach_index"};
+        appRows.bindText(1, junctionIdText);
+        while (appRows.step()) {
+            domain::road::JunctionApproachRecord app;
+            app.roadId = std::string{appRows.columnText(0)};
+            app.contactPoint = std::string{appRows.columnText(1)};
+            app.entryPointX = appRows.columnDouble(2);
+            app.entryPointY = appRows.columnDouble(3);
+            app.heading = appRows.columnDouble(4);
+            try {
+                auto parsed = nlohmann::json::parse(std::string{appRows.columnText(5)});
+                if (parsed.is_array()) {
+                    for (const auto& item : parsed) {
+                        if (item.is_string()) {
+                            app.laneIds.push_back(item.get<std::string>());
+                        }
+                    }
+                }
+            } catch (...) {
+                // fall through with whatever was read
+            }
+            junction.approaches.push_back(std::move(app));
+        }
+
+        // Connections
+        SqliteStatement connRows{*connection_,
+            "SELECT id, from_road_id, from_lane_id, to_road_id, to_lane_id, movement_type, allowed "
+            "FROM junction_connections WHERE junction_id = ? ORDER BY id"};
+        connRows.bindText(1, junctionIdText);
+        while (connRows.step()) {
+            domain::road::JunctionConnectionRecord conn;
+            conn.id = std::string{connRows.columnText(0)};
+            conn.fromRoadId = std::string{connRows.columnText(1)};
+            conn.fromLaneId = std::string{connRows.columnText(2)};
+            conn.toRoadId = std::string{connRows.columnText(3)};
+            conn.toLaneId = std::string{connRows.columnText(4)};
+            conn.movementType = std::string{connRows.columnText(5)};
+            conn.allowed = (connRows.columnInt64(6) != 0);
+            junction.connections.push_back(std::move(conn));
+        }
+
+        result.push_back(std::move(junction));
+    }
+
+    return result;
+}
+
+domain::road::JunctionRecord SqliteProjectStore::insertJunctionImpl(
+    const domain::road::JunctionRecord& junction) {
+    if (!connection_.has_value()) {
+        throw std::logic_error("cannot insert a junction without an open project session");
+    }
+    if (junction.id.isNull()) {
+        fail(ports::StoreErrorCategory::PersistenceFailure,
+            "junction id must not be null");
+    }
+
+    const std::string modifiedAt = runtime::utcTimestampNow();
+    const std::string junctionIdText = domain::road::uuidTextFromJunctionId(junction.id);
+    {
+        SqliteTransaction transaction{*connection_};
+        SqliteStatement insertJunction{*connection_,
+            "INSERT INTO junctions (id, name, type, pos_x, pos_y, elevation, revision) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)"};
+        insertJunction.bindText(1, junctionIdText);
+        insertJunction.bindText(2, junction.name);
+        insertJunction.bindText(3, junction.type);
+        insertJunction.bindDouble(4, junction.posX);
+        insertJunction.bindDouble(5, junction.posY);
+        insertJunction.bindDouble(6, junction.elevation);
+        insertJunction.bindInt64(7, static_cast<std::int64_t>(junction.revision));
+        (void)insertJunction.step();
+
+        for (std::size_t i = 0; i < junction.approaches.size(); ++i) {
+            const auto& app = junction.approaches[i];
+            SqliteStatement insertApp{*connection_,
+                "INSERT INTO junction_approaches "
+                "(junction_id, approach_index, road_id, contact_point, entry_point_x, entry_point_y, heading, lane_ids) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)"};
+            insertApp.bindText(1, junctionIdText);
+            insertApp.bindInt64(2, static_cast<std::int64_t>(i));
+            insertApp.bindText(3, app.roadId);
+            insertApp.bindText(4, app.contactPoint);
+            insertApp.bindDouble(5, app.entryPointX);
+            insertApp.bindDouble(6, app.entryPointY);
+            insertApp.bindDouble(7, app.heading);
+            insertApp.bindText(8, nlohmann::json(app.laneIds).dump());
+            (void)insertApp.step();
+        }
+
+        for (const auto& conn : junction.connections) {
+            SqliteStatement insertConn{*connection_,
+                "INSERT INTO junction_connections "
+                "(id, junction_id, from_road_id, from_lane_id, to_road_id, to_lane_id, movement_type, allowed) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)"};
+            insertConn.bindText(1, conn.id);
+            insertConn.bindText(2, junctionIdText);
+            insertConn.bindText(3, conn.fromRoadId);
+            insertConn.bindText(4, conn.fromLaneId);
+            insertConn.bindText(5, conn.toRoadId);
+            insertConn.bindText(6, conn.toLaneId);
+            insertConn.bindText(7, conn.movementType);
+            insertConn.bindInt64(8, conn.allowed ? 1 : 0);
+            (void)insertConn.step();
+        }
+
+        SqliteStatement state{*connection_,
+            "UPDATE project_state SET revision = revision + 1, modified_at = ? WHERE id = 1"};
+        state.bindText(1, modifiedAt);
+        (void)state.step();
+        if (connection_->lastChanges() != 1) {
+            fail(ports::StoreErrorCategory::PersistenceFailure,
+                "project_state row went missing during junction insert (corrupt project database)");
+        }
+        transaction.commit();
+    }
+
+    record_.revision += 1;
+    record_.modifiedAt = modifiedAt;
+    return junction;
+}
+
+domain::road::JunctionRecord SqliteProjectStore::updateJunctionImpl(
+    const domain::road::JunctionRecord& junction) {
+    if (!connection_.has_value()) {
+        throw std::logic_error("cannot update a junction without an open project session");
+    }
+    if (junction.id.isNull()) {
+        fail(ports::StoreErrorCategory::PersistenceFailure,
+            "junction id must not be null");
+    }
+
+    const std::string modifiedAt = runtime::utcTimestampNow();
+    const std::string junctionIdText = domain::road::uuidTextFromJunctionId(junction.id);
+    {
+        SqliteTransaction transaction{*connection_};
+
+        SqliteStatement check{*connection_, "SELECT revision FROM junctions WHERE id = ?"};
+        check.bindText(1, junctionIdText);
+        if (!check.step()) {
+            fail(ports::StoreErrorCategory::NotFound,
+                "junction not found for update: " + junctionIdText);
+        }
+
+        SqliteStatement updateJunction{*connection_,
+            "UPDATE junctions SET name = ?, type = ?, pos_x = ?, pos_y = ?, elevation = ?, revision = ? "
+            "WHERE id = ?"};
+        updateJunction.bindText(1, junction.name);
+        updateJunction.bindText(2, junction.type);
+        updateJunction.bindDouble(3, junction.posX);
+        updateJunction.bindDouble(4, junction.posY);
+        updateJunction.bindDouble(5, junction.elevation);
+        updateJunction.bindInt64(6, static_cast<std::int64_t>(junction.revision));
+        updateJunction.bindText(7, junctionIdText);
+        (void)updateJunction.step();
+
+        SqliteStatement delApp{*connection_, "DELETE FROM junction_approaches WHERE junction_id = ?"};
+        delApp.bindText(1, junctionIdText);
+        (void)delApp.step();
+
+        SqliteStatement delConn{*connection_, "DELETE FROM junction_connections WHERE junction_id = ?"};
+        delConn.bindText(1, junctionIdText);
+        (void)delConn.step();
+
+        for (std::size_t i = 0; i < junction.approaches.size(); ++i) {
+            const auto& app = junction.approaches[i];
+            SqliteStatement insertApp{*connection_,
+                "INSERT INTO junction_approaches "
+                "(junction_id, approach_index, road_id, contact_point, entry_point_x, entry_point_y, heading, lane_ids) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)"};
+            insertApp.bindText(1, junctionIdText);
+            insertApp.bindInt64(2, static_cast<std::int64_t>(i));
+            insertApp.bindText(3, app.roadId);
+            insertApp.bindText(4, app.contactPoint);
+            insertApp.bindDouble(5, app.entryPointX);
+            insertApp.bindDouble(6, app.entryPointY);
+            insertApp.bindDouble(7, app.heading);
+            insertApp.bindText(8, nlohmann::json(app.laneIds).dump());
+            (void)insertApp.step();
+        }
+
+        for (const auto& conn : junction.connections) {
+            SqliteStatement insertConn{*connection_,
+                "INSERT INTO junction_connections "
+                "(id, junction_id, from_road_id, from_lane_id, to_road_id, to_lane_id, movement_type, allowed) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)"};
+            insertConn.bindText(1, conn.id);
+            insertConn.bindText(2, junctionIdText);
+            insertConn.bindText(3, conn.fromRoadId);
+            insertConn.bindText(4, conn.fromLaneId);
+            insertConn.bindText(5, conn.toRoadId);
+            insertConn.bindText(6, conn.toLaneId);
+            insertConn.bindText(7, conn.movementType);
+            insertConn.bindInt64(8, conn.allowed ? 1 : 0);
+            (void)insertConn.step();
+        }
+
+        SqliteStatement state{*connection_,
+            "UPDATE project_state SET revision = revision + 1, modified_at = ? WHERE id = 1"};
+        state.bindText(1, modifiedAt);
+        (void)state.step();
+        if (connection_->lastChanges() != 1) {
+            fail(ports::StoreErrorCategory::PersistenceFailure,
+                "project_state row went missing during junction update (corrupt project database)");
+        }
+        transaction.commit();
+    }
+
+    record_.revision += 1;
+    record_.modifiedAt = modifiedAt;
+    return junction;
+}
+
+void SqliteProjectStore::removeJunctionImpl(const std::string& junctionId) {
+    if (!connection_.has_value()) {
+        throw std::logic_error("cannot remove a junction without an open project session");
+    }
+    const std::string modifiedAt = runtime::utcTimestampNow();
+    {
+        SqliteTransaction transaction{*connection_};
+        SqliteStatement remove{*connection_, "DELETE FROM junctions WHERE id = ?"};
+        remove.bindText(1, junctionId);
+        (void)remove.step();
+        if (connection_->lastChanges() != 1) {
+            fail(ports::StoreErrorCategory::NotFound,
+                "junction row not found for removal: " + junctionId);
+        }
+        SqliteStatement state{*connection_,
+            "UPDATE project_state SET revision = revision + 1, modified_at = ? WHERE id = 1"};
+        state.bindText(1, modifiedAt);
+        (void)state.step();
+        if (connection_->lastChanges() != 1) {
+            fail(ports::StoreErrorCategory::PersistenceFailure,
+                "project_state row went missing during junction remove (corrupt project database)");
         }
         transaction.commit();
     }

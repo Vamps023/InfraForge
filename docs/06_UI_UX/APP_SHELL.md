@@ -2,7 +2,6 @@
 
 The app shell owns persistent editor composition, navigation, and transient UI state. It never owns canonical domain behavior or project truth.
 
-<<<<<<< HEAD
 ## Reference-informed composition
 
 The shell follows a professional geospatial/CAD-editor composition: a compact
@@ -12,12 +11,16 @@ diagnostics/operations dock, and a concise status bar. OpenGeoStudio is a UX
 reference for this composition only; InfraForge retains its own React,
 WebSocket/Protobuf, native-engine, and Vulkan process boundaries.
 
-## Regions
-=======
 ## UX objective
->>>>>>> origin/main
 
 InfraForge should feel like one desktop engineering tool regardless of active domain. Workspace changes must preserve the application frame and familiar interaction locations while swapping only the tools, projections, and contextual editors relevant to the task.
+
+The OpenGeoStudio-Qt editor is the workflow benchmark for this refactor: a
+persistent viewport, stable navigation and property regions, direct editing,
+and focused context editors. It is not a source-code, data-model, renderer,
+or transport dependency. InfraForge must achieve comparable workflow clarity
+through its existing React, WebSocket/Protobuf, native-engine, persistence,
+and Vulkan boundaries.
 
 ## Persistent regions
 

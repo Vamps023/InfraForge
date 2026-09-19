@@ -5,6 +5,25 @@
 
 namespace infraforge::domain::road {
 
+namespace {
+constexpr double kProfileStationTolerance = 1e-4;
+
+template <typename BreakpointCollection>
+void validateProfileStationRange(
+    const std::string_view profileType,
+    const BreakpointCollection& breakpoints,
+    const double totalLength,
+    std::vector<RoadDiagnostic>& diagnostics) {
+    for (const auto& bp : breakpoints) {
+        if (bp.station < 0.0 || bp.station > totalLength + kProfileStationTolerance) {
+            diagnostics.push_back({RoadErrorCode::InvalidProfile,
+                std::string(profileType) + " breakpoint station (" + std::to_string(bp.station) +
+                ") is outside alignment station range [0, " + std::to_string(totalLength) + "]"});
+        }
+    }
+}
+} // namespace
+
 std::expected<Road, std::vector<RoadDiagnostic>> Road::build(BuildInput input) {
     std::vector<RoadDiagnostic> diagnostics;
 
@@ -20,11 +39,48 @@ std::expected<Road, std::vector<RoadDiagnostic>> Road::build(BuildInput input) {
     if (auto d = input.superelevation.validate()) {
         diagnostics.push_back(*d);
     }
+    if (auto d = input.width.validate()) {
+        diagnostics.push_back(*d);
+    }
+    if (!input.alignment.isEmpty()) {
+        const double totalLength = input.alignment.totalLength();
+        validateProfileStationRange("elevation", input.elevation.breakpoints(), totalLength, diagnostics);
+        validateProfileStationRange("superelevation", input.superelevation.breakpoints(), totalLength, diagnostics);
+        validateProfileStationRange("width", input.width.breakpoints(), totalLength, diagnostics);
+
+        if (input.laneSections.empty()) {
+            RoadLane leftLane{
+                .id = "lane-l1",
+                .side = LaneSide::Left,
+                .laneIndex = 1,
+                .type = LaneType::Driving,
+                .direction = LaneDirection::Backward,
+                .width = input.width.evaluate(0.0).left,
+            };
+            RoadLane rightLane{
+                .id = "lane-r1",
+                .side = LaneSide::Right,
+                .laneIndex = 1,
+                .type = LaneType::Driving,
+                .direction = LaneDirection::Forward,
+                .width = input.width.evaluate(0.0).right,
+            };
+            input.laneSections.push_back(RoadLaneSection{
+                .startStation = 0.0,
+                .endStation = totalLength,
+                .leftLanes = {std::move(leftLane)},
+                .rightLanes = {std::move(rightLane)},
+            });
+        }
+
+        auto laneDiagnostics = validateLaneSections(totalLength, input.laneSections);
+        for (auto& d : laneDiagnostics) {
+            diagnostics.push_back(std::move(d));
+        }
+    }
     if (input.id.isNull()) {
         diagnostics.push_back({RoadErrorCode::InvalidArgument, "road id must not be null"});
     }
-
-    // Validate protected anchors against the alignment.
     auto anchorDiagnostics = validateProtectedAnchors(input.alignment, input.source.protectedAnchors);
     for (auto& d : anchorDiagnostics) {
         diagnostics.push_back(std::move(d));

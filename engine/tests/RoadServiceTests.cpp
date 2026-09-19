@@ -159,8 +159,10 @@ TEST_CASE_FIXTURE(RoadServiceTestFixture, "refit changes tolerance without clear
     input.maxCurvature = 0.05;
     const auto created = roadService->createRoad(input);
 
-    (void)roadService->fitSource(FitSourceInput{
-        .roadId = created.roadId, .positionTolerance = 2.0});
+    FitSourceInput fitInput;
+    fitInput.roadId = created.roadId;
+    fitInput.positionTolerance = 2.0;
+    (void)roadService->fitSource(fitInput);
 
     const auto details = roadService->getRoad(created.roadId);
     REQUIRE(details.has_value());
@@ -177,16 +179,21 @@ TEST_CASE_FIXTURE(RoadServiceTestFixture, "refit can replace or explicitly clear
     input.maxCurvature = 0.05;
     const auto created = roadService->createRoad(input);
 
-    (void)roadService->fitSource(FitSourceInput{
-        .roadId = created.roadId, .maxCurvature = 0.02, .replaceMaxCurvature = true});
+    FitSourceInput fitInput1;
+    fitInput1.roadId = created.roadId;
+    fitInput1.maxCurvature = 0.02;
+    fitInput1.replaceMaxCurvature = true;
+    (void)roadService->fitSource(fitInput1);
     auto details = roadService->getRoad(created.roadId);
     REQUIRE(details.has_value());
     CHECK(details->positionTolerance == doctest::Approx(1.0));
     REQUIRE(details->maxCurvature.has_value());
     CHECK(*details->maxCurvature == doctest::Approx(0.02));
 
-    (void)roadService->fitSource(FitSourceInput{
-        .roadId = created.roadId, .replaceMaxCurvature = true});
+    FitSourceInput fitInput2;
+    fitInput2.roadId = created.roadId;
+    fitInput2.replaceMaxCurvature = true;
+    (void)roadService->fitSource(fitInput2);
     details = roadService->getRoad(created.roadId);
     REQUIRE(details.has_value());
     CHECK(details->positionTolerance == doctest::Approx(1.0));
@@ -358,6 +365,11 @@ TEST_CASE_FIXTURE(RoadServiceTestFixture, "update elevation profile") {
     REQUIRE(details.has_value());
     CHECK(details->hasElevationProfile);
     CHECK(details->elevationBreakpointCount == 3);
+    REQUIRE(details->elevationBreakpoints.size() == 3);
+    CHECK(details->elevationBreakpoints[0].station == doctest::Approx(0.0));
+    CHECK(details->elevationBreakpoints[1].value == doctest::Approx(5.0));
+    CHECK(details->elevationBreakpoints[2].station == doctest::Approx(100.0));
+    CHECK(details->elevationBreakpoints[2].value == doctest::Approx(10.0));
 }
 
 TEST_CASE_FIXTURE(RoadServiceTestFixture, "update superelevation profile") {
@@ -377,6 +389,111 @@ TEST_CASE_FIXTURE(RoadServiceTestFixture, "update superelevation profile") {
     REQUIRE(details.has_value());
     CHECK(details->hasSuperelevationProfile);
     CHECK(details->superelevationBreakpointCount == 3);
+    REQUIRE(details->superelevationBreakpoints.size() == 3);
+    CHECK(details->superelevationBreakpoints[0].station == doctest::Approx(0.0));
+    CHECK(details->superelevationBreakpoints[1].value == doctest::Approx(0.02));
+    CHECK(details->superelevationBreakpoints[2].station == doctest::Approx(100.0));
+}
+
+TEST_CASE_FIXTURE(RoadServiceTestFixture, "update width profile persists and participates in undo") {
+    CreateRoadInput input;
+    input.name = "Variable Width Road";
+    input.sourcePoints = makeStraightPolyline(0.0, 0.0, 0.0, 100.0, 10);
+    input.positionTolerance = 1.0;
+    auto summary = roadService->createRoad(input);
+
+    UpdateWidthInput widthInput;
+    widthInput.roadId = summary.roadId;
+    widthInput.stations = {0.0, 50.0, 100.0};
+    widthInput.leftWidths = {3.0, 5.0, 7.0};
+    widthInput.rightWidths = {4.0, 3.0, 2.0};
+    (void)roadService->updateWidth(widthInput);
+
+    auto details = roadService->getRoad(summary.roadId);
+    REQUIRE(details.has_value());
+    REQUIRE(details->widthBreakpoints.size() == 3);
+    CHECK(details->widthBreakpoints[1].leftWidth == doctest::Approx(5.0));
+    CHECK(details->widthBreakpoints[1].rightWidth == doctest::Approx(3.0));
+
+    const auto undone = roadService->undo(summary.roadId);
+    REQUIRE(undone);
+    details = roadService->getRoad(summary.roadId);
+    REQUIRE(details.has_value());
+    CHECK(details->widthBreakpoints.empty());
+    REQUIRE(roadService->redo(summary.roadId));
+
+    (void)store.save();
+    roadService.reset();
+    store.close();
+    (void)store.open(projectDirectory);
+    auto project = transforms.resolveProjectGeoreference(store.current().georeference);
+    world.resetForProject(project);
+    roadService.emplace(store, world,
+        [this](const RoadServiceEvent& e) { events.push_back(e); });
+    roadService->onProjectOpened();
+
+    details = roadService->getRoad(summary.roadId);
+    REQUIRE(details.has_value());
+    REQUIRE(details->widthBreakpoints.size() == 3);
+    CHECK(details->widthBreakpoints[2].leftWidth == doctest::Approx(7.0));
+    CHECK(details->widthBreakpoints[2].rightWidth == doctest::Approx(2.0));
+
+}
+
+TEST_CASE_FIXTURE(RoadServiceTestFixture, "terrain conformance authors an undoable elevation profile") {
+    CreateRoadInput input;
+    input.name = "Terrain Conformance Road";
+    input.sourcePoints = makeStraightPolyline(0.0, 0.0, 0.0, 100.0, 10);
+    input.positionTolerance = 1.0;
+    const auto summary = roadService->createRoad(input);
+
+    ConformRoadToTerrainInput conform;
+    conform.roadId = summary.roadId;
+    conform.stationInterval = 20.0;
+    conform.verticalOffset = 0.25;
+    (void)roadService->conformToTerrain(conform,
+        [](const AlignmentPoint& point) -> std::expected<double, std::string> {
+            return point.easting * 0.1;
+        });
+
+    auto details = roadService->getRoad(summary.roadId);
+    REQUIRE(details.has_value());
+    REQUIRE(details->elevationBreakpoints.size() == 6);
+    CHECK(details->elevationBreakpoints.front().value == doctest::Approx(0.25));
+    CHECK(details->elevationBreakpoints.back().value == doctest::Approx(10.25));
+
+    REQUIRE(roadService->undo(summary.roadId));
+    details = roadService->getRoad(summary.roadId);
+    REQUIRE(details.has_value());
+    CHECK(details->elevationBreakpoints.empty());
+}
+
+TEST_CASE_FIXTURE(RoadServiceTestFixture, "terrain conformance is atomic when coverage is incomplete") {
+    CreateRoadInput input;
+    input.name = "Partial Coverage Road";
+    input.sourcePoints = makeStraightPolyline(0.0, 0.0, 0.0, 100.0, 10);
+    input.positionTolerance = 1.0;
+    const auto summary = roadService->createRoad(input);
+
+    ConformRoadToTerrainInput conform;
+    conform.roadId = summary.roadId;
+    conform.stationInterval = 20.0;
+    bool threw = false;
+    try {
+        (void)roadService->conformToTerrain(conform,
+            [](const AlignmentPoint& point) -> std::expected<double, std::string> {
+                if (point.easting > 50.0) return std::unexpected("outside test coverage");
+                return 2.0;
+            });
+    } catch (const CommandFailure& failure) {
+        threw = true;
+        CHECK(failure.code() == CommandFailureCode::InvalidArgument);
+        CHECK(std::string{failure.what()}.find("station") != std::string::npos);
+    }
+    CHECK(threw);
+    const auto details = roadService->getRoad(summary.roadId);
+    REQUIRE(details.has_value());
+    CHECK(details->elevationBreakpoints.empty());
 }
 
 TEST_CASE_FIXTURE(RoadServiceTestFixture, "save and reopen preserves road") {
@@ -432,6 +549,28 @@ TEST_CASE_FIXTURE(RoadServiceTestFixture, "road scene projection produces mesh d
     // At least one coordinate is non-zero.
     const bool hasNonZeroCoord = (v0.x != 0.0f) || (v0.y != 0.0f);
     CHECK(hasNonZeroCoord);
+}
+
+TEST_CASE_FIXTURE(RoadServiceTestFixture, "road scene normals use superelevation angle") {
+    CreateRoadInput input;
+    input.name = "Banked Scene Road";
+    input.sourcePoints = makeStraightPolyline(0.0, 0.0, 0.0, 100.0, 10);
+    input.positionTolerance = 1.0;
+    auto summary = roadService->createRoad(input);
+
+    UpdateSuperelevationInput bank;
+    bank.roadId = summary.roadId;
+    bank.stations = {0.0, 100.0};
+    bank.superelevations = {0.1, 0.1};
+    (void)roadService->updateSuperelevation(bank);
+
+    const auto projection = roadService->roadSceneProjection();
+    REQUIRE(projection.meshes.size() == 1);
+    REQUIRE_FALSE(projection.meshes[0].vertices.empty());
+    const auto& normal = projection.meshes[0].vertices.front();
+    CHECK(normal.nx == doctest::Approx(0.0).epsilon(1e-5));
+    CHECK(normal.ny == doctest::Approx(-std::sin(0.1)).epsilon(1e-5));
+    CHECK(normal.nz == doctest::Approx(std::cos(0.1)).epsilon(1e-5));
 }
 
 TEST_CASE_FIXTURE(RoadServiceTestFixture, "undo redo after reopen") {
@@ -595,6 +734,576 @@ TEST_CASE_FIXTURE(RoadServiceTestFixture, "road scene projection is empty with n
     auto projection = roadService->roadSceneProjection();
     CHECK(projection.meshes.empty());
     CHECK(projection.revision > 0);
+}
+
+TEST_CASE_FIXTURE(RoadServiceTestFixture, "refit clamps breakpoints when road is shortened and preserves within-range breakpoints when lengthened") {
+    CreateRoadInput input;
+    input.name = "Refit Clamping Road";
+    input.sourcePoints = makeStraightPolyline(0.0, 0.0, 0.0, 100.0, 2);
+    input.positionTolerance = 1.0;
+    const auto summary = roadService->createRoad(input);
+
+    // Set elevation: 0 -> 10, 50 -> 15, 100 -> 20
+    UpdateElevationInput elevInput;
+    elevInput.roadId = summary.roadId;
+    elevInput.stations = {0.0, 50.0, 100.0};
+    elevInput.elevations = {10.0, 15.0, 20.0};
+    (void)roadService->updateElevation(elevInput);
+
+    // Set superelevation: 0 -> 0.0, 50 -> 0.04, 100 -> 0.08
+    UpdateSuperelevationInput superInput;
+    superInput.roadId = summary.roadId;
+    superInput.stations = {0.0, 50.0, 100.0};
+    superInput.superelevations = {0.0, 0.04, 0.08};
+    (void)roadService->updateSuperelevation(superInput);
+
+    // Set width: 0 -> 3.5, 50 -> 4.0, 100 -> 5.0
+    UpdateWidthInput widthInput;
+    widthInput.roadId = summary.roadId;
+    widthInput.stations = {0.0, 50.0, 100.0};
+    widthInput.leftWidths = {3.5, 4.0, 5.0};
+    widthInput.rightWidths = {3.5, 4.0, 5.0};
+    (void)roadService->updateWidth(widthInput);
+
+    auto details = roadService->getRoad(summary.roadId);
+    REQUIRE(details.has_value());
+    REQUIRE(details->controlPoints.size() == 2);
+
+    // 1. Shorten the road: move last control point to (0, 70)
+    MoveControlInput moveInput;
+    moveInput.roadId = summary.roadId;
+    moveInput.controlIndex = static_cast<std::uint32_t>(details->controlPoints.size() - 1);
+    moveInput.position = AlignmentPoint{0.0, 70.0};
+    const auto shortenedSummary = roadService->moveControl(moveInput);
+    CHECK(shortenedSummary.length == doctest::Approx(70.0));
+
+    details = roadService->getRoad(summary.roadId);
+    REQUIRE(details.has_value());
+
+    // Verify all 3 profiles were clamped to new alignment length and no breakpoint > 70 exists
+    REQUIRE(details->elevationBreakpoints.size() == 3);
+    CHECK(details->elevationBreakpoints[0].station == doctest::Approx(0.0));
+    CHECK(details->elevationBreakpoints[1].station == doctest::Approx(50.0));
+    CHECK(details->elevationBreakpoints[2].station == doctest::Approx(70.0));
+    CHECK(details->elevationBreakpoints[2].value == doctest::Approx(17.0)); // interpolated between 15 and 20
+
+    REQUIRE(details->superelevationBreakpoints.size() == 3);
+    CHECK(details->superelevationBreakpoints[0].station == doctest::Approx(0.0));
+    CHECK(details->superelevationBreakpoints[1].station == doctest::Approx(50.0));
+    CHECK(details->superelevationBreakpoints[2].station == doctest::Approx(70.0));
+    CHECK(details->superelevationBreakpoints[2].value == doctest::Approx(0.056));
+
+    REQUIRE(details->widthBreakpoints.size() == 3);
+    CHECK(details->widthBreakpoints[0].station == doctest::Approx(0.0));
+    CHECK(details->widthBreakpoints[1].station == doctest::Approx(50.0));
+    CHECK(details->widthBreakpoints[2].station == doctest::Approx(70.0));
+    CHECK(details->widthBreakpoints[2].leftWidth == doctest::Approx(4.4));
+    CHECK(details->widthBreakpoints[2].rightWidth == doctest::Approx(4.4));
+
+    // 2. Lengthen the road: move last control point to (0, 120)
+    moveInput.position = AlignmentPoint{0.0, 120.0};
+    const auto lengthenedSummary = roadService->moveControl(moveInput);
+    CHECK(lengthenedSummary.length == doctest::Approx(120.0));
+
+    details = roadService->getRoad(summary.roadId);
+    REQUIRE(details.has_value());
+    for (const auto& bp : details->elevationBreakpoints) {
+        CHECK(bp.station <= lengthenedSummary.length);
+    }
+    for (const auto& bp : details->superelevationBreakpoints) {
+        CHECK(bp.station <= lengthenedSummary.length);
+    }
+    for (const auto& bp : details->widthBreakpoints) {
+        CHECK(bp.station <= lengthenedSummary.length);
+    }
+}
+
+TEST_CASE_FIXTURE(RoadServiceTestFixture, "terrain conformance is independent of existing profiles") {
+    CreateRoadInput input;
+    input.name = "Independent Conformance Road";
+    input.sourcePoints = makeStraightPolyline(0.0, 0.0, 0.0, 100.0, 10);
+    input.positionTolerance = 1.0;
+    const auto summary = roadService->createRoad(input);
+
+    // Give it a dense, complex old elevation profile
+    UpdateElevationInput elevInput;
+    elevInput.roadId = summary.roadId;
+    elevInput.stations = {0.0, 15.0, 32.0, 48.0, 67.0, 85.0, 100.0};
+    elevInput.elevations = {5.0, 12.0, 8.0, 14.0, 9.0, 11.0, 7.0};
+    (void)roadService->updateElevation(elevInput);
+
+    // Give it non-default banking and width
+    UpdateSuperelevationInput superInput;
+    superInput.roadId = summary.roadId;
+    superInput.stations = {0.0, 50.0, 100.0};
+    superInput.superelevations = {0.0, 0.05, 0.0};
+    (void)roadService->updateSuperelevation(superInput);
+
+    UpdateWidthInput widthInput;
+    widthInput.roadId = summary.roadId;
+    widthInput.stations = {0.0, 50.0, 100.0};
+    widthInput.leftWidths = {3.5, 6.0, 3.5};
+    widthInput.rightWidths = {3.5, 6.0, 3.5};
+    (void)roadService->updateWidth(widthInput);
+
+    // Conforming to terrain with stationInterval=20 must produce exactly the 6 canonical stations
+    // based on alignment alone, regardless of the old 7 elevation stations or width tapers.
+    ConformRoadToTerrainInput conform;
+    conform.roadId = summary.roadId;
+    conform.stationInterval = 20.0;
+    conform.verticalOffset = 0.5;
+    (void)roadService->conformToTerrain(conform,
+        [](const AlignmentPoint& point) -> std::expected<double, std::string> {
+            return point.easting * 0.1;
+        });
+
+    auto details = roadService->getRoad(summary.roadId);
+    REQUIRE(details.has_value());
+    REQUIRE(details->elevationBreakpoints.size() == 6);
+    CHECK(details->elevationBreakpoints[0].station == doctest::Approx(0.0));
+    CHECK(details->elevationBreakpoints[1].station == doctest::Approx(20.0));
+    CHECK(details->elevationBreakpoints[2].station == doctest::Approx(40.0));
+    CHECK(details->elevationBreakpoints[3].station == doctest::Approx(60.0));
+    CHECK(details->elevationBreakpoints[4].station == doctest::Approx(80.0));
+    CHECK(details->elevationBreakpoints[5].station == doctest::Approx(100.0));
+}
+
+TEST_CASE_FIXTURE(RoadServiceTestFixture, "sparse source elevations map to correct cumulative stations") {
+    CreateRoadInput input;
+    input.name = "Sparse Elevations Road";
+    // Polyline of 3 points: (0,0) -> (0,10) -> (0,20)
+    input.sourcePoints = {
+        AlignmentPoint{0.0, 0.0},
+        AlignmentPoint{0.0, 10.0},
+        AlignmentPoint{0.0, 20.0}
+    };
+    // Sparse elevations: station 0 has 100.0, station 10 is nullopt, station 20 has 120.0
+    input.sourceElevations = {100.0, std::nullopt, 120.0};
+    input.positionTolerance = 1.0;
+    const auto summary = roadService->createRoad(input);
+
+    auto details = roadService->getRoad(summary.roadId);
+    REQUIRE(details.has_value());
+    REQUIRE(details->elevationBreakpoints.size() == 2);
+    CHECK(details->elevationBreakpoints[0].station == doctest::Approx(0.0));
+    CHECK(details->elevationBreakpoints[0].value == doctest::Approx(100.0));
+    CHECK(details->elevationBreakpoints[1].station == doctest::Approx(20.0)); // Must be 20.0, NOT 10.0!
+    CHECK(details->elevationBreakpoints[1].value == doctest::Approx(120.0));
+}
+
+TEST_CASE_FIXTURE(RoadServiceTestFixture, "terrain conformance station bounds and atomicity") {
+    CreateRoadInput input;
+    input.name = "Conformance Bounds Road";
+    input.sourcePoints = makeStraightPolyline(0.0, 0.0, 0.0, 100.0, 2);
+    input.positionTolerance = 1.0;
+    const auto summary = roadService->createRoad(input);
+
+    UpdateElevationInput elevInput;
+    elevInput.roadId = summary.roadId;
+    elevInput.stations = {0.0, 100.0};
+    elevInput.elevations = {5.0, 5.0};
+    (void)roadService->updateElevation(elevInput);
+
+    auto detailsBefore = roadService->getRoad(summary.roadId);
+    REQUIRE(detailsBefore.has_value());
+    REQUIRE(detailsBefore->elevationBreakpoints.size() == 2);
+
+    // 1. Pathological request with tiny interval (100m / 0.005 = 20,000 samples > 10,000)
+    // must be rejected quickly without huge allocation or executor lockup
+    ConformRoadToTerrainInput conformExcessive;
+    conformExcessive.roadId = summary.roadId;
+    conformExcessive.stationInterval = 0.005;
+    conformExcessive.verticalOffset = 0.1;
+    CHECK_THROWS_AS(
+        (void)roadService->conformToTerrain(conformExcessive,
+            [](const AlignmentPoint&) -> std::expected<double, std::string> {
+                return 0.0;
+            }),
+        infraforge::application::CommandFailure);
+
+    // 2. Ultra-tiny interval (1e-12) must reject immediately without floating-point infinite loop
+    ConformRoadToTerrainInput conformTiny;
+    conformTiny.roadId = summary.roadId;
+    conformTiny.stationInterval = 1e-12;
+    conformTiny.verticalOffset = 0.1;
+    CHECK_THROWS_AS(
+        (void)roadService->conformToTerrain(conformTiny,
+            [](const AlignmentPoint&) -> std::expected<double, std::string> {
+                return 0.0;
+            }),
+        infraforge::application::CommandFailure);
+
+    // 3. Atomicity: rejected conformance must NOT mutate the road
+    auto detailsAfter = roadService->getRoad(summary.roadId);
+    REQUIRE(detailsAfter.has_value());
+    REQUIRE(detailsAfter->elevationBreakpoints.size() == 2);
+    CHECK(detailsAfter->elevationBreakpoints[0].value == doctest::Approx(5.0));
+    CHECK(detailsAfter->elevationBreakpoints[1].value == doctest::Approx(5.0));
+}
+
+TEST_CASE_FIXTURE(RoadServiceTestFixture, "terrain conformance includes boundaries and exact end station with strictly increasing stations") {
+    CreateRoadInput input;
+    input.name = "Multi-segment Conformance Road";
+    input.sourcePoints = {
+        AlignmentPoint{0.0, 0.0},
+        AlignmentPoint{0.0, 33.0},
+        AlignmentPoint{0.0, 100.0}
+    };
+    input.protectedAnchorIndices = {1};
+    input.positionTolerance = 1.0;
+    const auto summary = roadService->createRoad(input);
+    REQUIRE(summary.alignmentSegmentCount >= 2);
+
+    ConformRoadToTerrainInput conform;
+    conform.roadId = summary.roadId;
+    conform.stationInterval = 20.0;
+    conform.verticalOffset = 0.5;
+    (void)roadService->conformToTerrain(conform,
+        [](const AlignmentPoint& pt) -> std::expected<double, std::string> {
+            return pt.northing * 0.1;
+        });
+
+    auto details = roadService->getRoad(summary.roadId);
+    REQUIRE(details.has_value());
+    const auto& bps = details->elevationBreakpoints;
+    REQUIRE(bps.size() >= 4);
+
+    CHECK(bps.front().station == doctest::Approx(0.0));
+    CHECK(bps.back().station == doctest::Approx(100.0));
+
+    bool foundBoundary = false;
+    for (const auto& bp : bps) {
+        if (std::abs(bp.station - 33.0) < 1e-4) {
+            foundBoundary = true;
+            break;
+        }
+    }
+    CHECK(foundBoundary);
+
+    for (std::size_t i = 1; i < bps.size(); ++i) {
+        CHECK(bps[i].station > bps[i - 1].station);
+    }
+}
+
+TEST_CASE_FIXTURE(RoadServiceTestFixture, "undo and redo restore exact unclamped and clamped profile states across road shortening") {
+    CreateRoadInput input;
+    input.name = "Clamping Undo Redo Road";
+    input.sourcePoints = makeStraightPolyline(0.0, 0.0, 0.0, 100.0, 2);
+    input.positionTolerance = 1.0;
+    const auto summary = roadService->createRoad(input);
+
+    UpdateElevationInput elevInput;
+    elevInput.roadId = summary.roadId;
+    elevInput.stations = {0.0, 50.0, 100.0};
+    elevInput.elevations = {10.0, 15.0, 20.0};
+    (void)roadService->updateElevation(elevInput);
+
+    UpdateSuperelevationInput superInput;
+    superInput.roadId = summary.roadId;
+    superInput.stations = {0.0, 50.0, 100.0};
+    superInput.superelevations = {0.0, 0.04, 0.08};
+    (void)roadService->updateSuperelevation(superInput);
+
+    UpdateWidthInput widthInput;
+    widthInput.roadId = summary.roadId;
+    widthInput.stations = {0.0, 50.0, 100.0};
+    widthInput.leftWidths = {3.0, 4.0, 5.0};
+    widthInput.rightWidths = {3.0, 4.0, 5.0};
+    (void)roadService->updateWidth(widthInput);
+
+    // Shorten road: move point 1 from (0,100) to (0,70)
+    MoveControlInput moveInput;
+    moveInput.roadId = summary.roadId;
+    moveInput.controlIndex = 1;
+    moveInput.position = AlignmentPoint{0.0, 70.0};
+    (void)roadService->moveControl(moveInput);
+
+    auto clampedDetails = roadService->getRoad(summary.roadId);
+    REQUIRE(clampedDetails.has_value());
+    CHECK(clampedDetails->elevationBreakpoints.back().station == doctest::Approx(70.0));
+    CHECK(clampedDetails->superelevationBreakpoints.back().station == doctest::Approx(70.0));
+    CHECK(clampedDetails->widthBreakpoints.back().station == doctest::Approx(70.0));
+
+    // Undo: must restore unclamped 100m alignment and exact original breakpoints
+    REQUIRE(roadService->undo(summary.roadId));
+    auto undoneDetails = roadService->getRoad(summary.roadId);
+    REQUIRE(undoneDetails.has_value());
+    REQUIRE(undoneDetails->elevationBreakpoints.size() == 3);
+    CHECK(undoneDetails->elevationBreakpoints[2].station == doctest::Approx(100.0));
+    CHECK(undoneDetails->elevationBreakpoints[2].value == doctest::Approx(20.0));
+    REQUIRE(undoneDetails->superelevationBreakpoints.size() == 3);
+    CHECK(undoneDetails->superelevationBreakpoints[2].station == doctest::Approx(100.0));
+    CHECK(undoneDetails->superelevationBreakpoints[2].value == doctest::Approx(0.08));
+    REQUIRE(undoneDetails->widthBreakpoints.size() == 3);
+    CHECK(undoneDetails->widthBreakpoints[2].station == doctest::Approx(100.0));
+    CHECK(undoneDetails->widthBreakpoints[2].leftWidth == doctest::Approx(5.0));
+
+    // Redo: must restore clamped state
+    REQUIRE(roadService->redo(summary.roadId));
+    auto redoneDetails = roadService->getRoad(summary.roadId);
+    REQUIRE(redoneDetails.has_value());
+    CHECK(redoneDetails->elevationBreakpoints.back().station == doctest::Approx(70.0));
+    CHECK(redoneDetails->superelevationBreakpoints.back().station == doctest::Approx(70.0));
+    CHECK(redoneDetails->widthBreakpoints.back().station == doctest::Approx(70.0));
+}
+
+TEST_CASE("clampProfileBreakpoints: shorter alignment evaluates previous profile at endpoint") {
+    std::vector<ProfileBreakpoint> bps{{0.0, 10.0}, {50.0, 15.0}, {100.0, 20.0}};
+    auto result = RoadService::clampProfileBreakpoints(bps, 60.0);
+    REQUIRE(result.size() == 3);
+    CHECK(result[0].station == doctest::Approx(0.0));
+    CHECK(result[0].value == doctest::Approx(10.0));
+    CHECK(result[1].station == doctest::Approx(50.0));
+    CHECK(result[1].value == doctest::Approx(15.0));
+    CHECK(result[2].station == doctest::Approx(60.0));
+    CHECK(result[2].value == doctest::Approx(16.0)); // 15 + (10/50)*10 = 16
+}
+
+TEST_CASE("clampProfileBreakpoints: longer alignment extends canonical profile to endpoint") {
+    std::vector<ProfileBreakpoint> bps{{0.0, 10.0}, {50.0, 15.0}, {100.0, 20.0}};
+    auto result = RoadService::clampProfileBreakpoints(bps, 150.0);
+    REQUIRE(result.size() == 4);
+    CHECK(result[0].station == doctest::Approx(0.0));
+    CHECK(result[1].station == doctest::Approx(50.0));
+    CHECK(result[2].station == doctest::Approx(100.0));
+    CHECK(result[2].value == doctest::Approx(20.0));
+    CHECK(result[3].station == doctest::Approx(150.0));
+    CHECK(result[3].value == doctest::Approx(20.0)); // held constant
+}
+
+TEST_CASE("clampProfileBreakpoints: unchanged alignment length preserves exact breakpoints") {
+    std::vector<ProfileBreakpoint> bps{{0.0, 10.0}, {50.0, 15.0}, {100.0, 20.0}};
+    auto result = RoadService::clampProfileBreakpoints(bps, 100.0);
+    REQUIRE(result.size() == 3);
+    CHECK(result[0].station == doctest::Approx(0.0));
+    CHECK(result[1].station == doctest::Approx(50.0));
+    CHECK(result[2].station == doctest::Approx(100.0));
+    CHECK(result[2].value == doctest::Approx(20.0));
+}
+
+TEST_CASE("clampProfileBreakpoints: breakpoint already exactly at endpoint") {
+    std::vector<ProfileBreakpoint> bps{{0.0, 5.0}, {75.0, 12.0}};
+    auto result = RoadService::clampProfileBreakpoints(bps, 75.0);
+    REQUIRE(result.size() == 2);
+    CHECK(result[0].station == doctest::Approx(0.0));
+    CHECK(result[1].station == doctest::Approx(75.0));
+    CHECK(result[1].value == doctest::Approx(12.0));
+}
+
+TEST_CASE("clampProfileBreakpoints: breakpoint within station tolerance of endpoint does not duplicate") {
+    std::vector<ProfileBreakpoint> bps{{0.0, 5.0}, {74.99995, 12.0}};
+    auto result = RoadService::clampProfileBreakpoints(bps, 75.0);
+    REQUIRE(result.size() == 2);
+    CHECK(result[0].station == doctest::Approx(0.0));
+    CHECK(result[1].station == doctest::Approx(75.0));
+    CHECK(result[1].value == doctest::Approx(12.0));
+}
+
+TEST_CASE("clampProfileBreakpoints: empty profile returns empty") {
+    std::vector<ProfileBreakpoint> bps{};
+    auto result = RoadService::clampProfileBreakpoints(bps, 100.0);
+    CHECK(result.empty());
+}
+
+TEST_CASE("clampProfileBreakpoints: multiple elevation breakpoints preserve interior") {
+    std::vector<ProfileBreakpoint> bps{
+        {0.0, 0.0}, {20.0, 4.0}, {40.0, 2.0}, {60.0, 8.0}, {80.0, 6.0}, {100.0, 10.0}
+    };
+    auto result = RoadService::clampProfileBreakpoints(bps, 50.0);
+    REQUIRE(result.size() == 4);
+    CHECK(result[0].station == doctest::Approx(0.0));
+    CHECK(result[1].station == doctest::Approx(20.0));
+    CHECK(result[2].station == doctest::Approx(40.0));
+    CHECK(result[3].station == doctest::Approx(50.0));
+    CHECK(result[3].value == doctest::Approx(5.0)); // halfway between 2.0 and 8.0
+}
+
+TEST_CASE("clampProfileBreakpoints: multiple superelevation breakpoints") {
+    std::vector<ProfileBreakpoint> bps{
+        {0.0, 0.0}, {30.0, -0.04}, {70.0, 0.04}, {100.0, 0.0}
+    };
+    auto result = RoadService::clampProfileBreakpoints(bps, 140.0);
+    REQUIRE(result.size() == 5);
+    CHECK(result[0].station == doctest::Approx(0.0));
+    CHECK(result[1].station == doctest::Approx(30.0));
+    CHECK(result[2].station == doctest::Approx(70.0));
+    CHECK(result[3].station == doctest::Approx(100.0));
+    CHECK(result[4].station == doctest::Approx(140.0));
+    CHECK(result[4].value == doctest::Approx(0.0));
+}
+
+TEST_CASE("clampWidthBreakpoints: preserves asymmetric left and right widths") {
+    std::vector<RoadWidthBreakpoint> bps{
+        {0.0, 3.0, 5.0}, {50.0, 4.0, 6.0}, {100.0, 7.0, 2.0}
+    };
+    // Shorten to 75.0
+    auto shortened = RoadService::clampWidthBreakpoints(bps, 75.0);
+    REQUIRE(shortened.size() == 3);
+    CHECK(shortened[0].station == doctest::Approx(0.0));
+    CHECK(shortened[1].station == doctest::Approx(50.0));
+    CHECK(shortened[2].station == doctest::Approx(75.0));
+    CHECK(shortened[2].leftWidth == doctest::Approx(5.5)); // halfway between 4 and 7
+    CHECK(shortened[2].rightWidth == doctest::Approx(4.0)); // halfway between 6 and 2
+
+    // Lengthen to 150.0
+    auto lengthened = RoadService::clampWidthBreakpoints(bps, 150.0);
+    REQUIRE(lengthened.size() == 4);
+    CHECK(lengthened[0].station == doctest::Approx(0.0));
+    CHECK(lengthened[1].station == doctest::Approx(50.0));
+    CHECK(lengthened[2].station == doctest::Approx(100.0));
+    CHECK(lengthened[3].station == doctest::Approx(150.0));
+    CHECK(lengthened[3].leftWidth == doctest::Approx(7.0));
+    CHECK(lengthened[3].rightWidth == doctest::Approx(2.0));
+}
+
+TEST_CASE_FIXTURE(RoadServiceTestFixture, "lengthening road preserves and extends user profiles") {
+    CreateRoadInput input;
+    input.name = "Profile Lengthening Road";
+    input.sourcePoints = {AlignmentPoint{0.0, 0.0}, AlignmentPoint{0.0, 100.0}};
+    input.positionTolerance = 1.0;
+    auto summary = roadService->createRoad(input);
+
+    UpdateElevationInput elevInput;
+    elevInput.roadId = summary.roadId;
+    elevInput.stations = {0.0, 50.0, 100.0};
+    elevInput.elevations = {5.0, 10.0, 15.0};
+    (void)roadService->updateElevation(elevInput);
+
+    // Lengthen road: move point 1 from (0, 100) to (0, 150)
+    MoveControlInput moveInput;
+    moveInput.roadId = summary.roadId;
+    moveInput.controlIndex = 1;
+    moveInput.position = AlignmentPoint{0.0, 150.0};
+    (void)roadService->moveControl(moveInput);
+
+    auto lengthenedDetails = roadService->getRoad(summary.roadId);
+    REQUIRE(lengthenedDetails.has_value());
+    CHECK(lengthenedDetails->length == doctest::Approx(150.0));
+    REQUIRE(lengthenedDetails->elevationBreakpoints.size() == 4);
+    CHECK(lengthenedDetails->elevationBreakpoints[0].station == doctest::Approx(0.0));
+    CHECK(lengthenedDetails->elevationBreakpoints[1].station == doctest::Approx(50.0));
+    CHECK(lengthenedDetails->elevationBreakpoints[2].station == doctest::Approx(100.0));
+    CHECK(lengthenedDetails->elevationBreakpoints[2].value == doctest::Approx(15.0));
+    CHECK(lengthenedDetails->elevationBreakpoints[3].station == doctest::Approx(150.0));
+    CHECK(lengthenedDetails->elevationBreakpoints[3].value == doctest::Approx(15.0));
+
+    // Undo: restores 100m road and 3 breakpoints
+    REQUIRE(roadService->undo(summary.roadId));
+    auto undoneDetails = roadService->getRoad(summary.roadId);
+    REQUIRE(undoneDetails.has_value());
+    CHECK(undoneDetails->length == doctest::Approx(100.0));
+    REQUIRE(undoneDetails->elevationBreakpoints.size() == 3);
+    CHECK(undoneDetails->elevationBreakpoints.back().station == doctest::Approx(100.0));
+}
+
+TEST_CASE_FIXTURE(RoadServiceTestFixture, "updateLanes updates road lane configuration and supports undo") {
+    CreateRoadInput input;
+    input.name = "Lane Mutation Road";
+    input.sourcePoints = {AlignmentPoint{0.0, 0.0}, AlignmentPoint{0.0, 100.0}};
+    input.positionTolerance = 1.0;
+    auto summary = roadService->createRoad(input);
+
+    auto details = roadService->getRoad(summary.roadId);
+    REQUIRE(details.has_value());
+    REQUIRE(details->laneSections.size() == 1);
+    REQUIRE(details->lanes.size() == 2);
+
+    UpdateLanesInput updateInput;
+    updateInput.roadId = summary.roadId;
+    updateInput.laneSections = {
+        {0, 0.0, 50.0},
+        {1, 50.0, 100.0},
+    };
+    updateInput.lanes = {
+        {"l1", 0, "left", 1, "driving", "backward", 3.5},
+        {"r1", 0, "right", 1, "driving", "forward", 3.5},
+        {"l1-s2", 1, "left", 1, "driving", "backward", 3.75},
+        {"r1-s2", 1, "right", 1, "driving", "forward", 3.75},
+    };
+
+    auto updatedSummary = roadService->updateLanes(updateInput);
+    CHECK(updatedSummary.roadId == summary.roadId);
+    CHECK(events.back().kind == RoadServiceEvent::Kind::Updated);
+
+    auto updatedDetails = roadService->getRoad(summary.roadId);
+    REQUIRE(updatedDetails.has_value());
+    REQUIRE(updatedDetails->laneSections.size() == 2);
+    REQUIRE(updatedDetails->lanes.size() == 4);
+    CHECK(updatedDetails->lanes[2].width == doctest::Approx(3.75));
+
+    // Reject empty lane sections
+    UpdateLanesInput badInput;
+    badInput.roadId = summary.roadId;
+    CHECK_THROWS_AS((void)roadService->updateLanes(badInput), CommandFailure);
+
+    // Reject negative lane width
+    UpdateLanesInput badLaneWidth = updateInput;
+    badLaneWidth.lanes[0].width = -1.0;
+    CHECK_THROWS_AS((void)roadService->updateLanes(badLaneWidth), CommandFailure);
+
+    // Undo updateLanes
+    REQUIRE(roadService->undo(summary.roadId));
+    auto undoneDetails = roadService->getRoad(summary.roadId);
+    REQUIRE(undoneDetails.has_value());
+    REQUIRE(undoneDetails->laneSections.size() == 1);
+    REQUIRE(undoneDetails->lanes.size() == 2);
+
+    // Redo updateLanes
+    REQUIRE(roadService->redo(summary.roadId));
+    auto redoneDetails = roadService->getRoad(summary.roadId);
+    REQUIRE(redoneDetails.has_value());
+    REQUIRE(redoneDetails->laneSections.size() == 2);
+    REQUIRE(redoneDetails->lanes.size() == 4);
+}
+
+TEST_CASE_FIXTURE(RoadServiceTestFixture, "junction CRUD in RoadService") {
+    domain::road::JunctionRecord j;
+    j.name = "Central Junction";
+    j.type = "t";
+    j.posX = 100.0;
+    j.posY = 200.0;
+    j.elevation = 15.0;
+
+    domain::road::JunctionApproachRecord app1;
+    app1.roadId = "road-a";
+    app1.contactPoint = "end";
+    app1.entryPointX = 100.0;
+    app1.entryPointY = 190.0;
+    app1.heading = 1.57;
+    app1.laneIds = {"lane-1"};
+    j.approaches.push_back(app1);
+
+    auto created = roadService->createJunction(j);
+    CHECK(created.name == "Central Junction");
+    CHECK(created.revision == 1);
+    const std::string jId = domain::road::uuidTextFromJunctionId(created.id);
+    CHECK_FALSE(jId.empty());
+    CHECK(events.back().kind == RoadServiceEvent::Kind::JunctionCreated);
+
+    auto list = roadService->listJunctions();
+    REQUIRE(list.size() == 1);
+    CHECK(list[0].name == "Central Junction");
+
+    auto fetched = roadService->getJunction(jId);
+    REQUIRE(fetched.has_value());
+    CHECK(fetched->name == "Central Junction");
+    REQUIRE(fetched->approaches.size() == 1);
+    CHECK(fetched->approaches[0].roadId == "road-a");
+
+    // Update junction
+    created.name = "Updated Central Junction";
+    created.elevation = 20.0;
+    auto updated = roadService->updateJunction(created);
+    CHECK(updated.name == "Updated Central Junction");
+    CHECK(updated.elevation == doctest::Approx(20.0));
+    CHECK(updated.revision == 2);
+    CHECK(events.back().kind == RoadServiceEvent::Kind::JunctionUpdated);
+
+    // Delete junction
+    roadService->deleteJunction(jId);
+    CHECK(events.back().kind == RoadServiceEvent::Kind::JunctionRemoved);
+    CHECK(roadService->listJunctions().empty());
+    CHECK_FALSE(roadService->getJunction(jId).has_value());
 }
 
 } // namespace infraforge::application

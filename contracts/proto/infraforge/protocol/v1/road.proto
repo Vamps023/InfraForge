@@ -35,6 +35,67 @@ message RoadAlignmentSegmentInfo {
   double end_curvature = 5;
 }
 
+// Exact canonical breakpoint projected for profile inspection and editing.
+// Value is project height for elevation and radians for superelevation.
+message RoadProfileBreakpoint {
+  double station = 1;
+  double value = 2;
+}
+
+message RoadWidthBreakpoint {
+  double station = 1;
+  double left_width = 2;
+  double right_width = 3;
+}
+
+message RoadLaneInfo {
+  string lane_id = 1;
+  uint32 section_index = 2;
+  string side = 3;  // "left" or "right"
+  uint32 lane_index = 4;
+  string type = 5;  // "driving", "shoulder", "sidewalk", "biking", "parking", "median"
+  string direction = 6;  // "forward", "backward", "bidirectional"
+  double width = 7;
+}
+
+message RoadLaneSectionInfo {
+  uint32 section_index = 1;
+  double start_station = 2;
+  double end_station = 3;
+  repeated RoadLaneInfo lanes = 4;
+}
+
+message JunctionApproachInfo {
+  string road_id = 1;
+  string contact_point = 2;  // "start" or "end"
+  double entry_point_x = 3;
+  double entry_point_y = 4;
+  double heading = 5;
+  repeated string lane_ids = 6;
+}
+
+message JunctionConnectionInfo {
+  string id = 1;
+  string from_road_id = 2;
+  string from_lane_id = 3;
+  string to_road_id = 4;
+  string to_lane_id = 5;
+  string movement_type = 6;  // "straight", "left", "right", "u_turn"
+  bool allowed = 7;
+}
+
+message JunctionInfo {
+  string junction_id = 1;
+  string name = 2;
+  string type = 3;  // "custom", "t", "four_way"
+  double pos_x = 4;
+  double pos_y = 5;
+  double elevation = 6;
+  uint64 revision = 7;
+  repeated JunctionApproachInfo approaches = 8;
+  repeated JunctionConnectionInfo connections = 9;
+}
+
 // Detailed road projection for the inspector.
 message RoadDetails {
   string road_id = 1;
@@ -56,6 +117,10 @@ message RoadDetails {
   repeated RoadControlPoint control_points = 17;
   double position_tolerance = 18;
   optional double max_curvature = 19;
+  repeated RoadProfileBreakpoint elevation_breakpoints = 20;
+  repeated RoadProfileBreakpoint superelevation_breakpoints = 21;
+  repeated RoadWidthBreakpoint width_breakpoints = 22;
+  repeated RoadLaneSectionInfo lane_sections = 23;
 }
 
 // Editable fitting control projected for the inspector. This is not the
@@ -159,6 +224,55 @@ message UpdateRoadSuperelevationCommand {
   repeated double superelevations = 3;
 }
 
+message UpdateRoadWidthCommand {
+  string road_id = 1;
+  repeated double stations = 2;
+  repeated double left_widths = 3;
+  repeated double right_widths = 4;
+}
+
+// Rebuild the canonical elevation profile by sampling terrain along the
+// canonical alignment. An empty dataset_id uses TerrainService's deterministic
+// most-recent-covering-dataset rule.
+message ConformRoadToTerrainCommand {
+  string road_id = 1;
+  string dataset_id = 2;
+  double station_interval = 3;
+  double vertical_offset = 4;
+}
+
+message UpdateRoadLanesCommand {
+  string road_id = 1;
+  repeated RoadLaneSectionInfo lane_sections = 2;
+}
+
+message CreateJunctionCommand {
+  string name = 1;
+  string type = 2;
+  double pos_x = 3;
+  double pos_y = 4;
+  double elevation = 5;
+  repeated JunctionApproachInfo approaches = 6;
+  repeated JunctionConnectionInfo connections = 7;
+}
+
+message UpdateJunctionCommand {
+  string junction_id = 1;
+  string name = 2;
+  string type = 3;
+  double pos_x = 4;
+  double pos_y = 5;
+  double elevation = 6;
+  repeated JunctionApproachInfo approaches = 7;
+  repeated JunctionConnectionInfo connections = 8;
+}
+
+message DeleteJunctionCommand {
+  string junction_id = 1;
+}
+
+message ListJunctionsCommand {}
+
 // Undo the last road command.
 message UndoRoadCommand {
   // If empty, undoes the last command of any road.
@@ -214,6 +328,32 @@ message UpdateRoadElevationResult {
 
 message UpdateRoadSuperelevationResult {
   RoadSummary road = 1;
+}
+
+message UpdateRoadWidthResult {
+  RoadSummary road = 1;
+}
+
+message ConformRoadToTerrainResult {
+  RoadSummary road = 1;
+}
+
+message UpdateRoadLanesResult {
+  RoadSummary road = 1;
+}
+
+message CreateJunctionResult {
+  JunctionInfo junction = 1;
+}
+
+message UpdateJunctionResult {
+  JunctionInfo junction = 1;
+}
+
+message DeleteJunctionResult {}
+
+message ListJunctionsResult {
+  repeated JunctionInfo junctions = 1;
 }
 
 message UndoRoadResult {
@@ -300,4 +440,23 @@ message RoadGeometryChangedEvent {
   // Affected world chunk coordinates.
   repeated int64 chunk_x = 3;
   repeated int64 chunk_y = 4;
+}
+
+// Emitted when a junction is created.
+message JunctionCreatedEvent {
+  string junction_id = 1;
+  string name = 2;
+  uint64 revision = 3;
+}
+
+// Emitted when a junction is updated.
+message JunctionUpdatedEvent {
+  string junction_id = 1;
+  uint64 revision = 2;
+}
+
+// Emitted when a junction is deleted.
+message JunctionRemovedEvent {
+  string junction_id = 1;
+  uint64 revision = 2;
 }

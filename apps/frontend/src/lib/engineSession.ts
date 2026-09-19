@@ -50,7 +50,7 @@ const COMMAND_TIMEOUT_MS = 30_000
 // the engine decides compatibility (major must match, minor must not exceed
 // the engine's).
 const FRONTEND_PROTOCOL_MAJOR = 1
-const FRONTEND_PROTOCOL_MINOR = 5
+const FRONTEND_PROTOCOL_MINOR = 6
 
 interface PendingCommand {
   resolve: (outcome: ResultEnvelope['outcome']) => void

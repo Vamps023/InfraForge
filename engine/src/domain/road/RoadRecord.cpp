@@ -1,5 +1,6 @@
 #include "infraforge/domain/road/RoadRecord.hpp"
 
+#include <algorithm>
 #include <utility>
 
 namespace infraforge::domain::road {
@@ -29,6 +30,39 @@ RoadRecord toRecord(const Road& road) {
     // Profiles.
     record.elevationBreakpoints = road.elevation().breakpoints();
     record.superelevationBreakpoints = road.superelevation().breakpoints();
+    record.widthBreakpoints = road.width().breakpoints();
+
+    // Lanes.
+    for (std::size_t si = 0; si < road.laneSections().size(); ++si) {
+        const auto& sec = road.laneSections()[si];
+        record.laneSections.push_back({
+            .sectionIndex = static_cast<std::uint32_t>(si),
+            .startStation = sec.startStation,
+            .endStation = sec.endStation,
+        });
+        for (const auto& lane : sec.leftLanes) {
+            record.lanes.push_back({
+                .laneId = lane.id,
+                .sectionIndex = static_cast<std::uint32_t>(si),
+                .side = "left",
+                .laneIndex = lane.laneIndex,
+                .type = std::string{laneTypeName(lane.type)},
+                .direction = std::string{laneDirectionName(lane.direction)},
+                .width = lane.width,
+            });
+        }
+        for (const auto& lane : sec.rightLanes) {
+            record.lanes.push_back({
+                .laneId = lane.id,
+                .sectionIndex = static_cast<std::uint32_t>(si),
+                .side = "right",
+                .laneIndex = lane.laneIndex,
+                .type = std::string{laneTypeName(lane.type)},
+                .direction = std::string{laneDirectionName(lane.direction)},
+                .width = lane.width,
+            });
+        }
+    }
 
     // Source.
     const auto& source = road.source();
@@ -97,6 +131,45 @@ std::expected<Road, std::vector<RoadDiagnostic>> fromRecord(const RoadRecord& re
     if (!superelevation.has_value()) {
         return std::unexpected(std::vector<RoadDiagnostic>{superelevation.error()});
     }
+    auto width = buildRoadWidthProfile(record.widthBreakpoints);
+    if (!width.has_value()) {
+        return std::unexpected(std::vector<RoadDiagnostic>{width.error()});
+    }
+
+    // Reconstruct lane sections.
+    std::vector<RoadLaneSection> laneSections;
+    laneSections.reserve(record.laneSections.size());
+    for (const auto& secRecord : record.laneSections) {
+        RoadLaneSection sec{
+            .startStation = secRecord.startStation,
+            .endStation = secRecord.endStation,
+            .leftLanes = {},
+            .rightLanes = {},
+        };
+        for (const auto& laneRecord : record.lanes) {
+            if (laneRecord.sectionIndex != secRecord.sectionIndex) continue;
+            RoadLane lane{
+                .id = laneRecord.laneId,
+                .side = laneSideFromName(laneRecord.side).value_or(LaneSide::Right),
+                .laneIndex = laneRecord.laneIndex,
+                .type = laneTypeFromName(laneRecord.type).value_or(LaneType::Driving),
+                .direction = laneDirectionFromName(laneRecord.direction).value_or(LaneDirection::Forward),
+                .width = laneRecord.width,
+            };
+            if (lane.side == LaneSide::Left) {
+                sec.leftLanes.push_back(std::move(lane));
+            } else {
+                sec.rightLanes.push_back(std::move(lane));
+            }
+        }
+        std::sort(sec.leftLanes.begin(), sec.leftLanes.end(), [](const auto& a, const auto& b) {
+            return a.laneIndex < b.laneIndex;
+        });
+        std::sort(sec.rightLanes.begin(), sec.rightLanes.end(), [](const auto& a, const auto& b) {
+            return a.laneIndex < b.laneIndex;
+        });
+        laneSections.push_back(std::move(sec));
+    }
 
     // Reconstruct source.
     RoadSource source;
@@ -120,6 +193,8 @@ std::expected<Road, std::vector<RoadDiagnostic>> fromRecord(const RoadRecord& re
         .alignment = std::move(*alignment),
         .elevation = std::move(*elevation),
         .superelevation = std::move(*superelevation),
+        .width = std::move(*width),
+        .laneSections = std::move(laneSections),
         .source = std::move(source),
     };
     return Road::build(std::move(input));

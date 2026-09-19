@@ -10,36 +10,36 @@
 
 :root {
   /* ---- Surface backgrounds (layered charcoal/slate) ---- */
-  --if-bg-canvas: #0d1014;        /* darkest — viewport background area */
-  --if-bg-panel: #141920;          /* panels (outliner, inspector) */
-  --if-bg-elevated: #1b2129;       /* raised controls, dropdowns, cards */
-  --if-bg-hover: #222a34;          /* hover state for rows/buttons */
-  --if-bg-active: #1c2b41;         /* active/selected button background */
-  --if-bg-input: #12161c;          /* input field backgrounds */
+  --if-bg-canvas: #0b0e12;
+  --if-bg-panel: #151a21;
+  --if-bg-elevated: #1d242d;
+  --if-bg-hover: #252e39;
+  --if-bg-active: #203653;
+  --if-bg-input: #10151b;
 
   /* ---- Borders ---- */
-  --if-border-subtle: #222934;     /* lightest — subtle separators */
-  --if-border-default: #29313b;    /* standard panel borders */
-  --if-border-strong: #37424f;     /* stronger — inputs, dropdowns */
-  --if-border-focus: #4f8cff;      /* focus ring */
+  --if-border-subtle: #202832;
+  --if-border-default: #303a46;
+  --if-border-strong: #465463;
+  --if-border-focus: #67a5ff;
 
   /* ---- Text ---- */
-  --if-text-primary: #d8dde6;      /* main text */
-  --if-text-secondary: #a4b0c2;    /* secondary labels */
-  --if-text-muted: #8c98a8;        /* muted hints, metadata */
-  --if-text-disabled: #596473;     /* disabled state */
-  --if-text-on-accent: #cfe2ff;    /* text on accent/selection backgrounds */
+  --if-text-primary: #e2e8f0;
+  --if-text-secondary: #b0bdcc;
+  --if-text-muted: #8997a8;
+  --if-text-disabled: #5f6c7b;
+  --if-text-on-accent: #e8f2ff;
 
   /* ---- Accent (cool blue) ---- */
-  --if-accent: #4f8cff;
-  --if-accent-hover: #5e98ff;
-  --if-accent-active: #3a78f0;
-  --if-accent-subtle: #1c2b41;     /* subtle accent fill (selected rows) */
-  --if-accent-border: #31527f;     /* accent border for active states */
+  --if-accent: #67a5ff;
+  --if-accent-hover: #82b5ff;
+  --if-accent-active: #4d8fe9;
+  --if-accent-subtle: #1d3656;
+  --if-accent-border: #3b689d;
 
   /* ---- Selection */
-  --if-selection: #285ea8;
-  --if-selection-hover: #2f6cb9;
+  --if-selection: #2c66ad;
+  --if-selection-hover: #3778c4;
 
   /* ---- Status colors ---- */
   --if-success: #65b68a;
@@ -81,17 +81,17 @@
   --if-shadow-lg: 0 12px 42px rgba(0, 0, 0, 0.5);
 
   /* ---- Control heights ---- */
-  --if-control-sm: 24px;
-  --if-control-md: 28px;
-  --if-control-lg: 32px;
-  --if-control-xl: 36px;
+  --if-control-sm: 22px;
+  --if-control-md: 26px;
+  --if-control-lg: 30px;
+  --if-control-xl: 34px;
 
   /* ---- Panel header heights ---- */
-  --if-header-app: 40px;          /* top application header */
-  --if-header-panel: 34px;        /* panel title bars */
-  --if-header-tab: 32px;          /* tab bars */
-  --if-header-status: 26px;       /* status bar */
-  --if-rail-width: 52px;          /* workspace rail width */
+  --if-header-app: 36px;
+  --if-header-panel: 30px;
+  --if-header-tab: 30px;
+  --if-header-status: 24px;
+  --if-rail-width: 50px;
 
   /* ---- Font sizes ---- */
   --if-font-app-title: 14px;      /* application title */

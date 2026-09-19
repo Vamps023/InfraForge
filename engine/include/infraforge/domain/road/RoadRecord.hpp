@@ -1,5 +1,6 @@
 #pragma once
 
+#include "infraforge/domain/road/LaneTypes.hpp"
 #include "infraforge/domain/road/Road.hpp"
 
 #include <optional>
@@ -11,8 +12,8 @@ namespace infraforge::domain::road {
 
 // Serializable canonical road record for persistence. This is the exact
 // data that survives save/reopen: stable identity, display name, ordered
-// alignment segments, elevation/superelevation breakpoints, and optional
-// source geometry/provenance with protected anchors.
+// alignment segments, elevation/superelevation breakpoints, lane sections,
+// and optional source geometry/provenance with protected anchors.
 //
 // The record is a flat projection of the Road domain model: segments are
 // stored as ordered rows with a kind discriminator and all possible
@@ -60,12 +61,35 @@ struct RoadProtectedAnchorRecord {
     friend bool operator==(const RoadProtectedAnchorRecord&, const RoadProtectedAnchorRecord&) = default;
 };
 
+struct RoadLaneRecord {
+    std::string laneId;
+    std::uint32_t sectionIndex{0};
+    std::string side{"right"};
+    std::uint32_t laneIndex{1};
+    std::string type{"driving"};
+    std::string direction{"forward"};
+    double width{3.5};
+
+    friend bool operator==(const RoadLaneRecord&, const RoadLaneRecord&) = default;
+};
+
+struct RoadLaneSectionRecord {
+    std::uint32_t sectionIndex{0};
+    Station startStation{0.0};
+    Station endStation{0.0};
+
+    friend bool operator==(const RoadLaneSectionRecord&, const RoadLaneSectionRecord&) = default;
+};
+
 struct RoadRecord {
     RoadId id{};
     std::string displayName;
     std::vector<RoadSegmentRecord> segments;
     std::vector<ProfileBreakpoint> elevationBreakpoints;
     std::vector<ProfileBreakpoint> superelevationBreakpoints;
+    std::vector<RoadWidthBreakpoint> widthBreakpoints;
+    std::vector<RoadLaneSectionRecord> laneSections;
+    std::vector<RoadLaneRecord> lanes;
     // Source geometry/provenance (absent for authored roads).
     bool hasSource{false};
     SourceProvider provider{SourceProvider::Authored};

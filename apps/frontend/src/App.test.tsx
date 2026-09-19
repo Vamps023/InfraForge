@@ -365,6 +365,33 @@ describe('computeBlockedByOverlay (production helper)', () => {
   it('returns true when both dialog and home screen are active', () => {
     expect(computeBlockedByOverlay('georeference', true)).toBe(true)
   })
+
+  it('returns true when an application menu dropdown is open', () => {
+    expect(computeBlockedByOverlay(null, false, true)).toBe(true)
+  })
+
+  it('Home + menu: closing menu while on Home screen never unblocks viewport', () => {
+    // Menu opens while on Home screen
+    expect(computeBlockedByOverlay(null, true, true)).toBe(true)
+    // Menu closes while on Home screen -> must remain blocked!
+    expect(computeBlockedByOverlay(null, true, false)).toBe(true)
+  })
+
+  it('Dialog + menu: closing menu while a dialog is open never unblocks viewport', () => {
+    // Menu opens while New Project dialog is open
+    expect(computeBlockedByOverlay('new-project', false, true)).toBe(true)
+    // Menu closes while New Project dialog is open -> must remain blocked!
+    expect(computeBlockedByOverlay('new-project', false, false)).toBe(true)
+  })
+
+  it('Project active: menu open blocks viewport and menu close restores it', () => {
+    // Normal editor state: project open, no dialog, on terrain workspace
+    expect(computeBlockedByOverlay(null, false, false)).toBe(false)
+    // Open menu
+    expect(computeBlockedByOverlay(null, false, true)).toBe(true)
+    // Close menu
+    expect(computeBlockedByOverlay(null, false, false)).toBe(false)
+  })
 })
 
 describe('Workspace transition visibility (production helpers)', () => {

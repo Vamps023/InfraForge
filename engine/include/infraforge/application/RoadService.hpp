@@ -11,6 +11,7 @@
 #include "infraforge/ports/ProjectStore.hpp"
 
 #include <cstdint>
+#include <expected>
 #include <functional>
 #include <optional>
 #include <string>
@@ -22,12 +23,31 @@ namespace infraforge::application {
 // Events produced by road use cases, marshalled onto the application
 // executor and translated into protocol events by the transport layer.
 struct RoadServiceEvent {
-    enum class Kind { Created, Updated, Removed, GeometryChanged };
+    enum class Kind {
+        Created,
+        Updated,
+        Removed,
+        GeometryChanged,
+        JunctionCreated,
+        JunctionUpdated,
+        JunctionRemoved,
+    };
+
+    RoadServiceEvent() = default;
+    RoadServiceEvent(Kind k, std::string rId, std::uint64_t rev,
+                     std::vector<domain::world::ChunkCoord> chunks = {},
+                     std::string jId = {}, std::string jName = {})
+        : kind(k), roadId(std::move(rId)), revision(rev),
+          affectedChunks(std::move(chunks)), junctionId(std::move(jId)),
+          junctionName(std::move(jName)) {}
+
     Kind kind{Kind::Created};
     std::string roadId;
     std::uint64_t revision{0};
     // Affected world chunks for geometry changes.
     std::vector<domain::world::ChunkCoord> affectedChunks;
+    std::string junctionId;
+    std::string junctionName;
 };
 
 // Lightweight road summary projection for the outliner and road list.
@@ -78,6 +98,15 @@ struct RoadDetails {
     std::vector<ControlPoint> controlPoints;
     double positionTolerance{1.0};
     std::optional<double> maxCurvature;
+    struct ProfileBreakpoint {
+        double station{0.0};
+        double value{0.0};
+    };
+    std::vector<ProfileBreakpoint> elevationBreakpoints;
+    std::vector<ProfileBreakpoint> superelevationBreakpoints;
+    std::vector<domain::road::RoadWidthBreakpoint> widthBreakpoints;
+    std::vector<domain::road::RoadLaneSectionRecord> laneSections;
+    std::vector<domain::road::RoadLaneRecord> lanes;
 };
 
 // One vertex of a road scene mesh, in render-local float coordinates.
@@ -110,41 +139,41 @@ struct RoadSceneProjection {
 
 // Input for creating a road from a source polyline.
 struct CreateRoadInput {
-    std::string name;
-    std::vector<domain::road::AlignmentPoint> sourcePoints;
-    std::vector<std::optional<double>> sourceElevations;
+    std::string name{};
+    std::vector<domain::road::AlignmentPoint> sourcePoints{};
+    std::vector<std::optional<double>> sourceElevations{};
     double positionTolerance{1.0};
-    std::optional<double> maxCurvature;
-    std::vector<std::uint32_t> protectedAnchorIndices;
+    std::optional<double> maxCurvature{};
+    std::vector<std::uint32_t> protectedAnchorIndices{};
 };
 
 // Input for inserting a control point.
 struct InsertControlInput {
-    std::string roadId;
+    std::string roadId{};
     std::uint32_t insertBeforeIndex{0};
-    domain::road::AlignmentPoint position;
-    std::optional<double> elevation;
+    domain::road::AlignmentPoint position{};
+    std::optional<double> elevation{};
 };
 
 // Input for moving a control point.
 struct MoveControlInput {
-    std::string roadId;
+    std::string roadId{};
     std::uint32_t controlIndex{0};
-    domain::road::AlignmentPoint position;
-    std::optional<double> elevation;
+    domain::road::AlignmentPoint position{};
+    std::optional<double> elevation{};
 };
 
 // Input for deleting a control point.
 struct DeleteControlInput {
-    std::string roadId;
+    std::string roadId{};
     std::uint32_t controlIndex{0};
 };
 
 // Input for fitting/refitting a road.
 struct FitSourceInput {
-    std::string roadId;
-    std::optional<double> positionTolerance;
-    std::optional<double> maxCurvature;
+    std::string roadId{};
+    std::optional<double> positionTolerance{};
+    std::optional<double> maxCurvature{};
     bool replaceMaxCurvature{false};
 };
 
@@ -158,17 +187,43 @@ struct RoadHistoryResult {
 
 // Input for updating the elevation profile.
 struct UpdateElevationInput {
-    std::string roadId;
-    std::vector<double> stations;
-    std::vector<double> elevations;
+    std::string roadId{};
+    std::vector<double> stations{};
+    std::vector<double> elevations{};
 };
 
 // Input for updating the superelevation profile.
 struct UpdateSuperelevationInput {
-    std::string roadId;
-    std::vector<double> stations;
-    std::vector<double> superelevations;
+    std::string roadId{};
+    std::vector<double> stations{};
+    std::vector<double> superelevations{};
 };
+
+struct UpdateWidthInput {
+    std::string roadId{};
+    std::vector<double> stations{};
+    std::vector<double> leftWidths{};
+    std::vector<double> rightWidths{};
+};
+
+struct UpdateLanesInput {
+    std::string roadId{};
+    std::vector<domain::road::RoadLaneSectionRecord> laneSections{};
+    std::vector<domain::road::RoadLaneRecord> lanes{};
+};
+
+struct ConformRoadToTerrainInput {
+    std::string roadId{};
+    double stationInterval{10.0};
+    double verticalOffset{0.1};
+};
+
+// Maximum number of stations permitted for terrain conformance to prevent
+// excessive allocations, execution stalls, or memory exhaustion.
+inline constexpr std::size_t kMaximumTerrainConformanceSamples = 10'000;
+
+using TerrainHeightSampler = std::function<std::expected<double, std::string>(
+    const domain::road::AlignmentPoint&)>;
 
 // Application boundary of the Road domain: canonical road CRUD, fitting,
 // editing, undo/redo, and projection. Runs on the single application
@@ -194,6 +249,18 @@ public:
     [[nodiscard]] RoadSummary fitSource(const FitSourceInput& input);
     [[nodiscard]] RoadSummary updateElevation(const UpdateElevationInput& input);
     [[nodiscard]] RoadSummary updateSuperelevation(const UpdateSuperelevationInput& input);
+    [[nodiscard]] RoadSummary updateWidth(const UpdateWidthInput& input);
+    [[nodiscard]] RoadSummary updateLanes(const UpdateLanesInput& input);
+    [[nodiscard]] RoadSummary conformToTerrain(
+        const ConformRoadToTerrainInput& input, const TerrainHeightSampler& sampleHeight);
+
+    // ---- Junctions ----
+
+    [[nodiscard]] std::vector<domain::road::JunctionRecord> listJunctions() const;
+    [[nodiscard]] std::optional<domain::road::JunctionRecord> getJunction(const std::string& junctionId) const;
+    [[nodiscard]] domain::road::JunctionRecord createJunction(const domain::road::JunctionRecord& junction);
+    [[nodiscard]] domain::road::JunctionRecord updateJunction(const domain::road::JunctionRecord& junction);
+    void deleteJunction(const std::string& junctionId);
 
     // ---- Undo/Redo ----
 
@@ -220,6 +287,15 @@ public:
     // in render-local float coordinates relative to the scene origin.
     // The origin is the project georeference origin.
     [[nodiscard]] RoadSceneProjection roadSceneProjection() const;
+
+    // Evaluates and adjusts canonical profile breakpoints when an alignment
+    // is shortened or lengthened, preserving interior breakpoints and extending
+    // or interpolating endpoints without duplicates within station tolerance.
+    [[nodiscard]] static std::vector<domain::road::ProfileBreakpoint> clampProfileBreakpoints(
+        const std::vector<domain::road::ProfileBreakpoint>& breakpoints, double newLength);
+
+    [[nodiscard]] static std::vector<domain::road::RoadWidthBreakpoint> clampWidthBreakpoints(
+        const std::vector<domain::road::RoadWidthBreakpoint>& breakpoints, double newLength);
 
 private:
     // Undo/redo history entry: stores the full road record before/after.

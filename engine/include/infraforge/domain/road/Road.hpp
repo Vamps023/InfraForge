@@ -1,8 +1,10 @@
 #pragma once
 
+#include "infraforge/domain/road/LaneTypes.hpp"
 #include "infraforge/domain/road/ReferenceAlignment.hpp"
 #include "infraforge/domain/road/RoadSource.hpp"
 #include "infraforge/domain/road/RoadTypes.hpp"
+#include "infraforge/domain/road/RoadWidthProfile.hpp"
 #include "infraforge/domain/road/VerticalProfiles.hpp"
 
 #include <expected>
@@ -31,6 +33,8 @@ public:
         ReferenceAlignment alignment{};
         ElevationProfile elevation{};
         SuperelevationProfile superelevation{};
+        RoadWidthProfile width{};
+        std::vector<RoadLaneSection> laneSections{};
         RoadSource source{};
     };
 
@@ -41,6 +45,8 @@ public:
     [[nodiscard]] const ReferenceAlignment& alignment() const noexcept { return alignment_; }
     [[nodiscard]] const ElevationProfile& elevation() const noexcept { return elevation_; }
     [[nodiscard]] const SuperelevationProfile& superelevation() const noexcept { return superelevation_; }
+    [[nodiscard]] const RoadWidthProfile& width() const noexcept { return width_; }
+    [[nodiscard]] const std::vector<RoadLaneSection>& laneSections() const noexcept { return laneSections_; }
     [[nodiscard]] const RoadSource& source() const noexcept { return source_; }
 
     // Evaluates the full 3D road sample at station s: horizontal position
@@ -62,6 +68,8 @@ private:
           alignment_(std::move(input.alignment)),
           elevation_(std::move(input.elevation)),
           superelevation_(std::move(input.superelevation)),
+          width_(std::move(input.width)),
+          laneSections_(std::move(input.laneSections)),
           source_(std::move(input.source)) {}
 
     RoadId id_{};
@@ -69,6 +77,8 @@ private:
     ReferenceAlignment alignment_;
     ElevationProfile elevation_;
     SuperelevationProfile superelevation_;
+    RoadWidthProfile width_;
+    std::vector<RoadLaneSection> laneSections_;
     RoadSource source_;
 };
 

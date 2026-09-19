@@ -60,6 +60,10 @@ struct RoadSummary {
     std::string sourceId;
     std::uint32_t protectedAnchorCount{0};
     std::uint64_t revision{0};
+    double startEasting{0.0};
+    double startNorthing{0.0};
+    double endEasting{0.0};
+    double endNorthing{0.0};
 };
 
 // One alignment segment in a road projection.

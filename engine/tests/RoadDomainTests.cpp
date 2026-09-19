@@ -1480,7 +1480,56 @@ TEST_CASE("constructCircularArcThroughPoints builds canonical mathematical arcs"
         CHECK(arcRes.error().code == RoadErrorCode::InvalidCurvature);
     }
 
-    // 8. Straight segment construction
+    // 8. GIS / UTM-scale coordinates (e.g. Easting ~500k, Northing ~5000k) maintain exact machine precision
+    {
+        const double utmE = 524000.0;
+        const double utmN = 5930000.0;
+        const auto arcRes = constructCircularArcThroughPoints(
+            AlignmentPoint{utmE + 10.0, utmN + 0.0},
+            AlignmentPoint{utmE + 0.0, utmN + 10.0},
+            AlignmentPoint{utmE - 10.0, utmN + 0.0});
+        REQUIRE(arcRes.has_value());
+        const auto& arc = *arcRes;
+        CHECK(arc.start.easting == doctest::Approx(utmE + 10.0));
+        CHECK(arc.start.northing == doctest::Approx(utmN + 0.0));
+        CHECK(arc.curvature == doctest::Approx(0.1));
+        CHECK(arc.length == doctest::Approx(10.0 * kPi));
+        CHECK(arc.startHeading == doctest::Approx(kPi / 2.0));
+
+        const auto endSample = arc.endSample();
+        CHECK(endSample.position.easting == doctest::Approx(utmE - 10.0));
+        CHECK(endSample.position.northing == doctest::Approx(utmN + 0.0));
+    }
+
+    // 9. Shallow GIS / UTM curve
+    {
+        const double utmE = 600000.0;
+        const double utmN = 4500000.0;
+        const auto arcRes = constructCircularArcThroughPoints(
+            AlignmentPoint{utmE, utmN},
+            AlignmentPoint{utmE + 500.0, utmN + 25.0},
+            AlignmentPoint{utmE + 1000.0, utmN});
+        REQUIRE(arcRes.has_value());
+        const auto& arc = *arcRes;
+        CHECK(arc.curvature < 0.0); // right turn
+        const auto endSample = arc.endSample();
+        CHECK(endSample.position.easting == doctest::Approx(utmE + 1000.0).epsilon(1e-4));
+        CHECK(endSample.position.northing == doctest::Approx(utmN).epsilon(1e-4));
+    }
+
+    // 10. Scale-aware collinearity in UTM coordinates
+    {
+        const double utmE = 500000.0;
+        const double utmN = 5000000.0;
+        const auto arcRes = constructCircularArcThroughPoints(
+            AlignmentPoint{utmE, utmN},
+            AlignmentPoint{utmE + 100.0, utmN},
+            AlignmentPoint{utmE + 200.0, utmN});
+        REQUIRE_FALSE(arcRes.has_value());
+        CHECK(arcRes.error().code == RoadErrorCode::DegenerateSegment);
+    }
+
+    // 11. Straight segment construction
     {
         const auto lineRes = constructStraightSegment(AlignmentPoint{10.0, 20.0}, AlignmentPoint{40.0, 60.0});
         REQUIRE(lineRes.has_value());
@@ -1494,7 +1543,7 @@ TEST_CASE("constructCircularArcThroughPoints builds canonical mathematical arcs"
         CHECK(endSample.position.northing == doctest::Approx(60.0));
     }
 
-    // 9. Clothoid segment construction
+    // 12. Clothoid segment construction
     {
         const auto clothoidRes = constructClothoidSegment(
             AlignmentPoint{0.0, 0.0}, 0.0, 0.0, 0.02, 100.0);

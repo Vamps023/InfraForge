@@ -1,4 +1,4 @@
-import type { RoadDetails } from '@infraforge/protocol'
+import type { RoadDetails, RoadSummary } from '@infraforge/protocol'
 
 export interface Point2D {
   easting: number
@@ -14,21 +14,23 @@ export interface SnappingConfig {
   snapRadius: number
 }
 
+export const DEFAULT_SNAP_RADIUS = 15
+
 export const DEFAULT_SNAPPING_CONFIG: SnappingConfig = {
   gridSnap: false,
   gridStep: 5,
   angleSnap: false,
   angleStepDeg: 15,
   endpointSnap: true,
-  snapRadius: 10,
+  snapRadius: DEFAULT_SNAP_RADIUS,
 }
 
-export const GRID_STEPS = [0.5, 1, 2, 5, 10, 25, 50] as const
-export const ANGLE_STEPS = [15, 30, 45, 90] as const
+export const GRID_STEPS = [1, 2, 5, 10, 20, 50, 100]
+export const ANGLE_STEPS = [5, 15, 30, 45, 90]
 
 /** Snap coordinates to the nearest grid step */
 export function snapToGrid(point: Point2D, step: number): Point2D {
-  if (step <= 0) return point
+  if (step <= 0) return { ...point }
   return {
     easting: Math.round(point.easting / step) * step,
     northing: Math.round(point.northing / step) * step,
@@ -38,60 +40,74 @@ export function snapToGrid(point: Point2D, step: number): Point2D {
 /** Snap vector from origin to current point to angle increments (degrees) */
 export function snapToAngle(
   origin: Point2D,
-  current: Point2D,
-  angleStepDeg: number,
-): { point: Point2D; angleDeg: number; distance: number } {
-  const de = current.easting - origin.easting
-  const dn = current.northing - origin.northing
+  point: Point2D,
+  stepDeg: number,
+): { point: Point2D; angleDeg: number } {
+  if (stepDeg <= 0) return { point: { ...point }, angleDeg: 0 }
+
+  const de = point.easting - origin.easting
+  const dn = point.northing - origin.northing
   const dist = Math.hypot(de, dn)
-  if (dist < 1e-5 || angleStepDeg <= 0) {
-    return { point: current, angleDeg: 0, distance: dist }
+
+  if (dist < 1e-6) {
+    return { point: { ...point }, angleDeg: 0 }
   }
 
-  let rad = Math.atan2(dn, de)
-  let deg = (rad * 180) / Math.PI
-  if (deg < 0) deg += 360
+  let angleRad = Math.atan2(dn, de)
+  let angleDeg = (angleRad * 180) / Math.PI
+  if (angleDeg < 0) angleDeg += 360
 
-  const snappedDeg = Math.round(deg / angleStepDeg) * angleStepDeg
+  const snappedDeg = Math.round(angleDeg / stepDeg) * stepDeg
   const snappedRad = (snappedDeg * Math.PI) / 180
 
   return {
     point: {
-      easting: origin.easting + Math.cos(snappedRad) * dist,
-      northing: origin.northing + Math.sin(snappedRad) * dist,
+      easting: origin.easting + dist * Math.cos(snappedRad),
+      northing: origin.northing + dist * Math.sin(snappedRad),
     },
     angleDeg: snappedDeg % 360,
-    distance: dist,
   }
+}
+
+export interface EndpointCandidate extends Point2D {
+  roadId?: string
+  endpointType?: 'start' | 'end' | 'draft'
 }
 
 /** Find nearest existing road endpoint within radius */
 export function snapToEndpoint(
   point: Point2D,
-  endpoints: Point2D[],
+  endpoints: (Point2D | EndpointCandidate)[],
   radius: number,
 ): Point2D | null {
-  if (!endpoints.length || radius <= 0) return null
+  if (!endpoints || endpoints.length === 0 || radius <= 0) return null
 
-  let nearest: Point2D | null = null
-  let bestDistSq = radius * radius
+  let best: Point2D | null = null
+  let bestDist = radius
 
   for (const ep of endpoints) {
-    const de = ep.easting - point.easting
-    const dn = ep.northing - point.northing
-    const distSq = de * de + dn * dn
-    if (distSq <= bestDistSq) {
-      bestDistSq = distSq
-      nearest = ep
+    const d = Math.hypot(ep.easting - point.easting, ep.northing - point.northing)
+    if (d <= bestDist) {
+      bestDist = d
+      best = ep
     }
   }
 
-  return nearest
+  return best ? { easting: best.easting, northing: best.northing } : null
 }
 
 export interface SnappingResolution {
   point: Point2D
   snappedTo: 'none' | 'grid' | 'angle' | 'endpoint'
+  originalPoint: Point2D
+  appliedAngleDeg?: number
+  snapDistance?: number
+}
+
+export interface SnappingContext {
+  origin?: Point2D | null
+  endpoints?: (Point2D | EndpointCandidate)[]
+  config: SnappingConfig
 }
 
 /**
@@ -102,39 +118,53 @@ export interface SnappingResolution {
  */
 export function resolveSnapping(
   rawPoint: Point2D,
-  options: {
-    origin?: Point2D | null
-    endpoints?: Point2D[]
-    config: SnappingConfig
-  },
+  context: SnappingContext,
 ): SnappingResolution {
-  const { origin, endpoints = [], config } = options
+  const { config, endpoints = [], origin } = context
 
   // 1. Endpoint snap
   if (config.endpointSnap && endpoints.length > 0) {
     const ep = snapToEndpoint(rawPoint, endpoints, config.snapRadius)
     if (ep) {
-      return { point: ep, snappedTo: 'endpoint' }
+      const dist = Math.hypot(ep.easting - rawPoint.easting, ep.northing - rawPoint.northing)
+      return {
+        point: ep,
+        snappedTo: 'endpoint',
+        originalPoint: rawPoint,
+        snapDistance: dist,
+      }
     }
   }
 
+  let current = { ...rawPoint }
+  let snappedTo: 'none' | 'grid' | 'angle' = 'none'
+  let appliedAngleDeg: number | undefined
+
   // 2. Angle snap (relative to previous point)
   if (config.angleSnap && origin) {
-    const res = snapToAngle(origin, rawPoint, config.angleStepDeg)
-    return { point: res.point, snappedTo: 'angle' }
+    const res = snapToAngle(origin, current, config.angleStepDeg)
+    current = res.point
+    snappedTo = 'angle'
+    appliedAngleDeg = res.angleDeg
   }
 
   // 3. Grid snap
-  if (config.gridSnap && config.gridStep > 0) {
-    return { point: snapToGrid(rawPoint, config.gridStep), snappedTo: 'grid' }
+  if (config.gridSnap) {
+    current = snapToGrid(current, config.gridStep)
+    snappedTo = 'grid'
   }
 
-  return { point: rawPoint, snappedTo: 'none' }
+  return {
+    point: current,
+    snappedTo,
+    originalPoint: rawPoint,
+    appliedAngleDeg,
+  }
 }
 
 export interface AuthoringPointResolutionOptions {
   previousDraftPoint?: Point2D | null
-  endpointCandidates?: Point2D[]
+  endpointCandidates?: (Point2D | EndpointCandidate)[]
   snappingConfig: SnappingConfig
 }
 
@@ -154,28 +184,81 @@ export function resolveAuthoringPoint(
   })
 }
 
-/** Extract candidate endpoints from inspected road details and current draft */
+export interface RoadSummaryLike {
+  roadId?: string
+  startEasting?: number
+  startNorthing?: number
+  endEasting?: number
+  endNorthing?: number
+  length?: number
+}
+
+export interface ExtractEndpointOptions {
+  roads?: readonly (RoadSummary | RoadSummaryLike)[] | null
+  details?: RoadDetails | null
+  draftPoints?: readonly Point2D[]
+}
+
+/** Extract candidate endpoints from all project roads and current draft */
 export function extractEndpointCandidates(
-  details?: RoadDetails | null,
-  draftPoints: Point2D[] = [],
-): Point2D[] {
-  const candidates: Point2D[] = []
-  if (details?.controlPoints && details.controlPoints.length > 0) {
-    const first = details.controlPoints[0]
-    const last = details.controlPoints[details.controlPoints.length - 1]
-    if (first) {
-      candidates.push({ easting: first.easting, northing: first.northing })
-    }
-    if (last && (last.easting !== first?.easting || last.northing !== first?.northing)) {
-      candidates.push({ easting: last.easting, northing: last.northing })
-    }
-  }
-  if (draftPoints.length >= 2) {
-    const firstDraft = draftPoints[0]
-    if (firstDraft) {
-      candidates.push(firstDraft)
+  source?: readonly (RoadSummary | RoadSummaryLike)[] | RoadDetails | ExtractEndpointOptions | null,
+  draftPoints: readonly Point2D[] = [],
+): EndpointCandidate[] {
+  const candidates: EndpointCandidate[] = []
+  const seen = new Set<string>()
+
+  const addCandidate = (c: EndpointCandidate) => {
+    const key = `${c.easting.toFixed(4)},${c.northing.toFixed(4)}`
+    if (!seen.has(key)) {
+      seen.add(key)
+      candidates.push(c)
     }
   }
+
+  if (Array.isArray(source)) {
+    for (const road of source) {
+      if (typeof road.startEasting === 'number' && typeof road.startNorthing === 'number' &&
+          Number.isFinite(road.startEasting) && Number.isFinite(road.startNorthing) &&
+          (road.startEasting !== 0 || road.startNorthing !== 0 || (typeof road.length === 'number' && road.length > 0))) {
+        addCandidate({
+          easting: road.startEasting,
+          northing: road.startNorthing,
+          roadId: road.roadId,
+          endpointType: 'start',
+        })
+      }
+      if (typeof road.endEasting === 'number' && typeof road.endNorthing === 'number' &&
+          Number.isFinite(road.endEasting) && Number.isFinite(road.endNorthing) &&
+          (road.endEasting !== 0 || road.endNorthing !== 0 || (typeof road.length === 'number' && road.length > 0))) {
+        addCandidate({
+          easting: road.endEasting,
+          northing: road.endNorthing,
+          roadId: road.roadId,
+          endpointType: 'end',
+        })
+      }
+    }
+  } else if (source && typeof source === 'object') {
+    if ('roads' in source && source.roads) {
+      return extractEndpointCandidates(source.roads, source.draftPoints ?? draftPoints)
+    }
+    if ('controlPoints' in source && Array.isArray((source as RoadDetails).controlPoints)) {
+      const details = source as RoadDetails
+      if (details.controlPoints.length > 0) {
+        const first = details.controlPoints[0]
+        const last = details.controlPoints[details.controlPoints.length - 1]
+        if (first) addCandidate({ easting: first.easting, northing: first.northing, roadId: details.roadId, endpointType: 'start' })
+        if (last) addCandidate({ easting: last.easting, northing: last.northing, roadId: details.roadId, endpointType: 'end' })
+      }
+    }
+  }
+
+  if (draftPoints.length > 0) {
+    return candidates.filter((cand) =>
+      !draftPoints.some((dp) => Math.hypot(dp.easting - cand.easting, dp.northing - cand.northing) < 1e-4)
+    )
+  }
+
   return candidates
 }
 

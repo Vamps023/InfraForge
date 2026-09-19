@@ -286,10 +286,32 @@ void VulkanRenderer::runLoop(std::atomic_bool& running) {
                         event.screenX, event.screenY, camera.renderOrigin().z);
                     if (world.has_value() && interactionCallback_) {
                         interactionCallback_(ViewportInteraction{
+                            .kind = "primary-click",
                             .easting = world->x,
                             .northing = world->y,
                             .height = world->z,
                             .roadId = roadPass_.pickRoad(*world, camera.renderOrigin())});
+                    }
+                } else if (event.pointerMove) {
+                    const auto& camera = cameraController_.camera();
+                    const auto world = camera.screenToHorizontalPlane(
+                        event.screenX, event.screenY, camera.renderOrigin().z);
+                    if (world.has_value() && interactionCallback_) {
+                        interactionCallback_(ViewportInteraction{
+                            .kind = "pointer-move",
+                            .easting = world->x,
+                            .northing = world->y,
+                            .height = world->z,
+                            .roadId = roadPass_.pickRoad(*world, camera.renderOrigin())});
+                    }
+                } else if (event.pointerLeave) {
+                    if (interactionCallback_) {
+                        interactionCallback_(ViewportInteraction{
+                            .kind = "pointer-leave",
+                            .easting = 0.0,
+                            .northing = 0.0,
+                            .height = 0.0,
+                            .roadId = ""});
                     }
                 } else {
                     cameraController_.handleInput(event);

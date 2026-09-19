@@ -18,7 +18,7 @@ export interface ViewportStatusPayload {
   vulkan?: string
 }
 export interface ViewportInteractionPayload {
-  kind: 'primary-click'; easting: number; northing: number; height: number; roadId?: string
+  kind: 'primary-click' | 'pointer-move' | 'pointer-leave'; easting: number; northing: number; height: number; roadId?: string
 }
 
 const desktopApi = Object.freeze({

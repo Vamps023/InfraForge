@@ -24,6 +24,10 @@ message RoadSummary {
   string source_id = 6;
   uint32 protected_anchor_count = 7;
   uint64 revision = 8;
+  double start_easting = 9;
+  double start_northing = 10;
+  double end_easting = 11;
+  double end_northing = 12;
 }
 
 // One alignment segment in a road projection.

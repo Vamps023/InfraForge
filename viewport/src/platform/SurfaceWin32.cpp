@@ -25,6 +25,7 @@ constexpr wchar_t kClassName[] = L"InfraForgeViewportChild";
 
 PointerGesture g_gesture = PointerGesture::None;
 POINT g_lastDragPosition{0, 0};
+bool g_trackingMouseLeave = false;
 
 void cancelGesture() {
     g_gesture = PointerGesture::None;
@@ -66,10 +67,25 @@ LRESULT CALLBACK viewportWndProc(const HWND window, const UINT message, const WP
         return 0;
     case WM_CAPTURECHANGED:
     case WM_KILLFOCUS:
-    case WM_MOUSELEAVE:
         cancelGesture();
         return 0;
-    case WM_MOUSEMOVE:
+    case WM_MOUSELEAVE:
+        g_trackingMouseLeave = false;
+        cancelGesture();
+        dispatchSurfaceInput(SurfaceInputEvent{.pointerLeave = true});
+        return 0;
+    case WM_MOUSEMOVE: {
+        if (!g_trackingMouseLeave) {
+            TRACKMOUSEEVENT tme{};
+            tme.cbSize = sizeof(tme);
+            tme.dwFlags = TME_LEAVE;
+            tme.hwndTrack = window;
+            if (TrackMouseEvent(&tme)) {
+                g_trackingMouseLeave = true;
+            }
+        }
+        const int x = GET_X_LPARAM(lParam);
+        const int y = GET_Y_LPARAM(lParam);
         if (g_gesture != PointerGesture::None) {
             const bool buttonHeld = g_gesture == PointerGesture::Pan
                 ? (wParam & MK_MBUTTON) != 0
@@ -78,8 +94,6 @@ LRESULT CALLBACK viewportWndProc(const HWND window, const UINT message, const WP
                 cancelGesture();
                 return 0;
             }
-            const int x = GET_X_LPARAM(lParam);
-            const int y = GET_Y_LPARAM(lParam);
             dispatchSurfaceInput(SurfaceInputEvent{
                 .gesture = g_gesture,
                 .deltaX = static_cast<double>(x - g_lastDragPosition.x),
@@ -87,8 +101,14 @@ LRESULT CALLBACK viewportWndProc(const HWND window, const UINT message, const WP
                 .datasetUuid = {}});
             g_lastDragPosition.x = x;
             g_lastDragPosition.y = y;
+        } else {
+            dispatchSurfaceInput(SurfaceInputEvent{
+                .pointerMove = true,
+                .screenX = static_cast<double>(x),
+                .screenY = static_cast<double>(y)});
         }
         return 0;
+    }
     case WM_KEYDOWN: {
         ViewportAction action = ViewportAction::None;
         if (wParam == 'F') action = ViewportAction::FocusTerrain;

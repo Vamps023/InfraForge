@@ -177,9 +177,9 @@ std::string formatStatusRecord(
     return std::string{kStatusPrefix} + record.dump();
 }
 
-std::string formatInteractionRecord(const double easting, const double northing,
+std::string formatInteractionRecord(const std::string_view kind, const double easting, const double northing,
     const double height, const std::string_view roadId) {
-    nlohmann::json record = {{"kind", "primary-click"}, {"easting", easting},
+    nlohmann::json record = {{"kind", kind.empty() ? "primary-click" : kind}, {"easting", easting},
         {"northing", northing}, {"height", height}};
     if (!roadId.empty()) record["roadId"] = roadId;
     return std::string{kInteractionPrefix} + record.dump();

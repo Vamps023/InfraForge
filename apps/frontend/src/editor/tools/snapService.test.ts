@@ -5,6 +5,7 @@ import {
   snapToEndpoint,
   resolveSnapping,
   calculateDraftMetrics,
+  extractEndpointCandidates,
   DEFAULT_SNAPPING_CONFIG,
 } from './snapService'
 
@@ -135,6 +136,94 @@ describe('snapService', () => {
       expect(metrics.headingDeg).toBe(90)
       expect(metrics.deltaE).toBe(0)
       expect(metrics.deltaN).toBe(50)
+    })
+  })
+
+  describe('extractEndpointCandidates', () => {
+    it('extracts start and end endpoints across multiple RoadSummary objects and deduplicates shared junctions', () => {
+      const roads = [
+        {
+          roadId: 'road-1',
+          name: 'Main St',
+          length: 500,
+          elementCount: 3,
+          revision: 1n,
+          startEasting: 500000,
+          startNorthing: 4000000,
+          endEasting: 500500,
+          endNorthing: 4000000,
+        },
+        {
+          roadId: 'road-2',
+          name: 'Cross Ave',
+          length: 200,
+          elementCount: 1,
+          revision: 1n,
+          startEasting: 500500,
+          startNorthing: 4000000,
+          endEasting: 500500,
+          endNorthing: 4000200,
+        },
+      ]
+      const candidates = extractEndpointCandidates(roads, [])
+      expect(candidates).toHaveLength(3)
+      expect(candidates[0]).toEqual({
+        easting: 500000,
+        northing: 4000000,
+        roadId: 'road-1',
+        endpointType: 'start',
+      })
+      expect(candidates[1]).toEqual({
+        easting: 500500,
+        northing: 4000000,
+        roadId: 'road-1',
+        endpointType: 'end',
+      })
+      expect(candidates[2]).toEqual({
+        easting: 500500,
+        northing: 4000200,
+        roadId: 'road-2',
+        endpointType: 'end',
+      })
+    })
+
+    it('excludes current draft points from candidates', () => {
+      const roads = [
+        {
+          roadId: 'road-1',
+          name: 'Main St',
+          length: 500,
+          elementCount: 3,
+          revision: 1n,
+          startEasting: 100,
+          startNorthing: 200,
+          endEasting: 300,
+          endNorthing: 400,
+        },
+      ]
+      const draftPoints = [{ easting: 100, northing: 200 }]
+      const candidates = extractEndpointCandidates(roads, draftPoints)
+      expect(candidates).toHaveLength(1)
+      expect(candidates[0]?.easting).toBe(300)
+      expect(candidates[0]?.northing).toBe(400)
+    })
+
+    it('ignores roads without valid finite coordinates', () => {
+      const roads = [
+        {
+          roadId: 'road-invalid',
+          name: 'Invalid',
+          length: 0,
+          elementCount: 0,
+          revision: 1n,
+          startEasting: NaN,
+          startNorthing: 0,
+          endEasting: 0,
+          endNorthing: Infinity,
+        },
+      ]
+      const candidates = extractEndpointCandidates(roads, [])
+      expect(candidates).toHaveLength(0)
     })
   })
 })

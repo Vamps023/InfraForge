@@ -19,6 +19,8 @@
 namespace infraforge::application {
 namespace {
 
+constexpr double kPi = 3.14159265358979323846;
+
 using namespace infraforge::domain::road;
 
 struct RoadServiceTestFixture {
@@ -1494,6 +1496,114 @@ TEST_CASE_FIXTURE(RoadServiceTestFixture, "junction CRUD in RoadService") {
     CHECK(events.back().kind == RoadServiceEvent::Kind::JunctionRemoved);
     CHECK(roadService->listJunctions().empty());
     CHECK_FALSE(roadService->getJunction(jId).has_value());
+}
+
+TEST_CASE_FIXTURE(RoadServiceTestFixture, "moveControl preserves canonical LineSegment type and supports undo") {
+    CreateStraightRoadInput input;
+    input.name = "Canonical Straight";
+    input.start = AlignmentPoint{0.0, 0.0};
+    input.end = AlignmentPoint{100.0, 0.0};
+    const auto summary = roadService->createStraightRoad(input);
+
+    auto details = roadService->getRoad(summary.roadId);
+    REQUIRE(details.has_value());
+    REQUIRE(details->alignmentSegments.size() == 1);
+    CHECK(details->alignmentSegments[0].kind == "line");
+    CHECK(details->length == doctest::Approx(100.0));
+
+    // Move endpoint to (150, 0)
+    MoveControlInput moveInput;
+    moveInput.roadId = summary.roadId;
+    moveInput.controlIndex = 1;
+    moveInput.position = AlignmentPoint{150.0, 0.0};
+    const auto movedSummary = roadService->moveControl(moveInput);
+    CHECK(movedSummary.alignmentSegmentCount == 1);
+    CHECK(movedSummary.length == doctest::Approx(150.0));
+
+    auto movedDetails = roadService->getRoad(summary.roadId);
+    REQUIRE(movedDetails.has_value());
+    REQUIRE(movedDetails->alignmentSegments.size() == 1);
+    CHECK(movedDetails->alignmentSegments[0].kind == "line");
+    CHECK(movedDetails->length == doctest::Approx(150.0));
+
+    // Undo restores original 100m straight road
+    REQUIRE(roadService->undo(summary.roadId));
+    auto undoneDetails = roadService->getRoad(summary.roadId);
+    REQUIRE(undoneDetails.has_value());
+    REQUIRE(undoneDetails->alignmentSegments.size() == 1);
+    CHECK(undoneDetails->alignmentSegments[0].kind == "line");
+    CHECK(undoneDetails->length == doctest::Approx(100.0));
+}
+
+TEST_CASE_FIXTURE(RoadServiceTestFixture, "moveControl preserves canonical CircularArcSegment type and supports undo") {
+    CreateArcRoadInput input;
+    input.name = "Canonical Arc";
+    input.p0 = AlignmentPoint{10.0, 0.0};
+    input.p1 = AlignmentPoint{0.0, 10.0};
+    input.p2 = AlignmentPoint{-10.0, 0.0};
+    const auto summary = roadService->createArcRoad(input);
+
+    auto details = roadService->getRoad(summary.roadId);
+    REQUIRE(details.has_value());
+    REQUIRE(details->alignmentSegments.size() == 1);
+    CHECK(details->alignmentSegments[0].kind == "arc");
+
+    // Move through point P1 from (0, 10) to (0, 20)
+    MoveControlInput moveInput;
+    moveInput.roadId = summary.roadId;
+    moveInput.controlIndex = 1;
+    moveInput.position = AlignmentPoint{0.0, 20.0};
+    const auto movedSummary = roadService->moveControl(moveInput);
+    CHECK(movedSummary.alignmentSegmentCount == 1);
+
+    auto movedDetails = roadService->getRoad(summary.roadId);
+    REQUIRE(movedDetails.has_value());
+    REQUIRE(movedDetails->alignmentSegments.size() == 1);
+    CHECK(movedDetails->alignmentSegments[0].kind == "arc");
+
+    // Undo restores original arc
+    REQUIRE(roadService->undo(summary.roadId));
+    auto undoneDetails = roadService->getRoad(summary.roadId);
+    REQUIRE(undoneDetails.has_value());
+    REQUIRE(undoneDetails->alignmentSegments.size() == 1);
+    CHECK(undoneDetails->alignmentSegments[0].kind == "arc");
+    CHECK(undoneDetails->length == doctest::Approx(10.0 * kPi));
+}
+
+TEST_CASE_FIXTURE(RoadServiceTestFixture, "moveControl preserves canonical ClothoidSegment type and supports undo") {
+    CreateClothoidRoadInput input;
+    input.name = "Canonical Clothoid";
+    input.start = AlignmentPoint{0.0, 0.0};
+    input.startHeading = 0.0;
+    input.startCurvature = 0.0;
+    input.endCurvature = 0.01;
+    input.length = 80.0;
+    const auto summary = roadService->createClothoidRoad(input);
+
+    auto details = roadService->getRoad(summary.roadId);
+    REQUIRE(details.has_value());
+    REQUIRE(details->alignmentSegments.size() == 1);
+    CHECK(details->alignmentSegments[0].kind == "clothoid");
+
+    // Move start point
+    MoveControlInput moveInput;
+    moveInput.roadId = summary.roadId;
+    moveInput.controlIndex = 0;
+    moveInput.position = AlignmentPoint{10.0, 5.0};
+    const auto movedSummary = roadService->moveControl(moveInput);
+    CHECK(movedSummary.alignmentSegmentCount == 1);
+
+    auto movedDetails = roadService->getRoad(summary.roadId);
+    REQUIRE(movedDetails.has_value());
+    REQUIRE(movedDetails->alignmentSegments.size() == 1);
+    CHECK(movedDetails->alignmentSegments[0].kind == "clothoid");
+
+    // Undo restores original clothoid
+    REQUIRE(roadService->undo(summary.roadId));
+    auto undoneDetails = roadService->getRoad(summary.roadId);
+    REQUIRE(undoneDetails.has_value());
+    REQUIRE(undoneDetails->alignmentSegments.size() == 1);
+    CHECK(undoneDetails->alignmentSegments[0].kind == "clothoid");
 }
 
 } // namespace infraforge::application

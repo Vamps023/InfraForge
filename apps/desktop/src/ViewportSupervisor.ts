@@ -384,11 +384,18 @@ export class ViewportSupervisor {
   private handleInteractionLine(payload: string): void {
     try {
       const parsed = JSON.parse(payload) as Record<string, unknown>
-      if (parsed.kind !== 'primary-click' || typeof parsed.easting !== 'number' ||
+      const kind = parsed.kind === 'pointer-move' || parsed.kind === 'pointer-leave' || parsed.kind === 'primary-click'
+        ? parsed.kind
+        : 'primary-click'
+      if (kind === 'pointer-leave') {
+        this.interactionListener?.({ kind: 'pointer-leave', easting: 0, northing: 0, height: 0 })
+        return
+      }
+      if (typeof parsed.easting !== 'number' ||
           typeof parsed.northing !== 'number' || typeof parsed.height !== 'number' ||
           !Number.isFinite(parsed.easting) || !Number.isFinite(parsed.northing) ||
           !Number.isFinite(parsed.height)) return
-      this.interactionListener?.({ kind: 'primary-click', easting: parsed.easting,
+      this.interactionListener?.({ kind, easting: parsed.easting,
         northing: parsed.northing, height: parsed.height,
         roadId: typeof parsed.roadId === 'string' ? parsed.roadId : undefined })
     } catch {
@@ -406,7 +413,7 @@ export class ViewportSupervisor {
 }
 
 export interface ViewportInteraction {
-  kind: 'primary-click'
+  kind: 'primary-click' | 'pointer-move' | 'pointer-leave'
   easting: number
   northing: number
   height: number

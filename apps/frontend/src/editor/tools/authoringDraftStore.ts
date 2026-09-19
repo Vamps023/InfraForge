@@ -4,6 +4,7 @@ import {
   type Point2D,
   type SnappingConfig,
   type DraftMetrics,
+  type EndpointCandidate,
   DEFAULT_SNAPPING_CONFIG,
   resolveAuthoringPoint,
   calculateDraftMetrics,
@@ -39,8 +40,8 @@ interface AuthoringDraftState {
   metrics: DraftMetrics
 
   setTool: (tool: AuthoringToolId) => void
-  addDraftPoint: (point: Point2D, endpointCandidates?: Point2D[]) => void
-  setHoverPoint: (point: Point2D | null, existingEndpoints?: Point2D[]) => void
+  addDraftPoint: (point: Point2D, endpointCandidates?: (Point2D | EndpointCandidate)[]) => void
+  setHoverPoint: (point: Point2D | null, existingEndpoints?: (Point2D | EndpointCandidate)[]) => void
   removeLastDraftPoint: () => void
   clearDraft: () => void
   updateSnappingConfig: (partial: Partial<SnappingConfig>) => void

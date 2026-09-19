@@ -92,4 +92,27 @@ TEST_SUITE("viewport control protocol") {
         CHECK_EQ(statusJson.at("vulkan").get<std::string>(), "1.3");
         CHECK(statusJson.at("validation").get<bool>());
     }
+
+    TEST_CASE("interaction records include kind and coordinate fields") {
+        const std::string click = formatInteractionRecord("primary-click", 500000.0, 4000000.0, 150.0, "road-1");
+        CHECK(click.rfind(kInteractionPrefix, 0) == 0);
+        const auto clickJson = nlohmann::json::parse(click.substr(kInteractionPrefix.size()));
+        CHECK_EQ(clickJson.at("kind").get<std::string>(), "primary-click");
+        CHECK_EQ(clickJson.at("easting").get<double>(), 500000.0);
+        CHECK_EQ(clickJson.at("northing").get<double>(), 4000000.0);
+        CHECK_EQ(clickJson.at("height").get<double>(), 150.0);
+        CHECK_EQ(clickJson.at("roadId").get<std::string>(), "road-1");
+
+        const std::string move = formatInteractionRecord("pointer-move", 500010.0, 4000020.0, 152.0);
+        CHECK(move.rfind(kInteractionPrefix, 0) == 0);
+        const auto moveJson = nlohmann::json::parse(move.substr(kInteractionPrefix.size()));
+        CHECK_EQ(moveJson.at("kind").get<std::string>(), "pointer-move");
+        CHECK_EQ(moveJson.at("easting").get<double>(), 500010.0);
+        CHECK_FALSE(moveJson.contains("roadId"));
+
+        const std::string leave = formatInteractionRecord("pointer-leave", 0.0, 0.0, 0.0);
+        CHECK(leave.rfind(kInteractionPrefix, 0) == 0);
+        const auto leaveJson = nlohmann::json::parse(leave.substr(kInteractionPrefix.size()));
+        CHECK_EQ(leaveJson.at("kind").get<std::string>(), "pointer-leave");
+    }
 }

@@ -78,6 +78,7 @@ struct CommandParseError : std::runtime_error {
     std::string_view vulkanVersion = {},
     bool validationEnabled = false);
 [[nodiscard]] std::string formatInteractionRecord(
+    std::string_view kind,
     double easting, double northing, double height, std::string_view roadId = {});
 
 } // namespace infraforge::viewport

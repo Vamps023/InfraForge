@@ -35,6 +35,7 @@ struct RendererStatus {
 
 using RendererStatusCallback = std::function<void(const RendererStatus&)>;
 struct ViewportInteraction {
+    std::string kind{"primary-click"};
     double easting{0.0};
     double northing{0.0};
     double height{0.0};

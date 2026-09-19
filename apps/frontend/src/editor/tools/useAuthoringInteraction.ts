@@ -1,7 +1,7 @@
 import { useEffect, useRef, useCallback } from 'react'
 import type { EngineClient } from '../../lib/engineSession'
 import { useAuthoringDraftStore } from './authoringDraftStore'
-import { useToolStore, type ViewportInteraction } from './toolStore'
+import type { ViewportInteraction } from './toolStore'
 import { useSelectionStore } from '../selection/selectionStore'
 import { useRoadStore } from '../../features/road/roadStore'
 import { useWorkspaceStore } from '../shell/workspaceStore'
@@ -12,7 +12,6 @@ import {
   createRoad,
 } from '../../features/road/roadApi'
 import { sampleArcPreview, sampleClothoidPreview } from './previewSampler'
-import { AUTHORING_TOOLS } from './authoringToolTypes'
 import {
   resolveAuthoringPoint,
   extractEndpointCandidates,
@@ -101,22 +100,6 @@ export function useAuthoringInteraction(deps: AuthoringInteractionDeps) {
       window.infraforgeDesktop?.setRoadPreview?.(all)
     }
   }, [activeTool, draftPoints, hoverPoint, clothoidParams])
-
-  // Sync toolStore status and cancellation
-  useEffect(() => {
-    const def = AUTHORING_TOOLS[activeTool]
-    if (!def) return
-
-    useToolStore.getState().activateTool({
-      id: def.id,
-      workspaceId: 'roads',
-      statusHint: def.statusHint,
-      cancel: () => {
-        clearDraft()
-        setTool('select')
-      },
-    })
-  }, [activeTool, clearDraft, setTool])
 
   // Clear draft on workspace switch away from roads
   useEffect(() => {

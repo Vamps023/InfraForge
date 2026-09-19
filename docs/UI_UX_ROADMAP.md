@@ -66,6 +66,8 @@ frontend-store design, Electron responsibilities, renderer, or transport.
 
 **Acceptance:** A road can be created, selected, edited in plan/profile, validated, undone/redone, saved and reopened without leaving the shared editor model.
 
+**Current verification:** Direct Straight, Arc, Clothoid, and Polyline/Fit creation plus save/close/reopen have been exercised in the Windows Vulkan desktop. Selection/edit/profile/undo-redo and terrain-backed conformance still need end-to-end manual acceptance, so Phase C is not complete.
+
 ## Phase D — Lanes & Junctions UX
 
 **Goal:** Keep lane/cross-section/topology work clear instead of overloading the Road Plan tool.
@@ -76,6 +78,8 @@ frontend-store design, Electron responsibilities, renderer, or transport.
 - junction movement/topology context editor;
 - stable lane/junction selection/sub-selection;
 - diagnostics linked to canonical lane/junction entities.
+
+**Current verification:** The canonical lane and junction models, persistence, protocol, editor/inspector surfaces, and automated tests are present. The combined live lane/junction authoring and reopen workflow remains outstanding, so Phase D is not complete.
 
 ## Phase E — World / Sources UX
 

@@ -101,6 +101,10 @@ This document audits and classifies every authoring tool from the **OpenGeoStudi
 - **Milestone C**: Modification Tools (`move`, `extend`, `split`, `delete`).
 - **Milestone D**: Precision Snapping enhancements (perpendicular, tangent, station snap).
 - **Milestone E**: Advanced Curve authoring (Bezier, ClothoidSpline with native fitting).
-- **Milestone F**: Lane Tools (blocked until native lane domain exists).
-- **Milestone G**: Network Tools (intersections, junctions - blocked until native topology exists).
+- **Milestone F**: Lane Tools (native lane domain and the first lane editor/presets exist; additional direct lane tools remain planned).
+- **Milestone G**: Network Tools (native junction topology and the first junction inspector/CRUD path exist; interactive network construction remains planned).
 - **Milestone H**: Rail Authoring & Fixtures.
+
+## Verification status
+
+Automated protocol, TypeScript, frontend/desktop, native CTest, self-check, and authenticated engine-smoke verification is green for the consolidated implementation. A live Windows/Vulkan pass created and persisted all four Milestone A/B road types and reopened the resulting project successfully. Terrain-backed conformance, endpoint snapping, canonical picking/control/profile editing, lane editing, junction editing, and their complete persistence round-trip still require recorded manual acceptance; the tool-port statuses above do not imply those workflows were manually verified together.

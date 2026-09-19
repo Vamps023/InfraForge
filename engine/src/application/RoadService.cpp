@@ -65,7 +65,7 @@ void RoadService::onProjectOpened() {
     auto roads = store_.roads();
     for (const auto& road : roads) {
         const auto bounds = computeRoadBounds(road);
-        if (world_.isReady()) {
+        if (world_.isReady() && !world_.boundsOf(road.id).has_value()) {
             (void)world_.insert(
                 road.id,
                 bounds,
@@ -238,7 +238,8 @@ RoadSummary RoadService::createStraightRoad(
     }
 
     auto record = buildNewRoadRecord(input.name, *alignmentRes, polyline, anchors,
-        {}, SourceProvider::Authored, 1.0, std::nullopt, {}, conformedElevation);
+        {}, SourceProvider::Authored, 1.0, std::nullopt, {}, conformedElevation,
+        RoadConstructionKind::Straight);
     record = store_.insertRoad(record);
 
     const auto bounds = computeRoadBounds(record);
@@ -290,7 +291,8 @@ RoadSummary RoadService::createArcRoad(
     }
 
     auto record = buildNewRoadRecord(input.name, *alignmentRes, polyline, anchors,
-        {}, SourceProvider::Authored, 1.0, std::nullopt, {}, conformedElevation);
+        {}, SourceProvider::Authored, 1.0, std::nullopt, {}, conformedElevation,
+        RoadConstructionKind::ArcThreePoint);
     record = store_.insertRoad(record);
 
     const auto bounds = computeRoadBounds(record);
@@ -343,7 +345,8 @@ RoadSummary RoadService::createClothoidRoad(
     }
 
     auto record = buildNewRoadRecord(input.name, *alignmentRes, polyline, anchors,
-        {}, SourceProvider::Authored, 1.0, std::nullopt, {}, conformedElevation);
+        {}, SourceProvider::Authored, 1.0, std::nullopt, {}, conformedElevation,
+        RoadConstructionKind::Clothoid);
     record = store_.insertRoad(record);
 
     const auto bounds = computeRoadBounds(record);
@@ -1713,6 +1716,7 @@ RoadSummary RoadService::toSummary(const RoadRecord& road) const {
     s.sourceId = road.sourceId;
     s.protectedAnchorCount = static_cast<std::uint32_t>(road.protectedAnchors.size());
     s.revision = store_.current().revision;
+    s.constructionKind = roadConstructionKindName(road.constructionKind);
 
     // Compute total length.
     double totalLength = 0.0;
@@ -1749,6 +1753,7 @@ RoadDetails RoadService::toDetails(const RoadRecord& road) const {
     RoadDetails d;
     d.roadId = uuidTextFromRoadId(road.id);
     d.name = road.displayName;
+    d.constructionKind = roadConstructionKindName(road.constructionKind);
     d.alignmentSegmentCount = static_cast<std::uint32_t>(road.segments.size());
     d.hasElevationProfile = !road.elevationBreakpoints.empty();
     d.elevationBreakpointCount = static_cast<std::uint32_t>(road.elevationBreakpoints.size());
@@ -1889,7 +1894,8 @@ RoadRecord RoadService::buildNewRoadRecord(
     double positionTolerance,
     std::optional<double> maxCurvature,
     const std::set<std::size_t>& anchorBoundarySegments,
-    const std::vector<ProfileBreakpoint>& initialElevationProfile) const {
+    const std::vector<ProfileBreakpoint>& initialElevationProfile,
+    RoadConstructionKind constructionKind) const {
 
     // Blocker 1: this is the ONLY place that mints a new RoadId.
     Road::BuildInput roadInput;
@@ -1984,6 +1990,7 @@ RoadRecord RoadService::buildNewRoadRecord(
     record.positionTolerance = positionTolerance;
     record.maxCurvature = maxCurvature;
     record.anchorBoundarySegments = anchorBoundarySegments;
+    record.constructionKind = constructionKind;
     return record;
 }
 
@@ -2094,51 +2101,85 @@ RoadRecord RoadService::refitRoad(
     std::vector<ProtectedAnchor> anchors;
 
     // Preserve canonical primitive type during editing for directly authored roads.
-    if (existing.segments.size() == 1) {
-        const auto& seg = existing.segments[0];
-        if (seg.kind == AlignmentSegmentKind::Line && fitVertices.size() == 2) {
-            const AlignmentPoint p0{fitVertices[0].x, fitVertices[0].y};
-            const AlignmentPoint p1{fitVertices[1].x, fitVertices[1].y};
-            auto lineRes = constructStraightSegment(p0, p1);
-            if (lineRes.has_value()) {
-                std::vector<AlignmentSegment> segments;
-                segments.emplace_back(std::move(*lineRes));
-                auto alignRes = ReferenceAlignment::build(std::move(segments));
-                if (alignRes.has_value()) {
-                    primitiveAlignment = std::move(*alignRes);
-                }
-            }
-        } else if (seg.kind == AlignmentSegmentKind::CircularArc && fitVertices.size() == 3) {
-            const AlignmentPoint p0{fitVertices[0].x, fitVertices[0].y};
-            const AlignmentPoint p1{fitVertices[1].x, fitVertices[1].y};
-            const AlignmentPoint p2{fitVertices[2].x, fitVertices[2].y};
-            auto arcRes = constructCircularArcThroughPoints(p0, p1, p2);
-            if (arcRes.has_value()) {
-                std::vector<AlignmentSegment> segments;
-                segments.emplace_back(std::move(*arcRes));
-                auto alignRes = ReferenceAlignment::build(std::move(segments));
-                if (alignRes.has_value()) {
-                    primitiveAlignment = std::move(*alignRes);
-                }
-            }
-        } else if (seg.kind == AlignmentSegmentKind::Clothoid && fitVertices.size() == 2) {
-            const AlignmentPoint p0{fitVertices[0].x, fitVertices[0].y};
-            const AlignmentPoint p1{fitVertices[1].x, fitVertices[1].y};
-            const double dx = p1.easting - p0.easting;
-            const double dy = p1.northing - p0.northing;
-            const double newLen = std::hypot(dx, dy);
-            const double newHeading = std::atan2(dy, dx);
-            auto clothoidRes = constructClothoidSegment(
-                p0, newHeading, seg.startCurvature, seg.endCurvature, newLen);
-            if (clothoidRes.has_value()) {
-                std::vector<AlignmentSegment> segments;
-                segments.emplace_back(std::move(*clothoidRes));
-                auto alignRes = ReferenceAlignment::build(std::move(segments));
-                if (alignRes.has_value()) {
-                    primitiveAlignment = std::move(*alignRes);
-                }
-            }
+    // If the road has an explicit construction kind (Straight, ArcThreePoint, Clothoid),
+    // it MUST reconstruct strictly as that primitive or fail with InvalidArgument.
+    // It must NEVER fall back to polyline fitting (Atomic Non-Fallback Guarantee).
+    if (existing.constructionKind == RoadConstructionKind::Straight) {
+        if (fitVertices.size() != 2) {
+            throw CommandFailure{CommandFailureCode::InvalidArgument,
+                "straight road requires exactly 2 control vertices"};
         }
+        const AlignmentPoint p0{fitVertices[0].x, fitVertices[0].y};
+        const AlignmentPoint p1{fitVertices[1].x, fitVertices[1].y};
+        auto lineRes = constructStraightSegment(p0, p1);
+        if (!lineRes.has_value()) {
+            throw CommandFailure{CommandFailureCode::InvalidArgument,
+                "failed to reconstruct straight segment: " + lineRes.error().message};
+        }
+        std::vector<AlignmentSegment> segments;
+        segments.emplace_back(std::move(*lineRes));
+        auto alignRes = ReferenceAlignment::build(std::move(segments));
+        if (!alignRes.has_value()) {
+            std::string msg = "failed to build straight alignment: ";
+            for (const auto& d : alignRes.error()) {
+                msg += d.message + "; ";
+            }
+            throw CommandFailure{CommandFailureCode::InvalidArgument, msg};
+        }
+        primitiveAlignment = std::move(*alignRes);
+    } else if (existing.constructionKind == RoadConstructionKind::ArcThreePoint) {
+        if (fitVertices.size() != 3) {
+            throw CommandFailure{CommandFailureCode::InvalidArgument,
+                "arc road requires exactly 3 control vertices"};
+        }
+        const AlignmentPoint p0{fitVertices[0].x, fitVertices[0].y};
+        const AlignmentPoint p1{fitVertices[1].x, fitVertices[1].y};
+        const AlignmentPoint p2{fitVertices[2].x, fitVertices[2].y};
+        auto arcRes = constructCircularArcThroughPoints(p0, p1, p2);
+        if (!arcRes.has_value()) {
+            throw CommandFailure{CommandFailureCode::InvalidArgument,
+                "failed to reconstruct 3-point circular arc: " + arcRes.error().message};
+        }
+        std::vector<AlignmentSegment> segments;
+        segments.emplace_back(std::move(*arcRes));
+        auto alignRes = ReferenceAlignment::build(std::move(segments));
+        if (!alignRes.has_value()) {
+            std::string msg = "failed to build arc alignment: ";
+            for (const auto& d : alignRes.error()) {
+                msg += d.message + "; ";
+            }
+            throw CommandFailure{CommandFailureCode::InvalidArgument, msg};
+        }
+        primitiveAlignment = std::move(*alignRes);
+    } else if (existing.constructionKind == RoadConstructionKind::Clothoid) {
+        if (fitVertices.size() != 2) {
+            throw CommandFailure{CommandFailureCode::InvalidArgument,
+                "clothoid road requires exactly 2 control vertices"};
+        }
+        if (existing.segments.empty()) {
+            throw CommandFailure{CommandFailureCode::InvalidArgument,
+                "clothoid road has no canonical segment definition"};
+        }
+        const auto& seg = existing.segments[0];
+        const AlignmentPoint p0{fitVertices[0].x, fitVertices[0].y};
+        const AlignmentPoint p1{fitVertices[1].x, fitVertices[1].y};
+        auto clothoidRes = constructClothoidReachingEndpoint(
+            p0, p1, seg.startCurvature, seg.endCurvature);
+        if (!clothoidRes.has_value()) {
+            throw CommandFailure{CommandFailureCode::InvalidArgument,
+                "failed to reconstruct clothoid reaching endpoint: " + clothoidRes.error().message};
+        }
+        std::vector<AlignmentSegment> segments;
+        segments.emplace_back(std::move(*clothoidRes));
+        auto alignRes = ReferenceAlignment::build(std::move(segments));
+        if (!alignRes.has_value()) {
+            std::string msg = "failed to build clothoid alignment: ";
+            for (const auto& d : alignRes.error()) {
+                msg += d.message + "; ";
+            }
+            throw CommandFailure{CommandFailureCode::InvalidArgument, msg};
+        }
+        primitiveAlignment = std::move(*alignRes);
     }
 
     for (const auto& a : existing.protectedAnchors) {
@@ -2234,6 +2275,7 @@ RoadRecord RoadService::refitRoad(
     record.positionTolerance = positionTolerance;
     record.maxCurvature = maxCurvature;
     record.anchorBoundarySegments = std::move(anchorBoundaries);
+    record.constructionKind = existing.constructionKind;
     return record;
 }
 

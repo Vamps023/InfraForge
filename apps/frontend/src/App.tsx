@@ -57,6 +57,8 @@ import { useAuthoringInteraction } from './editor/tools/useAuthoringInteraction'
 import { useAuthoringShortcuts } from './editor/commands/useAuthoringShortcuts'
 import { ToolRail } from './editor/shell/ToolRail'
 import { ToolOptionsPanel } from './editor/shell/ToolOptionsPanel'
+import { DraftPointsToolbar } from './editor/shell/DraftPointsToolbar'
+import { TerrainWorkspace } from './features/terrain/TerrainWorkspace'
 
 export function App() {
   const engineStatus = useUiStore((state) => state.engineStatus)
@@ -76,6 +78,7 @@ export function App() {
   const openDialog = useShellUiStore((state) => state.openDialog)
   const menuOpen = useShellUiStore((state) => state.menuOpen)
   const closeDialog = useShellUiStore((state) => state.closeDialog)
+  const openDialogCommand = useShellUiStore((state) => state.openDialogCommand)
 
   // Register builtin commands and the project-overview inspector section
   // once. Commands close over the live engine client via the getter so they
@@ -341,39 +344,81 @@ export function App() {
   }, [setEngineStatus])
 
   const activeContextEditor = useActiveContextEditor()
+  const activePage: 'projects' | 'terrain' | 'design' =
+    !projectOpen || activeWorkspace === 'home'
+      ? 'projects'
+      : activeWorkspace === 'terrain'
+        ? 'terrain'
+        : 'design'
+  const [terrainViewMode, setTerrainViewMode] = useState<'map' | '3d'>('map')
 
   return (
     <div className="app-shell">
-      <AppHeader context={commandContext} />
+      <AppHeader
+        context={commandContext}
+        activePage={activePage}
+        onNavigateProjects={() => useWorkspaceStore.getState().setWorkspace('home')}
+        terrainViewMode={terrainViewMode}
+        onTerrainViewModeChange={setTerrainViewMode}
+      />
       <div className="app-main">
-        <WorkspaceRail />
-        <div className="app-editor-area">
-          {projectOpen && activeWorkspace !== 'home' ? (
-            <ContextToolShelf context={commandContext} />
-          ) : null}
-          {projectOpen && activeWorkspace === 'roads' ? (
-            <ToolOptionsPanel onCommitPolyline={commitCurrentDraft} />
-          ) : null}
-          <div className="authoring-container">
-            {projectOpen && activeWorkspace === 'roads' ? (
-              <ToolRail />
-            ) : null}
-            <EditorLayout
-            viewportHostRef={viewportHostRef}
-            viewport={
-              <ViewportArea
-                hostRef={viewportHostRef}
-                showHomeScreen={showHomeScreen}
-                commandContext={commandContext}
-              />
-            }
-            leftPanel={<Navigator />}
-            contextEditor={activeContextEditor ? <ContextEditorHost /> : undefined}
-            rightPanel={<Inspector />}
-            bottomPanel={<BottomPanel />}
-          />
+        {activePage === 'projects' ? (
+          <div className="app-editor-area">
+            <ViewportArea
+              hostRef={viewportHostRef}
+              showHomeScreen={true}
+              commandContext={commandContext}
+            />
           </div>
-        </div>
+        ) : activePage === 'terrain' ? (
+          <div className="app-editor-area">
+            <TerrainWorkspace
+              client={engineSession?.client ?? null}
+              viewMode={terrainViewMode}
+              viewportHost={
+                <ViewportArea
+                  hostRef={viewportHostRef}
+                  showHomeScreen={false}
+                  commandContext={commandContext}
+                />
+              }
+            />
+          </div>
+        ) : (
+          <div className="app-editor-area">
+            <div className="authoring-container" style={{ display: 'flex', flex: 1, minHeight: 0, position: 'relative', flexDirection: 'row' }}>
+              <ToolRail client={engineSessionRef.current?.client ?? null} />
+              <div style={{ position: 'relative', flex: 1, minWidth: 0, height: '100%', display: 'flex', flexDirection: 'column' }}>
+                <ToolOptionsPanel onCommitPolyline={commitCurrentDraft} />
+                <DraftPointsToolbar
+                  onCommit={commitCurrentDraft}
+                  onCancel={() => {
+                    useAuthoringDraftStore.getState().clearDraft()
+                    useAuthoringDraftStore.getState().setTool('select')
+                  }}
+                />
+                <EditorLayout
+                  viewportHostRef={viewportHostRef}
+                  viewport={
+                    <ViewportArea
+                      hostRef={viewportHostRef}
+                      showHomeScreen={false}
+                      commandContext={commandContext}
+                    />
+                  }
+                  contextEditor={activeContextEditor ? <ContextEditorHost /> : undefined}
+                  rightPanel={
+                    <Inspector
+                      getEngineClient={() => engineSessionRef.current?.client ?? null}
+                      onOpenGeoreference={() => openDialogCommand('georeference')}
+                    />
+                  }
+                  bottomPanel={<BottomPanel />}
+                />
+              </div>
+            </div>
+          </div>
+        )}
       </div>
       <StatusBar engineStatus={engineStatus} />
       {openDialog === 'new-project' && engineSession ? (

@@ -1,4 +1,5 @@
 import { useProjectStore } from './projectStore'
+import { useRecentProjectsStore } from './recentProjectsStore'
 import { useGeoStore } from '../geo/geoStore'
 import { useSelectionStore } from '../../editor/selection/selectionStore'
 import { useTerrainStore } from '../terrain/terrainStore'
@@ -19,6 +20,7 @@ export function applyProjectEvent(client: EngineClient, event: EventEnvelope) {
     case 'projectOpened':
       if (event.event.value.summary) {
         store.setSummary(event.event.value.summary)
+        useRecentProjectsStore.getState().recordFromSummary(event.event.value.summary)
       }
       // A different project opened: canonical selections from the previous
       // project must not survive into the new one. Clear selection here so

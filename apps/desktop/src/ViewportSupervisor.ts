@@ -384,9 +384,10 @@ export class ViewportSupervisor {
   private handleInteractionLine(payload: string): void {
     try {
       const parsed = JSON.parse(payload) as Record<string, unknown>
-      const kind = parsed.kind === 'pointer-move' || parsed.kind === 'pointer-leave' || parsed.kind === 'primary-click'
-        ? parsed.kind
-        : 'primary-click'
+      if (parsed.kind !== 'pointer-move' && parsed.kind !== 'pointer-leave' && parsed.kind !== 'primary-click') {
+        return
+      }
+      const kind = parsed.kind
       if (kind === 'pointer-leave') {
         this.interactionListener?.({ kind: 'pointer-leave', easting: 0, northing: 0, height: 0 })
         return

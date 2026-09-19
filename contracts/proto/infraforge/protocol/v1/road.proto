@@ -28,6 +28,7 @@ message RoadSummary {
   double start_northing = 10;
   double end_easting = 11;
   double end_northing = 12;
+  string construction_kind = 13;
 }
 
 // One alignment segment in a road projection.
@@ -125,6 +126,7 @@ message RoadDetails {
   repeated RoadProfileBreakpoint superelevation_breakpoints = 21;
   repeated RoadWidthBreakpoint width_breakpoints = 22;
   repeated RoadLaneSectionInfo lane_sections = 23;
+  string construction_kind = 24;
 }
 
 // Editable fitting control projected for the inspector. This is not the

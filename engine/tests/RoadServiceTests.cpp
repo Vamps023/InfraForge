@@ -1606,4 +1606,126 @@ TEST_CASE_FIXTURE(RoadServiceTestFixture, "moveControl preserves canonical Cloth
     CHECK(undoneDetails->alignmentSegments[0].kind == "clothoid");
 }
 
+TEST_CASE_FIXTURE(RoadServiceTestFixture, "moveControl on clothoid reaches target endpoint exactly and preserves curvature") {
+    CreateClothoidRoadInput input;
+    input.name = "Exact Clothoid";
+    input.start = AlignmentPoint{0.0, 0.0};
+    input.startHeading = 0.0;
+    input.startCurvature = 0.0;
+    input.endCurvature = 0.02;
+    input.length = 60.0;
+    const auto summary = roadService->createClothoidRoad(input);
+    CHECK(summary.constructionKind == "clothoid");
+
+    // Move endpoint to (58.0, 12.0)
+    MoveControlInput moveInput;
+    moveInput.roadId = summary.roadId;
+    moveInput.controlIndex = 1;
+    moveInput.position = AlignmentPoint{58.0, 12.0};
+    const auto movedSummary = roadService->moveControl(moveInput);
+    CHECK(movedSummary.constructionKind == "clothoid");
+
+    auto movedDetails = roadService->getRoad(summary.roadId);
+    REQUIRE(movedDetails.has_value());
+    REQUIRE(movedDetails->alignmentSegments.size() == 1);
+    CHECK(movedDetails->alignmentSegments[0].kind == "clothoid");
+    CHECK(movedDetails->alignmentSegments[0].startCurvature == doctest::Approx(0.0));
+    CHECK(movedDetails->alignmentSegments[0].endCurvature == doctest::Approx(0.02));
+    CHECK(movedDetails->constructionKind == "clothoid");
+
+    // Check endpoint position evaluates exactly within 1mm (0.001) of (58.0, 12.0)
+    auto tess = roadService->getRoadTessellation(summary.roadId);
+    REQUIRE(tess.has_value());
+    CHECK(movedSummary.endEasting == doctest::Approx(58.0).epsilon(0.001));
+    CHECK(movedSummary.endNorthing == doctest::Approx(12.0).epsilon(0.001));
+}
+
+TEST_CASE_FIXTURE(RoadServiceTestFixture, "collinear arc moveControl fails atomically without fallback") {
+    CreateArcRoadInput input;
+    input.name = "Arc No Fallback";
+    input.p0 = AlignmentPoint{0.0, 0.0};
+    input.p1 = AlignmentPoint{50.0, 10.0};
+    input.p2 = AlignmentPoint{100.0, 0.0};
+    const auto summary = roadService->createArcRoad(input);
+    CHECK(summary.constructionKind == "arc_three_point");
+
+    // Move P1 to (50, 0) making all 3 points collinear on the X axis
+    MoveControlInput moveInput;
+    moveInput.roadId = summary.roadId;
+    moveInput.controlIndex = 1;
+    moveInput.position = AlignmentPoint{50.0, 0.0};
+
+    // Must throw InvalidArgument, NEVER silently falling back to a straight line
+    bool threw = false;
+    try {
+        (void)roadService->moveControl(moveInput);
+    } catch (const CommandFailure& cf) {
+        threw = true;
+        CHECK(cf.code() == CommandFailureCode::InvalidArgument);
+    }
+    CHECK(threw);
+
+    // Existing arc road remains unchanged and valid
+    auto details = roadService->getRoad(summary.roadId);
+    REQUIRE(details.has_value());
+    CHECK(details->alignmentSegments.size() == 1);
+    CHECK(details->alignmentSegments[0].kind == "arc");
+    CHECK(details->constructionKind == "arc_three_point");
+}
+
+TEST_CASE_FIXTURE(RoadServiceTestFixture, "RoadConstructionKind persists and is exposed in summary and details") {
+    CreateStraightRoadInput straightInput;
+    straightInput.name = "Straight Road";
+    straightInput.start = AlignmentPoint{0.0, 0.0};
+    straightInput.end = AlignmentPoint{100.0, 0.0};
+    const auto sSummary = roadService->createStraightRoad(straightInput);
+    CHECK(sSummary.constructionKind == "straight");
+
+    auto sDetails = roadService->getRoad(sSummary.roadId);
+    REQUIRE(sDetails.has_value());
+    CHECK(sDetails->constructionKind == "straight");
+
+    CreateArcRoadInput arcInput;
+    arcInput.name = "Arc Road";
+    arcInput.p0 = AlignmentPoint{0.0, 0.0};
+    arcInput.p1 = AlignmentPoint{25.0, 10.0};
+    arcInput.p2 = AlignmentPoint{50.0, 0.0};
+    const auto aSummary = roadService->createArcRoad(arcInput);
+    CHECK(aSummary.constructionKind == "arc_three_point");
+
+    auto aDetails = roadService->getRoad(aSummary.roadId);
+    REQUIRE(aDetails.has_value());
+    CHECK(aDetails->constructionKind == "arc_three_point");
+
+    CreateClothoidRoadInput clothoidInput;
+    clothoidInput.name = "Clothoid Road";
+    clothoidInput.start = AlignmentPoint{0.0, 0.0};
+    clothoidInput.startHeading = 0.0;
+    clothoidInput.startCurvature = 0.0;
+    clothoidInput.endCurvature = 0.01;
+    clothoidInput.length = 50.0;
+    const auto cSummary = roadService->createClothoidRoad(clothoidInput);
+    CHECK(cSummary.constructionKind == "clothoid");
+
+    auto cDetails = roadService->getRoad(cSummary.roadId);
+    REQUIRE(cDetails.has_value());
+    CHECK(cDetails->constructionKind == "clothoid");
+
+    // Close and reopen project to test SQLite persistence
+    roadService->onProjectClosed();
+    roadService->onProjectOpened();
+
+    auto reloadedStraight = roadService->getRoad(sSummary.roadId);
+    REQUIRE(reloadedStraight.has_value());
+    CHECK(reloadedStraight->constructionKind == "straight");
+
+    auto reloadedArc = roadService->getRoad(aSummary.roadId);
+    REQUIRE(reloadedArc.has_value());
+    CHECK(reloadedArc->constructionKind == "arc_three_point");
+
+    auto reloadedClothoid = roadService->getRoad(cSummary.roadId);
+    REQUIRE(reloadedClothoid.has_value());
+    CHECK(reloadedClothoid->constructionKind == "clothoid");
+}
+
 } // namespace infraforge::application

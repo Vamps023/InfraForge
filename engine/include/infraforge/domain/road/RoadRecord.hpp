@@ -10,6 +10,31 @@
 
 namespace infraforge::domain::road {
 
+enum class RoadConstructionKind : std::uint8_t {
+    Fitted = 0,
+    Straight = 1,
+    ArcThreePoint = 2,
+    Clothoid = 3,
+};
+
+[[nodiscard]] constexpr std::string_view roadConstructionKindName(RoadConstructionKind kind) noexcept {
+    switch (kind) {
+    case RoadConstructionKind::Straight: return "straight";
+    case RoadConstructionKind::ArcThreePoint: return "arc_three_point";
+    case RoadConstructionKind::Clothoid: return "clothoid";
+    case RoadConstructionKind::Fitted:
+    default: return "fitted";
+    }
+}
+
+[[nodiscard]] constexpr std::optional<RoadConstructionKind> roadConstructionKindFromName(std::string_view name) noexcept {
+    if (name == "straight") return RoadConstructionKind::Straight;
+    if (name == "arc" || name == "arc_three_point") return RoadConstructionKind::ArcThreePoint;
+    if (name == "clothoid") return RoadConstructionKind::Clothoid;
+    if (name == "fitted") return RoadConstructionKind::Fitted;
+    return std::nullopt;
+}
+
 // Serializable canonical road record for persistence. This is the exact
 // data that survives save/reopen: stable identity, display name, ordered
 // alignment segments, elevation/superelevation breakpoints, lane sections,
@@ -90,6 +115,7 @@ struct RoadRecord {
     std::vector<RoadWidthBreakpoint> widthBreakpoints;
     std::vector<RoadLaneSectionRecord> laneSections;
     std::vector<RoadLaneRecord> lanes;
+    RoadConstructionKind constructionKind{RoadConstructionKind::Fitted};
     // Source geometry/provenance (absent for authored roads).
     bool hasSource{false};
     SourceProvider provider{SourceProvider::Authored};

@@ -139,5 +139,15 @@ using AlignmentSegment = std::variant<LineSegment, CircularArcSegment, ClothoidS
     Curvature endCurvature,
     double length) noexcept;
 
+// Solves for a ClothoidSegment starting at P0 that reaches targetEnd at s=length,
+// preserving startCurvature and endCurvature.
+// Returns a ClothoidSegment on success, or a typed RoadDiagnostic on failure.
+[[nodiscard]] std::expected<ClothoidSegment, RoadDiagnostic> constructClothoidReachingEndpoint(
+    const AlignmentPoint& start,
+    const AlignmentPoint& targetEnd,
+    Curvature startCurvature,
+    Curvature endCurvature,
+    double tolerance = 1e-3) noexcept;
+
 } // namespace infraforge::domain::road
 

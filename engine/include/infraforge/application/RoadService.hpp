@@ -64,6 +64,7 @@ struct RoadSummary {
     double startNorthing{0.0};
     double endEasting{0.0};
     double endNorthing{0.0};
+    std::string constructionKind;
 };
 
 // One alignment segment in a road projection.
@@ -111,6 +112,7 @@ struct RoadDetails {
     std::vector<domain::road::RoadWidthBreakpoint> widthBreakpoints;
     std::vector<domain::road::RoadLaneSectionRecord> laneSections;
     std::vector<domain::road::RoadLaneRecord> lanes;
+    std::string constructionKind;
 };
 
 // One vertex of a road scene mesh, in render-local float coordinates.
@@ -417,7 +419,8 @@ private:
         double positionTolerance,
         std::optional<double> maxCurvature,
         const std::set<std::size_t>& anchorBoundarySegments,
-        const std::vector<domain::road::ProfileBreakpoint>& initialElevationProfile = {}) const;
+        const std::vector<domain::road::ProfileBreakpoint>& initialElevationProfile = {},
+        domain::road::RoadConstructionKind constructionKind = domain::road::RoadConstructionKind::Fitted) const;
 
     // Conforms an alignment to terrain by evaluating stations and sampling heights.
     // Throws CommandFailure if sampling fails, station count exceeds limits, or sampler is missing.

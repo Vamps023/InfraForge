@@ -6,6 +6,7 @@ import {
   resolveSnapping,
   calculateDraftMetrics,
   extractEndpointCandidates,
+  RoadEndpointSpatialIndex,
   DEFAULT_SNAPPING_CONFIG,
 } from './snapService'
 
@@ -224,6 +225,83 @@ describe('snapService', () => {
       ]
       const candidates = extractEndpointCandidates(roads, [])
       expect(candidates).toHaveLength(0)
+    })
+  })
+
+  describe('RoadEndpointSpatialIndex', () => {
+    it('indexes candidates and finds nearest within radius', () => {
+      const index = new RoadEndpointSpatialIndex(50)
+      index.build([
+        { easting: 100, northing: 100, roadId: 'road-1', endpointType: 'start' },
+        { easting: 250, northing: 300, roadId: 'road-2', endpointType: 'end' },
+        { easting: 102, northing: 101, roadId: 'road-3', endpointType: 'start' },
+      ])
+
+      const nearest = index.findNearest({ easting: 101, northing: 100 }, 10)
+      expect(nearest).toEqual({ easting: 100, northing: 100 })
+
+      const none = index.findNearest({ easting: 500, northing: 500 }, 10)
+      expect(none).toBeNull()
+    })
+
+    it('works transparently with snapToEndpoint and resolveSnapping', () => {
+      const index = new RoadEndpointSpatialIndex(50)
+      index.build([
+        { easting: 50, northing: 50, roadId: 'road-1', endpointType: 'start' },
+      ])
+
+      const res = resolveSnapping({ easting: 52, northing: 51 }, {
+        endpoints: index,
+        config: { ...DEFAULT_SNAPPING_CONFIG, endpointSnap: true, snapRadius: 10 },
+      })
+      expect(res.snappedTo).toBe('endpoint')
+      expect(res.point).toEqual({ easting: 50, northing: 50 })
+    })
+
+    it('strictly respects Endpoint > Angle > Grid priority composition', () => {
+      const index = new RoadEndpointSpatialIndex(50)
+      index.build([
+        { easting: 100, northing: 100, roadId: 'road-1', endpointType: 'start' },
+      ])
+
+      // All three snaps enabled
+      const allConfig = {
+        gridSnap: true,
+        gridStep: 10,
+        angleSnap: true,
+        angleStepDeg: 45,
+        endpointSnap: true,
+        snapRadius: 15,
+      }
+
+      // Case 1: Endpoint within radius -> wins over angle and grid
+      const res1 = resolveSnapping({ easting: 102, northing: 101 }, {
+        origin: { easting: 0, northing: 0 },
+        endpoints: index,
+        config: allConfig,
+      })
+      expect(res1.snappedTo).toBe('endpoint')
+      expect(res1.point).toEqual({ easting: 100, northing: 100 })
+
+      // Case 2: No endpoint, but angle matches -> angle wins, grid does NOT override angle
+      const res2 = resolveSnapping({ easting: 100, northing: 12 }, {
+        origin: { easting: 0, northing: 0 },
+        endpoints: index,
+        config: allConfig,
+      })
+      expect(res2.snappedTo).toBe('angle')
+      // Angle snapped to 0 degrees: easting is distance, northing is 0
+      expect(res2.point.northing).toBeCloseTo(0)
+      // If grid had overridden angle, snappedTo would be 'grid' and point would be rounded to multiple of 10
+
+      // Case 3: No origin for angle snap -> grid snap takes effect
+      const res3 = resolveSnapping({ easting: 12.3, northing: 14.8 }, {
+        origin: null,
+        endpoints: index,
+        config: allConfig,
+      })
+      expect(res3.snappedTo).toBe('grid')
+      expect(res3.point).toEqual({ easting: 10, northing: 10 })
     })
   })
 })

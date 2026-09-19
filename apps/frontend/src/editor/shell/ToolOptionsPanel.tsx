@@ -1,14 +1,18 @@
+import { useState } from 'react'
 import { useAuthoringDraftStore } from '../tools/authoringDraftStore'
 import { AUTHORING_TOOLS } from '../tools/authoringToolTypes'
 import { GRID_STEPS, ANGLE_STEPS } from '../tools/snapService'
 import { useRoadStore } from '../../features/road/roadStore'
-import { Check, X } from 'lucide-react'
+import { Settings2, Magnet, Layers, X, ChevronDown, ChevronUp } from 'lucide-react'
 
 export interface ToolOptionsPanelProps {
   onCommitPolyline?: () => void
 }
 
 export function ToolOptionsPanel({ onCommitPolyline }: ToolOptionsPanelProps) {
+  const [activeTab, setActiveTab] = useState<'tool' | 'snap' | 'lanes'>('tool')
+  const [isCollapsed, setIsCollapsed] = useState(false)
+
   const activeTool = useAuthoringDraftStore((state) => state.activeTool)
   const draftPoints = useAuthoringDraftStore((state) => state.draftPoints)
   const clearDraft = useAuthoringDraftStore((state) => state.clearDraft)
@@ -23,194 +27,233 @@ export function ToolOptionsPanel({ onCommitPolyline }: ToolOptionsPanelProps) {
   const lastError = useRoadStore((state) => state.lastError)
   const setLastError = useRoadStore((state) => state.setLastError)
 
-  const def = AUTHORING_TOOLS[activeTool]
-
-  const handleCancel = () => {
-    clearDraft()
-    setTool('select')
+  if (activeTool === 'select' && draftPoints.length === 0) {
+    return null
   }
 
+  const def = AUTHORING_TOOLS[activeTool]
+
   return (
-    <div className="authoring-options-bar" role="toolbar" aria-label="Tool options and snapping">
-      <div className="authoring-tool-badge">
-        <span>{def.label}</span>
-        <kbd className="search-shortcut">{def.shortcut}</kbd>
-      </div>
-
-      <span className="authoring-status-hint">
-        {draftPoints.length > 0 ? (
-          <strong>
-            Point {draftPoints.length}
-            {def.maxPoints ? ` of ${def.maxPoints}` : ''} —{' '}
-          </strong>
-        ) : null}
-        {def.statusHint}
-      </span>
-
-      {/* Snapping controls */}
-      <div className="authoring-snapping-group">
-        <label className="authoring-checkbox-label" title="Snap to coordinate grid">
-          <input
-            type="checkbox"
-            checked={snappingConfig.gridSnap}
-            onChange={(e) => updateSnappingConfig({ gridSnap: e.target.checked })}
-          />
-          Grid
-        </label>
-        {snappingConfig.gridSnap && (
-          <select
-            className="authoring-compact-select"
-            value={snappingConfig.gridStep}
-            onChange={(e) => updateSnappingConfig({ gridStep: Number(e.target.value) })}
-          >
-            {GRID_STEPS.map((s) => (
-              <option key={s} value={s}>
-                {s}
-              </option>
-            ))}
-          </select>
-        )}
-
-        <label className="authoring-checkbox-label" title="Snap direction to angular increments">
-          <input
-            type="checkbox"
-            checked={snappingConfig.angleSnap}
-            onChange={(e) => updateSnappingConfig({ angleSnap: e.target.checked })}
-          />
-          Angle
-        </label>
-        {snappingConfig.angleSnap && (
-          <select
-            className="authoring-compact-select"
-            value={snappingConfig.angleStepDeg}
-            onChange={(e) => updateSnappingConfig({ angleStepDeg: Number(e.target.value) })}
-          >
-            {ANGLE_STEPS.map((a) => (
-              <option key={a} value={a}>
-                {a}°
-              </option>
-            ))}
-          </select>
-        )}
-
-        <label className="authoring-checkbox-label" title="Snap to nearest road start/end point">
-          <input
-            type="checkbox"
-            checked={snappingConfig.endpointSnap}
-            onChange={(e) => updateSnappingConfig({ endpointSnap: e.target.checked })}
-          />
-          Endpoint
-        </label>
-      </div>
-
-      {/* Live CAD Metrics */}
-      {metrics.totalLength > 0 && (
-        <div className="authoring-metrics-group">
-          <div className="authoring-metric-item">
-            Len:<span>{metrics.totalLength.toFixed(1)}</span>
-          </div>
-          <div className="authoring-metric-item">
-            Heading:<span>{metrics.headingDeg.toFixed(1)}°</span>
-          </div>
-          <div className="authoring-metric-item">
-            dE:<span>{metrics.deltaE > 0 ? `+${metrics.deltaE.toFixed(1)}` : metrics.deltaE.toFixed(1)}</span>
-          </div>
-          <div className="authoring-metric-item">
-            dN:<span>{metrics.deltaN > 0 ? `+${metrics.deltaN.toFixed(1)}` : metrics.deltaN.toFixed(1)}</span>
-          </div>
+    <div
+      className={`floating-tool-options-panel${isCollapsed ? ' collapsed' : ''}`}
+      role="region"
+      aria-label="Tool Options"
+    >
+      {/* Header */}
+      <div className="panel-floating-header">
+        <div className="tool-title-group">
+          <span className="tool-indicator-dot" />
+          <span className="tool-title-text">{def.label}</span>
+          {def.shortcut && <kbd className="tool-shortcut-badge">{def.shortcut}</kbd>}
         </div>
-      )}
 
-      {/* Clothoid parameters */}
-      {activeTool === 'road.clothoid' && (
-        <div className="authoring-snapping-group">
-          <label className="authoring-checkbox-label" title="Clothoid definition mode">
-            Mode:
-            <select
-              className="authoring-compact-select"
-              value={clothoidParams.mode}
-              onChange={(e) => updateClothoidParams({ mode: e.target.value as 'interactive' | 'fixed-length' })}
+        <div className="header-icon-actions">
+          <button
+            type="button"
+            className="icon-btn-subtle"
+            onClick={() => setIsCollapsed(!isCollapsed)}
+            title={isCollapsed ? 'Expand tool options' : 'Collapse tool options'}
+            aria-label={isCollapsed ? 'Expand' : 'Collapse'}
+          >
+            {isCollapsed ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
+          </button>
+          <button
+            type="button"
+            className="icon-btn-subtle"
+            onClick={() => {
+              clearDraft()
+              setTool('select')
+            }}
+            title="Cancel tool (Esc)"
+            aria-label="Cancel tool"
+          >
+            <X size={14} />
+          </button>
+        </div>
+      </div>
+
+      {!isCollapsed && (
+        <>
+          {/* Tab Navigation */}
+          <div className="floating-tabs-list" role="tablist">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === 'tool'}
+              className={`floating-tab-btn${activeTab === 'tool' ? ' active' : ''}`}
+              onClick={() => setActiveTab('tool')}
             >
-              <option value="interactive">Interactive</option>
-              <option value="fixed-length">Fixed Length</option>
-            </select>
-          </label>
-          <label className="authoring-checkbox-label" title="Clothoid transition length">
-            L:
-            <input
-              type="number"
-              className="authoring-compact-select"
-              style={{ width: '60px' }}
-              value={clothoidParams.length}
-              min={1}
-              step={5}
-              onChange={(e) => updateClothoidParams({ length: Math.max(1, Number(e.target.value)) })}
-            />
-          </label>
-          <label className="authoring-checkbox-label" title="End curvature (1/R)">
-            k1:
-            <input
-              type="number"
-              className="authoring-compact-select"
-              style={{ width: '70px' }}
-              value={clothoidParams.endCurvature}
-              step={0.001}
-              onChange={(e) => updateClothoidParams({ endCurvature: Number(e.target.value) })}
-            />
-          </label>
-        </div>
+              <Settings2 size={12} />
+              <span>Tool</span>
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === 'snap'}
+              className={`floating-tab-btn${activeTab === 'snap' ? ' active' : ''}`}
+              onClick={() => setActiveTab('snap')}
+            >
+              <Magnet size={12} />
+              <span>Snap</span>
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === 'lanes'}
+              className={`floating-tab-btn${activeTab === 'lanes' ? ' active' : ''}`}
+              onClick={() => setActiveTab('lanes')}
+            >
+              <Layers size={12} />
+              <span>Lanes</span>
+            </button>
+          </div>
+
+          {/* Tab 1: Tool Parameters */}
+          {activeTab === 'tool' && (
+            <div className="floating-tab-content">
+              <label className="checkbox-row" title="Sample terrain elevation along reference alignment">
+                <input
+                  type="checkbox"
+                  checked={roadParams.stickToTerrain}
+                  onChange={(e) => updateRoadParams({ stickToTerrain: e.target.checked })}
+                />
+                <span>Stick to Terrain</span>
+              </label>
+
+              {activeTool === 'road.clothoid' && (
+                <div className="tool-fields-group">
+                  <div className="form-field-row">
+                    <label>Mode</label>
+                    <select
+                      value={clothoidParams.mode}
+                      onChange={(e) => updateClothoidParams({ mode: e.target.value as 'interactive' | 'fixed-length' })}
+                    >
+                      <option value="interactive">Interactive</option>
+                      <option value="fixed-length">Fixed Length</option>
+                    </select>
+                  </div>
+                  <div className="form-field-row">
+                    <label>Transition L (m)</label>
+                    <input
+                      type="number"
+                      min={1}
+                      step={5}
+                      value={clothoidParams.length}
+                      onChange={(e) => updateClothoidParams({ length: Math.max(1, Number(e.target.value)) })}
+                    />
+                  </div>
+                  <div className="form-field-row">
+                    <label>End Curvature k1</label>
+                    <input
+                      type="number"
+                      step={0.001}
+                      value={clothoidParams.endCurvature}
+                      onChange={(e) => updateClothoidParams({ endCurvature: Number(e.target.value) })}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Metrics preview when points are placed */}
+              {metrics.totalLength > 0 && (
+                <div className="metrics-summary-box">
+                  <div className="metric-row">
+                    <span>Length</span>
+                    <b>{metrics.totalLength.toFixed(1)} m</b>
+                  </div>
+                  <div className="metric-row">
+                    <span>Heading</span>
+                    <b>{metrics.headingDeg.toFixed(1)}°</b>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Tab 2: Snapping */}
+          {activeTab === 'snap' && (
+            <div className="floating-tab-content">
+              <div className="snap-option-row">
+                <label className="checkbox-row">
+                  <input
+                    type="checkbox"
+                    checked={snappingConfig.gridSnap}
+                    onChange={(e) => updateSnappingConfig({ gridSnap: e.target.checked })}
+                  />
+                  <span>Grid Snap</span>
+                </label>
+                {snappingConfig.gridSnap && (
+                  <select
+                    className="compact-select"
+                    value={snappingConfig.gridStep}
+                    onChange={(e) => updateSnappingConfig({ gridStep: Number(e.target.value) })}
+                  >
+                    {GRID_STEPS.map((s) => (
+                      <option key={s} value={s}>{s} m</option>
+                    ))}
+                  </select>
+                )}
+              </div>
+
+              <div className="snap-option-row">
+                <label className="checkbox-row">
+                  <input
+                    type="checkbox"
+                    checked={snappingConfig.angleSnap}
+                    onChange={(e) => updateSnappingConfig({ angleSnap: e.target.checked })}
+                  />
+                  <span>Angle Snap</span>
+                </label>
+                {snappingConfig.angleSnap && (
+                  <select
+                    className="compact-select"
+                    value={snappingConfig.angleStepDeg}
+                    onChange={(e) => updateSnappingConfig({ angleStepDeg: Number(e.target.value) })}
+                  >
+                    {ANGLE_STEPS.map((a) => (
+                      <option key={a} value={a}>{a}°</option>
+                    ))}
+                  </select>
+                )}
+              </div>
+
+              <div className="snap-option-row">
+                <label className="checkbox-row">
+                  <input
+                    type="checkbox"
+                    checked={snappingConfig.endpointSnap}
+                    onChange={(e) => updateSnappingConfig({ endpointSnap: e.target.checked })}
+                  />
+                  <span>Endpoint Snap</span>
+                </label>
+              </div>
+            </div>
+          )}
+
+          {/* Tab 3: Lanes */}
+          {activeTab === 'lanes' && (
+            <div className="floating-tab-content">
+              <p className="tab-hint-text">
+                Authoring creates a standard 2-lane road by default. You can customize cross-section lanes in the Lanes tab of the Inspector after placement.
+              </p>
+            </div>
+          )}
+
+          {/* Error Banner */}
+          {lastError && (
+            <div className="panel-error-strip" role="alert">
+              <span>{lastError}</span>
+              <button
+                type="button"
+                className="icon-btn-subtle"
+                onClick={() => setLastError(null)}
+              >
+                <X size={12} />
+              </button>
+            </div>
+          )}
+        </>
       )}
-
-      {/* Conformance to terrain */}
-      <div className="authoring-snapping-group">
-        <label className="authoring-checkbox-label" title="Sample terrain elevation along reference alignment">
-          <input
-            type="checkbox"
-            checked={roadParams.stickToTerrain}
-            onChange={(e) => updateRoadParams({ stickToTerrain: e.target.checked })}
-          />
-          Conform Terrain
-        </label>
-      </div>
-
-      {/* Error banner */}
-      {lastError && (
-        <div className="authoring-error-banner" role="alert">
-          <span>{lastError}</span>
-          <button
-            type="button"
-            className="authoring-error-dismiss"
-            onClick={() => setLastError(null)}
-            title="Dismiss error"
-          >
-            <X size={12} />
-          </button>
-        </div>
-      )}
-
-      {/* Action buttons */}
-      <div className="authoring-action-buttons">
-        {activeTool === 'road.polyline' && draftPoints.length >= 2 && onCommitPolyline && (
-          <button
-            type="button"
-            className="tool-button active"
-            onClick={onCommitPolyline}
-            title="Finish polyline and fit road (Enter)"
-          >
-            <Check size={14} /> Finish
-          </button>
-        )}
-        {(draftPoints.length > 0 || activeTool !== 'select') && (
-          <button
-            type="button"
-            className="tool-button"
-            onClick={handleCancel}
-            title="Cancel current tool and clear draft (Esc)"
-          >
-            <X size={14} /> Cancel
-          </button>
-        )}
-      </div>
     </div>
   )
 }

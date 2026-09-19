@@ -74,22 +74,109 @@ export interface EndpointCandidate extends Point2D {
   endpointType?: 'start' | 'end' | 'draft'
 }
 
+export class RoadEndpointSpatialIndex {
+  private readonly cellSize: number
+  private readonly grid = new Map<string, EndpointCandidate[]>()
+
+  constructor(cellSize: number = 50) {
+    this.cellSize = cellSize > 0 ? cellSize : 50
+  }
+
+  private cellKey(cx: number, cy: number): string {
+    return `${cx}:${cy}`
+  }
+
+  clear(): void {
+    this.grid.clear()
+  }
+
+  insert(candidate: EndpointCandidate): void {
+    const cx = Math.floor(candidate.easting / this.cellSize)
+    const cy = Math.floor(candidate.northing / this.cellSize)
+    const key = this.cellKey(cx, cy)
+    const list = this.grid.get(key)
+    if (list) {
+      list.push(candidate)
+    } else {
+      this.grid.set(key, [candidate])
+    }
+  }
+
+  build(candidates: readonly EndpointCandidate[]): void {
+    this.clear()
+    for (const c of candidates) {
+      this.insert(c)
+    }
+  }
+
+  findNearest(point: Point2D, maxRadius: number): Point2D | null {
+    if (maxRadius <= 0 || this.grid.size === 0) return null
+
+    const minCx = Math.floor((point.easting - maxRadius) / this.cellSize)
+    const maxCx = Math.floor((point.easting + maxRadius) / this.cellSize)
+    const minCy = Math.floor((point.northing - maxRadius) / this.cellSize)
+    const maxCy = Math.floor((point.northing + maxRadius) / this.cellSize)
+
+    let best: Point2D | null = null
+    let bestDistSq = maxRadius * maxRadius
+
+    for (let cx = minCx; cx <= maxCx; cx++) {
+      for (let cy = minCy; cy <= maxCy; cy++) {
+        const list = this.grid.get(this.cellKey(cx, cy))
+        if (!list) continue
+        for (const cand of list) {
+          const de = cand.easting - point.easting
+          const dn = cand.northing - point.northing
+          const distSq = de * de + dn * dn
+          if (distSq <= bestDistSq) {
+            // Deterministic tie-breaking: smaller easting, then smaller northing
+            if (
+              distSq < bestDistSq ||
+              !best ||
+              cand.easting < best.easting ||
+              (cand.easting === best.easting && cand.northing < best.northing)
+            ) {
+              bestDistSq = distSq
+              best = cand
+            }
+          }
+        }
+      }
+    }
+
+    return best ? { easting: best.easting, northing: best.northing } : null
+  }
+}
+
 /** Find nearest existing road endpoint within radius */
 export function snapToEndpoint(
   point: Point2D,
-  endpoints: (Point2D | EndpointCandidate)[],
+  endpoints: (Point2D | EndpointCandidate)[] | RoadEndpointSpatialIndex,
   radius: number,
 ): Point2D | null {
-  if (!endpoints || endpoints.length === 0 || radius <= 0) return null
+  if (!endpoints || radius <= 0) return null
+  if (endpoints instanceof RoadEndpointSpatialIndex) {
+    return endpoints.findNearest(point, radius)
+  }
+  if (endpoints.length === 0) return null
 
   let best: Point2D | null = null
-  let bestDist = radius
+  let bestDistSq = radius * radius
 
   for (const ep of endpoints) {
-    const d = Math.hypot(ep.easting - point.easting, ep.northing - point.northing)
-    if (d <= bestDist) {
-      bestDist = d
-      best = ep
+    const de = ep.easting - point.easting
+    const dn = ep.northing - point.northing
+    const distSq = de * de + dn * dn
+    if (distSq <= bestDistSq) {
+      if (
+        distSq < bestDistSq ||
+        !best ||
+        ep.easting < best.easting ||
+        (ep.easting === best.easting && ep.northing < best.northing)
+      ) {
+        bestDistSq = distSq
+        best = ep
+      }
     }
   }
 
@@ -106,7 +193,7 @@ export interface SnappingResolution {
 
 export interface SnappingContext {
   origin?: Point2D | null
-  endpoints?: (Point2D | EndpointCandidate)[]
+  endpoints?: (Point2D | EndpointCandidate)[] | RoadEndpointSpatialIndex
   config: SnappingConfig
 }
 
@@ -114,7 +201,7 @@ export interface SnappingContext {
  * Priority resolution:
  * 1. Endpoint snap (highest priority for network connectivity)
  * 2. Angle snap (when an origin point exists)
- * 3. Grid snap
+ * 3. Grid snap (only if angle snap did not take effect)
  */
 export function resolveSnapping(
   rawPoint: Point2D,
@@ -123,15 +210,18 @@ export function resolveSnapping(
   const { config, endpoints = [], origin } = context
 
   // 1. Endpoint snap
-  if (config.endpointSnap && endpoints.length > 0) {
-    const ep = snapToEndpoint(rawPoint, endpoints, config.snapRadius)
-    if (ep) {
-      const dist = Math.hypot(ep.easting - rawPoint.easting, ep.northing - rawPoint.northing)
-      return {
-        point: ep,
-        snappedTo: 'endpoint',
-        originalPoint: rawPoint,
-        snapDistance: dist,
+  if (config.endpointSnap && endpoints) {
+    const hasEndpoints = endpoints instanceof RoadEndpointSpatialIndex ? true : endpoints.length > 0
+    if (hasEndpoints) {
+      const ep = snapToEndpoint(rawPoint, endpoints, config.snapRadius)
+      if (ep) {
+        const dist = Math.hypot(ep.easting - rawPoint.easting, ep.northing - rawPoint.northing)
+        return {
+          point: ep,
+          snappedTo: 'endpoint',
+          originalPoint: rawPoint,
+          snapDistance: dist,
+        }
       }
     }
   }
@@ -146,10 +236,8 @@ export function resolveSnapping(
     current = res.point
     snappedTo = 'angle'
     appliedAngleDeg = res.angleDeg
-  }
-
-  // 3. Grid snap
-  if (config.gridSnap) {
+  } else if (config.gridSnap) {
+    // 3. Grid snap (only if angle snap did not apply)
     current = snapToGrid(current, config.gridStep)
     snappedTo = 'grid'
   }
@@ -164,7 +252,7 @@ export function resolveSnapping(
 
 export interface AuthoringPointResolutionOptions {
   previousDraftPoint?: Point2D | null
-  endpointCandidates?: (Point2D | EndpointCandidate)[]
+  endpointCandidates?: (Point2D | EndpointCandidate)[] | RoadEndpointSpatialIndex
   snappingConfig: SnappingConfig
 }
 
